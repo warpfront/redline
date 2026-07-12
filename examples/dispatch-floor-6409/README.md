@@ -35,24 +35,30 @@ per-dispatch fence.
 **pure Rust** (no Python, no C — `SingleQueuePm4Ib` driven directly). At count=941
 on the R9700:
 
-| arm | pure Rust µs/disp | correct |
-| --- | ---: | :---: |
-| conservative (correct RMW fence) | 1.79 | PASS |
-| aggressive (no inter-dispatch fence) | 0.11 | FAIL (races) |
+Three fence modes at the dependency boundary (count=941):
 
-Two conclusions:
+| mode | boundary fence | pure Rust µs/disp | correct |
+| --- | --- | ---: | :---: |
+| conservative | `wait_compute_idle` + inter-node acquire | ~1.9 | PASS |
+| tuned | inter-node acquire only (no wait) | ~0.32 | FAIL (races) |
+| aggressive | none | ~0.11 | FAIL (races) |
 
-- **The binding is not the bottleneck.** Pure-Rust conservative (1.79) ≈ the PyO3
-  arm (1.86) — ~4% wrapper overhead. Python did not swamp the win.
-- **The cost is the required fence, and the ~10× floor is fence-free.** The
-  aggressive arm hits **0.11 µs/disp (~20× over hip_graph)** but FAILS
-  correctness: `gmb_noop_kernel` is a *non-atomic read-modify-write on a shared
-  buffer*, so a correct serial chain must serialize each boundary
-  (`wait_compute_idle` + inter-node acquire ≈ one dispatch's latency, ~1.7 µs).
-  The ~10–20× applies to *independent* dispatches (disjoint outputs / no-op — see
-  [`../../docs/DISPATCH-FLOOR.md`](../../docs/DISPATCH-FLOOR.md)); a true dependency
-  chain is serialization-bound, and there Redline still beats HIP because its
-  minimal-scope fence is cheaper than HIP's system-scope fence (1.2×).
+Three conclusions:
+
+- **The binding is not the bottleneck.** Pure-Rust conservative ≈ the PyO3 arm
+  (1.86) — ~4% wrapper overhead. Python did not swamp the win.
+- **`wait_compute_idle` is irreducible for a non-atomic RMW chain.** Decomposed,
+  the acquire costs ~0.15 µs/disp and the wait ~1.67. Dropping the wait (the
+  *tuned* row) invalidates caches but does not stop wave overlap, so the shared
+  buffer races (FAIL). So conservative is the **minimal correct** fence — there is
+  no correctness-preserving speed left on the table for a strict chain.
+- **The ~10–20× floor is fence-free** (the aggressive row, ~0.11 µs/disp ≈ 20× over
+  hip_graph) and applies to *independent* dispatches (disjoint outputs / no-op —
+  see [`../../docs/DISPATCH-FLOOR.md`](../../docs/DISPATCH-FLOOR.md)). A true
+  dependency chain is serialization-bound; there Redline still beats HIP because
+  its minimal-*scope* fence is cheaper than HIP's system-scope fence (1.2×). The
+  big win comes from workload structure (overlapping the independent parts of a
+  decode graph), not from tuning the fence of a strict chain.
 
 Real decode is a mix — cheaper fences on the serial parts, overlap on the
 independent parts, and fewer submissions.

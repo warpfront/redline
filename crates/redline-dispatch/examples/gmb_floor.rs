@@ -42,7 +42,8 @@ fn build_ib(
     exec: &Executable,
     n: u32,
     count: usize,
-    fence: bool,
+    wait: bool,
+    acquire: bool,
     out_addr: u64,
 ) -> Result<(SingleQueuePm4Ib, redline_dispatch::aql::KernargBuffer), Box<dyn std::error::Error>> {
     let block = 256u32;
@@ -60,9 +61,13 @@ fn build_ib(
     for i in 0..count {
         let geometry = LaunchGeometry::new([workitems, 1, 1], [block as u16, 1, 1])?;
         cmd.dispatch(&kernel, geometry, 0, karg.address())?;
-        if fence && i + 1 < count {
-            cmd.wait_compute_idle();
-            cmd.acquire_inter_node_gfx12();
+        if i + 1 < count {
+            if wait {
+                cmd.wait_compute_idle();
+            }
+            if acquire {
+                cmd.acquire_inter_node_gfx12();
+            }
         }
     }
     let ib = SingleQueuePm4Ib::create(device, pool, &cmd)?;
@@ -77,12 +82,13 @@ fn measure(
     count: usize,
     reps: usize,
     warmup: usize,
-    fence: bool,
+    wait: bool,
+    acquire: bool,
 ) -> Result<(f64, bool), Box<dyn std::error::Error>> {
     let mut out = pool.allocate_executable_bytes((n as usize) * 4)?;
     out.as_mut_bytes().fill(0);
     let out_addr = out.address() as usize as u64;
-    let (mut ib, _karg) = build_ib(device, pool, exec, n, count, fence, out_addr)?;
+    let (mut ib, _karg) = build_ib(device, pool, exec, n, count, wait, acquire, out_addr)?;
 
     // correctness: one replay from zero -> element 0 must be count
     unsafe { ib.replay_and_wait()? };
@@ -120,17 +126,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("gmb_floor (pure Rust, no FFI)  n={n} block=256 reps={reps} (median)");
     println!(
-        "{:>6} | {:>26} | {:>26}",
-        "count", "PM4 conservative µs/disp", "PM4 aggressive µs/disp"
+        "{:>6} | {:>23} | {:>23} | {:>23}",
+        "count", "conservative µs/disp", "tuned (acquire only)", "aggressive (no fence)"
     );
-    println!("{}", "-".repeat(66));
+    println!("{}", "-".repeat(86));
+    let pf = |b: bool| if b { "PASS" } else { "FAIL" };
+    // (wait_compute_idle, acquire_inter_node) per dependency boundary
+    let modes = [(true, true), (false, true), (false, false)];
     for &count in &counts {
-        let (cons, cons_ok) = measure(&device, &pool, &exec, n, count, reps, warmup, true)?;
-        let (aggr, aggr_ok) = measure(&device, &pool, &exec, n, count, reps, warmup, false)?;
+        let mut r = Vec::with_capacity(modes.len());
+        for (wait, acquire) in modes {
+            r.push(measure(&device, &pool, &exec, n, count, reps, warmup, wait, acquire)?);
+        }
         println!(
-            "{count:>6} | {cons:>18.4} [{:>4}] | {aggr:>18.4} [{:>4}]",
-            if cons_ok { "PASS" } else { "FAIL" },
-            if aggr_ok { "PASS" } else { "FAIL" },
+            "{count:>6} | {:>15.4} [{:>4}] | {:>15.4} [{:>4}] | {:>15.4} [{:>4}]",
+            r[0].0, pf(r[0].1), r[1].0, pf(r[1].1), r[2].0, pf(r[2].1),
         );
     }
     Ok(())
