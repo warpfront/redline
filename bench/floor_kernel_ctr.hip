@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Kaden Schutt
+// SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
 //
 // Correctness-gate kernel: each dispatch atomically increments a counter, so a
 // PM4 IB of N dispatches, replayed once, must leave the counter == N iff every

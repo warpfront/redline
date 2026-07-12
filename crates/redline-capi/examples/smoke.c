@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Kaden Schutt */
+/* SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev> */
 /* C-ABI smoke test: the HipGraph-shaped capture -> instantiate -> launch flow. */
 #include "redline_dispatch.h"
 #include <assert.h>

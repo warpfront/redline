@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Kaden Schutt
+// SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
 //
 // Literal hipGraph baseline for the dispatch-floor head-to-head.
 //

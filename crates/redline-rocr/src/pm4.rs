@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Kaden Schutt
+// SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
 
 //! GFX12 compute command construction for AMD's vendor-specific AQL PM4-IB packet.
 //!

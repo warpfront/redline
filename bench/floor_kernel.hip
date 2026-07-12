@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Kaden Schutt
+// SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
 //
 // Minimal kernel for the dispatch-floor microbench. The bench measures
 // per-dispatch + fence overhead, not compute, so the body is intentionally
