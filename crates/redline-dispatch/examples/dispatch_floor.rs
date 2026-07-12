@@ -113,35 +113,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("dispatch-floor: N={n} dispatches/replay, M={m} timed replays, {warmup} warmup");
 
-    let floor = measure(
-        &device,
-        &exec,
-        &symbol,
-        n,
-        m,
-        warmup,
-        BatchFencePolicy::SystemEveryDispatch,
-    )?;
-    let redline = measure(
-        &device,
-        &exec,
-        &symbol,
-        n,
-        m,
-        warmup,
-        BatchFencePolicy::BoundarySerialized,
-    )?;
+    // The full fence-policy spectrum, most-conservative first. The floor is a
+    // system-scope fence on every dispatch (HIP default); BoundarySerialized is
+    // Redline's safe policy for a dependency chain (decode); BoundaryIndependent
+    // is the aggressive policy — correct ONLY when dispatches are genuinely
+    // independent (disjoint writable state), as the no-op kernel here is.
+    let policies = [
+        ("SystemEveryDispatch      (HIP per-dispatch floor)", BatchFencePolicy::SystemEveryDispatch),
+        ("SystemAcquireAgentRelease", BatchFencePolicy::SystemAcquireAgentRelease),
+        ("AgentEveryInternalDispatch", BatchFencePolicy::AgentEveryInternalDispatch),
+        ("BoundarySerialized       (redline safe / decode)", BatchFencePolicy::BoundarySerialized),
+        ("BoundaryIndependent      (redline aggressive / indep-only)", BatchFencePolicy::BoundaryIndependent),
+    ];
 
-    println!(
-        "  system-every-dispatch (HIP/HipGraph floor): {floor:8.3} us  ({:.4} us/dispatch)",
-        floor / n as f64
-    );
-    println!(
-        "  boundary-serialized    (redline minimal)  : {redline:8.3} us  ({:.4} us/dispatch)",
-        redline / n as f64
-    );
-    if redline > 0.0 {
-        println!("  redline speedup over the per-dispatch fence floor: {:.3}x", floor / redline);
+    let mut results = Vec::with_capacity(policies.len());
+    for (name, policy) in policies {
+        results.push((name, measure(&device, &exec, &symbol, n, m, warmup, policy)?));
+    }
+    let floor = results[0].1;
+
+    println!("  {:<52} {:>10} {:>10} {:>9}", "policy", "us", "us/disp", "vs floor");
+    for (name, us) in &results {
+        let per = us / n as f64;
+        let ratio = if *us > 0.0 { floor / us } else { 0.0 };
+        println!("  {name:<52} {us:>10.3} {per:>10.4} {ratio:>8.3}x");
     }
     Ok(())
 }

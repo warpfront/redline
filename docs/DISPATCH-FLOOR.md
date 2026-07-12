@@ -32,14 +32,30 @@ overhead and nothing else.
 
 ## Result — AMD Radeon AI PRO R9700 (gfx1201), 2026-07-12
 
-| N | SystemEveryDispatch (HIP floor) | BoundarySerialized (Redline) | speedup |
-| ---: | ---: | ---: | ---: |
-| 64 | 213.58 µs — 3.337 µs/dispatch | 109.62 µs — 1.713 µs/dispatch | **1.95×** |
-| 256 | 600.44 µs — 2.346 µs/dispatch | 337.68 µs — 1.319 µs/dispatch | **1.78×** |
-| 512 | 1207.29 µs — 2.358 µs/dispatch | 670.40 µs — 1.309 µs/dispatch | **1.80×** |
+Full fence-policy spectrum, µs per dispatch (median of 300 replays after 30
+warmups), device 3 of 4:
 
-Per-dispatch cost falls from ~2.36 µs to ~1.31 µs — the system fence is ~1 µs
-per dispatch, and Redline removes it, ~1.8× on the floor.
+| policy | N=256 | N=512 | vs floor |
+| --- | ---: | ---: | ---: |
+| `SystemEveryDispatch` — HIP per-dispatch floor | 2.389 | 2.372 | 1.00× |
+| `SystemAcquireAgentRelease` | 2.145 | 2.115 | 1.12× |
+| `AgentEveryInternalDispatch` | 2.143 | 2.109 | 1.12× |
+| **`BoundarySerialized` — Redline safe (decode)** | **1.325** | **1.300** | **1.83×** |
+| `BoundaryIndependent` — Redline aggressive (independent-only) | 1.094 | 1.068 | 2.22× |
+
+**The durable decode number is the conservative one: ~1.8×.**
+`BoundarySerialized` preserves dependency order — which a decode token graph
+requires — while dropping to boundary-only fences. The system fence is ~1 µs per
+dispatch (2.37 → 1.30 µs/dispatch) and Redline removes it.
+
+The aggressive `BoundaryIndependent` (~2.2×) *additionally* drops inter-dispatch
+serialization. That is correct only when dispatches touch disjoint writable state
+(the independent-throughput / batched regime), not a serial decode chain — here
+the no-op kernel has no dependencies, so it is valid and shows the ceiling.
+
+The spectrum is smooth and monotonic and stable across N, so 1.8× is a safe,
+defensible rung — not a cherry-pick — with ~2.2× of headroom for independent
+work above it.
 
 ## Honest scope
 
