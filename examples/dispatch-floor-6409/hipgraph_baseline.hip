@@ -92,10 +92,45 @@ int main(int argc, char **argv) {
     for (int i = 0; i < n; i++)
         if (host[i] != (float)count) { correct = 0; break; }
 
+    /* hip_serial: plain host-enqueued launches, NO graph. Each timed rep issues
+     * `count` back-to-back launches on the stream (serialized by stream order)
+     * and synchronizes. This is HIP's raw submission path; the gap to the graph
+     * (and to redline) is the per-dispatch host-submission overhead. */
+    for (int w = 0; w < warmup; w++) {
+        for (int j = 0; j < count; j++) gmb_noop_kernel<<<grid, block, 0, stream>>>(out, n);
+    }
+    CK(hipStreamSynchronize(stream));
+    std::vector<double> dg_us, dh_us;
+    dg_us.reserve(reps);
+    dh_us.reserve(reps);
+    for (int r = 0; r < reps; r++) {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        CK(hipEventRecord(es, stream));
+        for (int j = 0; j < count; j++) gmb_noop_kernel<<<grid, block, 0, stream>>>(out, n);
+        CK(hipEventRecord(ee, stream));
+        CK(hipEventSynchronize(ee));
+        auto t1 = std::chrono::high_resolution_clock::now();
+        float ms = 0.0f;
+        CK(hipEventElapsedTime(&ms, es, ee));
+        dg_us.push_back((double)ms * 1000.0);
+        dh_us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+    }
+    CK(hipMemsetAsync(out, 0, (size_t)n * sizeof(float), stream));
+    for (int j = 0; j < count; j++) gmb_noop_kernel<<<grid, block, 0, stream>>>(out, n);
+    CK(hipStreamSynchronize(stream));
+    CK(hipMemcpy(host.data(), out, (size_t)n * sizeof(float), hipMemcpyDeviceToHost));
+    int direct_correct = 1;
+    for (int i = 0; i < n; i++)
+        if (host[i] != (float)count) { direct_correct = 0; break; }
+    std::sort(dg_us.begin(), dg_us.end());
+    std::sort(dh_us.begin(), dh_us.end());
+    double dg = dg_us[reps / 2], dh = dh_us[reps / 2];
+
     std::sort(gpu_us.begin(), gpu_us.end());
     std::sort(host_us.begin(), host_us.end());
     double g = gpu_us[reps / 2], h = host_us[reps / 2];
-    printf("count=%d n=%d grid=%d gpu_us=%.3f host_us=%.3f gpu_per_disp=%.4f host_per_disp=%.4f correct=%d\n",
-           count, n, grid, g, h, g / count, h / count, correct);
-    return correct ? 0 : 1;
+    printf("count=%d n=%d grid=%d gpu_per_disp=%.4f host_per_disp=%.4f correct=%d "
+           "direct_gpu_per_disp=%.4f direct_host_per_disp=%.4f direct_correct=%d\n",
+           count, n, grid, g / count, h / count, correct, dg / count, dh / count, direct_correct);
+    return (correct && direct_correct) ? 0 : 1;
 }

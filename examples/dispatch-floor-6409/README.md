@@ -14,20 +14,26 @@ indirect buffer**. Both arms verify correctness (every element == count).
 ## Result — AMD Radeon AI PRO R9700 (gfx1201), device 3
 
 Host µs/dispatch (median of 50 replays), matched to hipEngine's `host_wall`
-domain:
+domain. Three HIP submission paths are shown: `hip_serial` (plain host-enqueued
+launches), `hip_graph` (captured graph replay), and `redline` (one retained PM4
+IB):
 
-| count | hip_graph (gpu) | hip_graph (host) | redline (host) | speedup | correct |
-| ---: | ---: | ---: | ---: | ---: | :---: |
-| 1 | 16.36 | 32.57 | 17.28 | **1.88×** | PASS |
-| 50 | 2.57 | 2.95 | 2.07 | **1.43×** | PASS |
-| 200 | 2.46 | 2.55 | 1.95 | **1.31×** | PASS |
-| 941 | 2.24 | 2.26 | 1.86 | **1.22×** | PASS |
+| count | hip_serial | hip_graph | redline | vs serial | vs graph | correct |
+| ---: | ---: | ---: | ---: | ---: | ---: | :---: |
+| 1 | 26.02 | 33.34 | 17.56 | **1.48×** | **1.90×** | PASS |
+| 50 | 3.19 | 2.99 | 2.08 | **1.53×** | **1.44×** | PASS |
+| 200 | 2.81 | 2.55 | 1.96 | **1.43×** | **1.30×** | PASS |
+| 941 | 2.74 | 2.26 | 1.90 | **1.44×** | **1.19×** | PASS |
 
-Redline replays the same dependency chain faster than a real `hipGraphLaunch`,
-correctness-gated, on the exact benchmark #6409 measures. The retained PM4 IB
-fences each boundary with the minimal gfx12 dependency fence (`wait_compute_idle`
-+ inter-node acquire — L2/MALL stays coherent) instead of HIP's heavier
-per-dispatch fence.
+Redline replays the same dependency chain faster than both plain HIP launches and
+a real `hipGraphLaunch`, correctness-gated, on the exact benchmark #6409 measures.
+
+**The submission overhead is deterministic and bakeable.** `hip_serial − hip_graph`
+≈ 0.48 µs/dispatch at count=941 is the per-dispatch host-submission cost the graph
+amortizes. Redline pays submission *once* (the whole sequence is a single retained
+PM4 IB) and fences each boundary with the minimal gfx12 dependency fence
+(`wait_compute_idle` + inter-node acquire — L2/MALL stays coherent) instead of
+HIP's heavier per-dispatch fence, so it beats even the graph.
 
 ## Why 1.2× here and not the ~10× floor (it is NOT the binding)
 

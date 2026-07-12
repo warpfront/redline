@@ -60,7 +60,10 @@ def run_hipgraph(count):
     kv = dict(tok.split("=") for tok in r.stdout.split())
     return {"gpu_per_disp": float(kv["gpu_per_disp"]),
             "host_per_disp": float(kv["host_per_disp"]),
-            "correct": kv["correct"] == "1"}
+            "correct": kv["correct"] == "1",
+            "direct_host_per_disp": float(kv["direct_host_per_disp"]),
+            "direct_gpu_per_disp": float(kv["direct_gpu_per_disp"]),
+            "direct_correct": kv["direct_correct"] == "1"}
 
 
 def run_redline(gpu, mod, count):
@@ -94,18 +97,20 @@ def main():
 
     print(f"ROCm #6409 dispatch-floor  |  gmb_noop_kernel  n={N} block={BLOCK}  "
           f"reps={REPS} (median)  arch={ARCH}")
-    print(f"{'count':>6} | {'hip_graph gpu µs/disp':>21} | {'hip_graph host µs/disp':>22} | "
-          f"{'redline host µs/disp':>20} | {'speedup(host)':>13} | correct")
-    print("-" * 108)
+    print(f"{'count':>6} | {'hip_serial host':>15} | {'hip_graph host':>14} | {'redline host':>12} | "
+          f"{'vs serial':>9} | {'vs graph':>8} | correct   (µs/dispatch)")
+    print("-" * 100)
     all_ok = True
     for c in COUNTS:
         hg = run_hipgraph(c)
         rd = run_redline(gpu, mod, c)
-        sp = hg["host_per_disp"] / rd["host_per_disp"] if rd["host_per_disp"] > 0 else float("inf")
-        ok = hg["correct"] and rd["correct"]
+        r = rd["host_per_disp"]
+        sp_serial = hg["direct_host_per_disp"] / r if r > 0 else float("inf")
+        sp_graph = hg["host_per_disp"] / r if r > 0 else float("inf")
+        ok = hg["correct"] and hg["direct_correct"] and rd["correct"]
         all_ok = all_ok and ok
-        print(f"{c:>6} | {hg['gpu_per_disp']:>21.4f} | {hg['host_per_disp']:>22.4f} | "
-              f"{rd['host_per_disp']:>20.4f} | {sp:>12.2f}x | {'PASS' if ok else 'FAIL'}")
+        print(f"{c:>6} | {hg['direct_host_per_disp']:>15.4f} | {hg['host_per_disp']:>14.4f} | "
+              f"{r:>12.4f} | {sp_serial:>8.2f}x | {sp_graph:>7.2f}x | {'PASS' if ok else 'FAIL'}")
     sys.exit(0 if all_ok else 1)
 
 
