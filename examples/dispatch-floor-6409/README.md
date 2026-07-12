@@ -29,18 +29,38 @@ fences each boundary with the minimal gfx12 dependency fence (`wait_compute_idle
 + inter-node acquire — L2/MALL stays coherent) instead of HIP's heavier
 per-dispatch fence.
 
-## Honest scope
+## Why 1.2× here and not the ~10× floor (it is NOT the binding)
 
-- **This is a conservative measurement.** The Redline arm runs through the
-  Python binding (per-replay call overhead the C++ `hipGraphLaunch` baseline does
-  not pay), and both arms pay the real kernel's compute — so the ratio understates
-  the dispatch-overhead advantage. The *pure* dispatch floor (a no-op kernel,
-  measured from native code) is ~10× — see [`../../docs/DISPATCH-FLOOR.md`](../../docs/DISPATCH-FLOOR.md).
-- **`gmb_noop_kernel` is a real-engine-kernel test.** It reads
-  `blockIdx`/`blockDim`/`threadIdx` (272-byte kernarg segment with hidden args);
-  Redline dispatches it correctly through the retained PM4 IB, so this also
-  validates the binding for real kernels, not just no-arg ones.
-- The `vulkan_command_buffer` arm (#6409's other strategy) is the next comparison.
+`crates/redline-dispatch/examples/gmb_floor.rs` runs the *same* experiment in
+**pure Rust** (no Python, no C — `SingleQueuePm4Ib` driven directly). At count=941
+on the R9700:
+
+| arm | pure Rust µs/disp | correct |
+| --- | ---: | :---: |
+| conservative (correct RMW fence) | 1.79 | PASS |
+| aggressive (no inter-dispatch fence) | 0.11 | FAIL (races) |
+
+Two conclusions:
+
+- **The binding is not the bottleneck.** Pure-Rust conservative (1.79) ≈ the PyO3
+  arm (1.86) — ~4% wrapper overhead. Python did not swamp the win.
+- **The cost is the required fence, and the ~10× floor is fence-free.** The
+  aggressive arm hits **0.11 µs/disp (~20× over hip_graph)** but FAILS
+  correctness: `gmb_noop_kernel` is a *non-atomic read-modify-write on a shared
+  buffer*, so a correct serial chain must serialize each boundary
+  (`wait_compute_idle` + inter-node acquire ≈ one dispatch's latency, ~1.7 µs).
+  The ~10–20× applies to *independent* dispatches (disjoint outputs / no-op — see
+  [`../../docs/DISPATCH-FLOOR.md`](../../docs/DISPATCH-FLOOR.md)); a true dependency
+  chain is serialization-bound, and there Redline still beats HIP because its
+  minimal-scope fence is cheaper than HIP's system-scope fence (1.2×).
+
+Real decode is a mix — cheaper fences on the serial parts, overlap on the
+independent parts, and fewer submissions.
+
+`gmb_noop_kernel` also reads `blockIdx`/`blockDim`/`threadIdx` (272-byte kernarg
+with hidden args) and Redline dispatches it correctly, validating the binding for
+real engine kernels. The `vulkan_command_buffer` arm (#6409's other strategy) is
+the next comparison.
 
 ## Reproduce
 
