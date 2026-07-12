@@ -235,8 +235,10 @@ pub unsafe extern "C" fn rl_pm4_dispatch(
     RL_OK
 }
 
-/// Insert a compute-idle wait after the dispatches recorded so far (serialize a
-/// dependency boundary).
+/// Insert a dependency boundary after the dispatches recorded so far: wait for
+/// the writer to retire, then invalidate scalar/vector read caches so the next
+/// dispatch sees its L2-committed output. Required for a non-atomic read-modify-
+/// write chain (decode); still the minimal gfx12 fence (L2/MALL stays coherent).
 ///
 /// # Safety
 /// `builder` valid or null.
@@ -244,6 +246,7 @@ pub unsafe extern "C" fn rl_pm4_dispatch(
 pub unsafe extern "C" fn rl_pm4_wait_idle(builder: *mut RlPm4Builder) {
     if let Some(builder) = unsafe { builder.as_mut() } {
         builder.cmd.wait_compute_idle();
+        builder.cmd.acquire_inter_node_gfx12();
     }
 }
 

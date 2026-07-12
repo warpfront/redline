@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
+#
+# Build the redline-dispatch Python wheel(s) and publish to PyPI on release.
+# The wheel dlopens the public ROCr runtime at run time, so no ROCm toolchain is
+# needed to BUILD it — a plain manylinux runner suffices. Runtime needs ROCm.
+#
+# Setup: add a PyPI token as the repo secret PYPI_API_TOKEN (or switch to
+# trusted publishing / OIDC). Publishing fires when a GitHub Release is
+# published — i.e. right as the repo goes public.
+name: publish-pypi
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: build wheel (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build abi3 wheel with maturin
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: >-
+            --release --strip
+            --manifest-path crates/redline-py/Cargo.toml
+            --out dist
+          target: ${{ matrix.target }}
+          manylinux: auto
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist/*.whl
+
+  publish:
+    name: publish to PyPI
+    needs: wheels
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        uses: PyO3/maturin-action@v1
+        with:
+          command: upload
+          args: --non-interactive --skip-existing dist/*.whl
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}

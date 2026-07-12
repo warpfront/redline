@@ -259,7 +259,12 @@ impl Gpu {
                 .map_err(to_py)?;
             kernargs.push(karg);
             if serialize && i + 1 < count {
+                // Dependency boundary: wait for the writer to retire, then
+                // invalidate scalar/vector read caches so the next dispatch sees
+                // its L2-committed output (required for a non-atomic RMW chain;
+                // still the minimal gfx12 fence — L2/MALL stays coherent).
                 cmd.wait_compute_idle();
+                cmd.acquire_inter_node_gfx12();
             }
         }
         let ib = SingleQueuePm4Ib::create(&self.device, &self.pool, &cmd).map_err(to_py)?;
