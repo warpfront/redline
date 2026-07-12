@@ -25,10 +25,11 @@
 //! Select the GPU with `ROCR_VISIBLE_DEVICES` before running.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use redline_dispatch::aql::{
     BatchFencePolicy, Executable, GpuDevice, GpuSelector, KernargPool, LaunchGeometry,
-    RecordedDispatch, Runtime, SingleQueueBatchGraph, load_symbols,
+    RecordedDispatch, RecordedGraph, Runtime, SingleQueueBatchGraph, load_symbols,
 };
 
 fn env_usize(key: &str, default: usize) -> usize {
@@ -98,6 +99,45 @@ fn measure(
     Ok(median(spans))
 }
 
+/// The PM4 champion path: lower the same N dispatches into ONE retained GFX12
+/// PM4 indirect buffer (single stream) and replay it. This path exposes
+/// host-observed completion, not GPU timestamps, so it is host-timed
+/// (submit -> wait per replay); the hipGraph baseline is host-timed identically
+/// for a matched comparison.
+fn measure_pm4_host(
+    device: &GpuDevice,
+    exec: &Executable,
+    symbol: &str,
+    n: usize,
+    m: usize,
+    warmup: usize,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    let pool = KernargPool::discover(device)?;
+    let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1])?;
+    let mut dispatches = Vec::with_capacity(n);
+    for _ in 0..n {
+        let kernel = exec.kernel(symbol)?;
+        let kernarg = pool.allocate_for(kernel.metadata())?;
+        dispatches.push(RecordedDispatch::new(0, kernel, geometry, kernarg)?);
+    }
+    let range = device.queue_size_range();
+    let want = ((n as u32).saturating_add(16)).next_power_of_two();
+    let queue_size = want.clamp(*range.start(), *range.end());
+    // queue_count = 1 -> a single-stream retained PM4 indirect buffer.
+    let mut graph = RecordedGraph::create(device, 1, queue_size, dispatches)?;
+    for _ in 0..warmup {
+        // SAFETY: no-op kernels reference no external pointees.
+        unsafe { graph.submit()? }.wait()?;
+    }
+    let mut per = Vec::with_capacity(m);
+    for _ in 0..m {
+        let t0 = Instant::now();
+        unsafe { graph.submit()? }.wait()?;
+        per.push(t0.elapsed().as_secs_f64() * 1e6);
+    }
+    Ok(median(per))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hsaco = std::env::var("REDLINE_FLOOR_HSACO")
         .map_err(|_| "set REDLINE_FLOOR_HSACO to the code-object path")?;
@@ -138,5 +178,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ratio = if *us > 0.0 { floor / us } else { 0.0 };
         println!("  {name:<52} {us:>10.3} {per:>10.4} {ratio:>8.3}x");
     }
+
+    // The champion structure: single-stream retained PM4 indirect buffer. This
+    // path exposes only host-observed completion, and the synchronous
+    // submit -> wait re-arms N per-node completion signals every replay (the
+    // documented token-latency core; a pipelined/ring impl amortizes it). So
+    // this host number is dominated by per-replay signal re-arm (it scales with
+    // N), NOT GPU dispatch cost — it is not comparable to the GPU-span rows.
+    let pm4 = measure_pm4_host(&device, &exec, &symbol, n, m, warmup)?;
+    println!(
+        "  {:<52} {:>10.3} {:>10.4}   host lat. (signal re-arm bound, not GPU work)",
+        "PM4 retained IB (redline champion)", pm4, pm4 / n as f64
+    );
     Ok(())
 }

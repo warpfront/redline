@@ -89,6 +89,33 @@ per replay of the same work; the hipGraph figure additionally carries relaunch
 overhead the Redline span excludes, a small effect in Redline's favor noted here
 for fairness.
 
+## PM4 champion path (`RecordedGraph`)
+
+The retained single-stream PM4 indirect buffer (`RecordedGraph`) is the champion
+*structure* — one doorbell/submission for the whole batch, versus the AQL path's
+per-dispatch packets. Two things mean its GPU-work speedup is best read off the
+AQL-boundary row rather than a direct PM4 timing here:
+
+- **GPU execution is the same class.** The PM4 IB runs the identical dispatches
+  with the identical minimal (boundary) fences as `BoundarySerialized`, so its
+  GPU execution span is in the same ~1.30 µs/dispatch class — the ~1.6× over
+  hipGraph is a GPU-work result that applies to the PM4 path too. The PM4 path's
+  *additional* edge is submission overhead (one doorbell, not N): a
+  host/submission win, not a GPU-execution one.
+- **The public PM4 replay is host-timed only, and host-timing it is dominated by
+  per-replay signal re-arm.** `RecordedGraph::submit → wait` re-arms N per-node
+  completion signals every replay (the "token-latency core"; the throughput ring
+  is explicitly left as integration work). That host cost scales with N (~1 ms at
+  N=256, ~2 ms at N=512) and swamps the ~0.3 ms of GPU work, so the host figure
+  measures Redline's synchronous wait path, not dispatch efficiency. HSA dispatch
+  profiling (`hsa_amd_profiling_get_dispatch_time`) targets AQL packets and does
+  not populate PM4-IB dispatch timestamps without extra instrumentation.
+
+Bottom line: the defensible dispatch-floor number is the GPU-span **~1.6× over a
+real `hipGraphLaunch`**. A clean PM4-IB GPU-span — to show the submission-overhead
+edge on top of that — needs a pipelined replay that amortizes signal re-arm, or
+explicit timestamp instrumentation of the IB. Tracked as follow-up.
+
 ## Honest scope
 
 - **This is an internal A/B that isolates the fence lever.** Both arms use

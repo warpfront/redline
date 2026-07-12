@@ -16,6 +16,7 @@
 
 #include <hip/hip_runtime.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -79,7 +80,23 @@ int main(int argc, char** argv) {
     std::sort(per_launch_us.begin(), per_launch_us.end());
     double med = per_launch_us[R / 2];
 
-    printf("hipGraphLaunch: N=%d  median GPU span = %.3f us  (%.4f us/dispatch)\n",
+    printf("hipGraphLaunch: N=%d  median GPU span   = %.3f us  (%.4f us/dispatch)\n",
            N, med, med / N);
+
+    // Host per-replay latency (launch + synchronize), matched to redline's PM4
+    // submit -> wait, so the PM4-vs-hipGraph comparison is on one basis.
+    std::vector<double> host_us;
+    host_us.reserve(M);
+    for (int i = 0; i < M; i++) {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        CHECK(hipGraphLaunch(exec, stream));
+        CHECK(hipStreamSynchronize(stream));
+        auto t1 = std::chrono::high_resolution_clock::now();
+        host_us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+    }
+    std::sort(host_us.begin(), host_us.end());
+    double host_med = host_us[M / 2];
+    printf("hipGraphLaunch: N=%d  median host lat.  = %.3f us  (%.4f us/dispatch)\n",
+           N, host_med, host_med / N);
     return 0;
 }
