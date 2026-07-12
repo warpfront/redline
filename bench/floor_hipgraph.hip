@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Kaden Schutt
+//
+// Literal hipGraph baseline for the dispatch-floor head-to-head.
+//
+// Builds a real HIP graph the way engines do: capture N chained tiny-kernel
+// launches on a stream (hipStreamBeginCapture), instantiate it
+// (hipGraphInstantiate), then replay with hipGraphLaunch and measure the GPU
+// time per launch. This is the exact path lucebox / llama.cpp's ggml-cuda uses.
+//
+//   hipcc --offload-arch=gfx1201 floor_hipgraph.hip -o floor_hipgraph
+//   ROCR_VISIBLE_DEVICES=3 ./floor_hipgraph <N> <M> <R> <WARMUP>
+//
+// N = kernel nodes in the chain, M = launches per timed batch,
+// R = timed batches (median reported), WARMUP = warmup launches.
+
+#include <hip/hip_runtime.h>
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+
+extern "C" __global__ void floor_k() {
+    // no-op: measures dispatch + fence overhead, matching the redline bench.
+}
+
+#define CHECK(x)                                                                   \
+    do {                                                                           \
+        hipError_t _e = (x);                                                       \
+        if (_e != hipSuccess) {                                                    \
+            fprintf(stderr, "hip error %s:%d: %s\n", __FILE__, __LINE__,           \
+                    hipGetErrorString(_e));                                        \
+            return 1;                                                              \
+        }                                                                          \
+    } while (0)
+
+int main(int argc, char** argv) {
+    int N = argc > 1 ? atoi(argv[1]) : 256;
+    int M = argc > 2 ? atoi(argv[2]) : 100;
+    int R = argc > 3 ? atoi(argv[3]) : 9;
+    int WARMUP = argc > 4 ? atoi(argv[4]) : 30;
+
+    hipStream_t stream;
+    CHECK(hipStreamCreate(&stream));
+
+    // Capture N tiny kernel launches into a graph (stream order => linear chain).
+    CHECK(hipStreamBeginCapture(stream, hipStreamCaptureModeGlobal));
+    for (int i = 0; i < N; i++) {
+        floor_k<<<dim3(1), dim3(1), 0, stream>>>();
+    }
+    hipGraph_t graph;
+    CHECK(hipStreamEndCapture(stream, &graph));
+
+    hipGraphExec_t exec;
+    CHECK(hipGraphInstantiate(&exec, graph, nullptr, nullptr, 0));
+
+    hipEvent_t start, stop;
+    CHECK(hipEventCreate(&start));
+    CHECK(hipEventCreate(&stop));
+
+    for (int i = 0; i < WARMUP; i++) {
+        CHECK(hipGraphLaunch(exec, stream));
+    }
+    CHECK(hipStreamSynchronize(stream));
+
+    std::vector<double> per_launch_us;
+    per_launch_us.reserve(R);
+    for (int r = 0; r < R; r++) {
+        CHECK(hipEventRecord(start, stream));
+        for (int i = 0; i < M; i++) {
+            CHECK(hipGraphLaunch(exec, stream));
+        }
+        CHECK(hipEventRecord(stop, stream));
+        CHECK(hipEventSynchronize(stop));
+        float ms = 0.0f;
+        CHECK(hipEventElapsedTime(&ms, start, stop));
+        per_launch_us.push_back(static_cast<double>(ms) * 1000.0 / M);
+    }
+    std::sort(per_launch_us.begin(), per_launch_us.end());
+    double med = per_launch_us[R / 2];
+
+    printf("hipGraphLaunch: N=%d  median GPU span = %.3f us  (%.4f us/dispatch)\n",
+           N, med, med / N);
+    return 0;
+}

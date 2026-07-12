@@ -57,6 +57,38 @@ The spectrum is smooth and monotonic and stable across N, so 1.8× is a safe,
 defensible rung — not a cherry-pick — with ~2.2× of headroom for independent
 work above it.
 
+## Literal hipGraphLaunch head-to-head
+
+The spectrum above compares against a *modeled* worst case (`SystemEveryDispatch`).
+This is the direct comparison against a real HIP graph: `bench/floor_hipgraph.hip`
+captures the same N no-op dispatches with `hipStreamBeginCapture`, instantiates
+with `hipGraphInstantiate`, and replays with `hipGraphLaunch` (the exact
+lucebox / llama.cpp ggml-cuda path), GPU-timed.
+
+| | N=256 | N=512 |
+| --- | ---: | ---: |
+| real `hipGraphLaunch` | 2.133 µs/disp | 2.113 µs/disp |
+| Redline `BoundarySerialized` (safe / decode) | 1.299 µs/disp | 1.307 µs/disp |
+| **head-to-head (conservative)** | **1.64×** | **1.62×** |
+| Redline `BoundaryIndependent` (aggressive) | 1.072 µs/disp | 1.073 µs/disp |
+| head-to-head (aggressive, independent-only) | 1.99× | 1.97× |
+
+**Redline beats a real `hipGraphLaunch` by ~1.63×** on the decode-safe policy,
+~1.98× on the aggressive independent policy, on the R9700.
+
+The real hipGraph lands at ~2.12 µs/dispatch — agent-scope fencing, *not* the
+2.37 µs system-every-dispatch worst case. So the literal head-to-head (1.63×) is
+slightly **below** the vs-theoretical-floor number (1.8×): ROCm 7.2's hipGraph is
+better than the absolute worst case, and Redline's win is measured against the
+real thing, not the model.
+
+Measurement basis: Redline reports the dispatch execution span (GPU timestamps,
+first-start → last-end); the hipGraph baseline reports sustained per-launch GPU
+time (hipEvent over 100 launches ÷ 100, median of 9 batches). Both are GPU time
+per replay of the same work; the hipGraph figure additionally carries relaunch
+overhead the Redline span excludes, a small effect in Redline's favor noted here
+for fairness.
+
 ## Honest scope
 
 - **This is an internal A/B that isolates the fence lever.** Both arms use
