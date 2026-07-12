@@ -28,8 +28,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use redline_dispatch::aql::{
-    BatchFencePolicy, Executable, GpuDevice, GpuSelector, KernargPool, LaunchGeometry,
-    RecordedDispatch, RecordedGraph, Runtime, SingleQueueBatchGraph, load_symbols,
+    BatchFencePolicy, Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargPool,
+    LaunchGeometry, RecordedDispatch, Runtime, SingleQueueBatchGraph, SingleQueuePm4Ib, load_symbols,
 };
 
 fn env_usize(key: &str, default: usize) -> usize {
@@ -99,43 +99,83 @@ fn measure(
     Ok(median(spans))
 }
 
-/// The PM4 champion path: lower the same N dispatches into ONE retained GFX12
-/// PM4 indirect buffer (single stream) and replay it. This path exposes
-/// host-observed completion, not GPU timestamps, so it is host-timed
-/// (submit -> wait per replay); the hipGraph baseline is host-timed identically
-/// for a matched comparison.
-fn measure_pm4_host(
+/// The PM4 champion: lower the same N dispatches into ONE retained GFX12 PM4
+/// indirect buffer (`SingleQueuePm4Ib`) and replay it. Unlike the general
+/// `RecordedGraph` (which re-arms N per-node completion signals per replay),
+/// this tight single-IB path resets only ONE completion signal per replay, so
+/// host latency reflects submission + GPU work, not signal re-arm.
+///
+/// `serialize` inserts a compute-idle wait between dispatches (conservative /
+/// dependency-ordered); `false` leaves them back-to-back (aggressive / minimal).
+/// Host-timed (submit -> wait), matched to the hipGraph host-latency baseline.
+fn measure_pm4_ib_host(
     device: &GpuDevice,
     exec: &Executable,
     symbol: &str,
     n: usize,
     m: usize,
     warmup: usize,
+    serialize: bool,
 ) -> Result<f64, Box<dyn std::error::Error>> {
     let pool = KernargPool::discover(device)?;
-    let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1])?;
-    let mut dispatches = Vec::with_capacity(n);
-    for _ in 0..n {
-        let kernel = exec.kernel(symbol)?;
-        let kernarg = pool.allocate_for(kernel.metadata())?;
-        dispatches.push(RecordedDispatch::new(0, kernel, geometry, kernarg)?);
+    let kernel = exec.kernel(symbol)?;
+    let kernarg = pool.allocate_for(kernel.metadata())?;
+    let mut cmd = Gfx12Pm4CommandBuffer::new();
+    for i in 0..n {
+        let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1])?;
+        cmd.dispatch(&kernel, geometry, 0, kernarg.address())?;
+        if serialize && i + 1 < n {
+            cmd.wait_compute_idle();
+        }
     }
-    let range = device.queue_size_range();
-    let want = ((n as u32).saturating_add(16)).next_power_of_two();
-    let queue_size = want.clamp(*range.start(), *range.end());
-    // queue_count = 1 -> a single-stream retained PM4 indirect buffer.
-    let mut graph = RecordedGraph::create(device, 1, queue_size, dispatches)?;
+    let mut ib = SingleQueuePm4Ib::create(device, &pool, &cmd)?;
     for _ in 0..warmup {
-        // SAFETY: no-op kernels reference no external pointees.
-        unsafe { graph.submit()? }.wait()?;
+        // SAFETY: no-op kernels reference no external pointees; the retained IB,
+        // code object, and kernarg stay live for the lifetime of `ib`.
+        unsafe { ib.replay_and_wait()? };
     }
     let mut per = Vec::with_capacity(m);
     for _ in 0..m {
         let t0 = Instant::now();
-        unsafe { graph.submit()? }.wait()?;
+        unsafe { ib.replay_and_wait()? };
         per.push(t0.elapsed().as_secs_f64() * 1e6);
     }
     Ok(median(per))
+}
+
+/// Correctness gate: build a PM4 IB of N dispatches of an atomic-increment
+/// kernel (`ctr_k(unsigned int*)`), replay once, and read the counter back. It
+/// must equal N iff every dispatch executed AND the replay's completion waited
+/// for wave retirement (else the host-latency numbers are measuring skipped or
+/// unfinished dispatches). Returns (observed, expected).
+fn verify_pm4_execution(
+    device: &GpuDevice,
+    exec: &Executable,
+    symbol: &str,
+    n: usize,
+    serialize: bool,
+) -> Result<(u32, u32), Box<dyn std::error::Error>> {
+    let pool = KernargPool::discover(device)?;
+    let kernel = exec.kernel(symbol)?;
+    let mut counter = pool.allocate_executable_bytes(4)?;
+    counter.as_mut_bytes().fill(0);
+    let counter_addr = counter.address() as usize as u64;
+    let mut kernarg = pool.allocate_for(kernel.metadata())?;
+    kernarg.as_mut_bytes()[..8].copy_from_slice(&counter_addr.to_le_bytes());
+
+    let mut cmd = Gfx12Pm4CommandBuffer::new();
+    for i in 0..n {
+        let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1])?;
+        cmd.dispatch(&kernel, geometry, 0, kernarg.address())?;
+        if serialize && i + 1 < n {
+            cmd.wait_compute_idle(); // serialize the atomic increments
+        }
+    }
+    let mut ib = SingleQueuePm4Ib::create(device, &pool, &cmd)?;
+    // SAFETY: kernarg points at `counter`, which outlives `ib`.
+    unsafe { ib.replay_and_wait()? };
+    let observed = u32::from_le_bytes(counter.as_mut_bytes()[..4].try_into().unwrap());
+    Ok((observed, n as u32))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -179,16 +219,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {name:<52} {us:>10.3} {per:>10.4} {ratio:>8.3}x");
     }
 
-    // The champion structure: single-stream retained PM4 indirect buffer. This
-    // path exposes only host-observed completion, and the synchronous
-    // submit -> wait re-arms N per-node completion signals every replay (the
-    // documented token-latency core; a pipelined/ring impl amortizes it). So
-    // this host number is dominated by per-replay signal re-arm (it scales with
-    // N), NOT GPU dispatch cost — it is not comparable to the GPU-span rows.
-    let pm4 = measure_pm4_host(&device, &exec, &symbol, n, m, warmup)?;
+    // Correctness gate: prove the PM4 IB actually executes N dispatches to
+    // completion before trusting its host-latency numbers.
+    if let Ok(vpath) = std::env::var("REDLINE_FLOOR_VERIFY_HSACO") {
+        let vsym =
+            std::env::var("REDLINE_FLOOR_VERIFY_SYMBOL").unwrap_or_else(|_| "ctr_k.kd".to_owned());
+        let vcode: Arc<[u8]> = std::fs::read(&vpath)?.into();
+        let vexec = Executable::load(&device, vcode)?;
+        for (label, serialize) in [("serialized", true), ("minimal-fence", false)] {
+            let (observed, expected) = verify_pm4_execution(&device, &vexec, &vsym, n, serialize)?;
+            let status = if observed == expected { "PASS" } else { "FAIL" };
+            println!(
+                "  PM4 correctness gate ({label:<13}): counter = {observed} / {expected}  [{status}]"
+            );
+        }
+    }
+
+    // The champion: single-stream retained PM4 indirect buffer (SingleQueuePm4Ib),
+    // O(1) signal reset per replay. Host-timed (submit -> wait), matched to the
+    // hipGraph host-latency baseline. Conservative serializes each dispatch;
+    // aggressive leaves them minimal/back-to-back.
+    let pm4_cons = measure_pm4_ib_host(&device, &exec, &symbol, n, m, warmup, true)?;
+    let pm4_aggr = measure_pm4_ib_host(&device, &exec, &symbol, n, m, warmup, false)?;
     println!(
-        "  {:<52} {:>10.3} {:>10.4}   host lat. (signal re-arm bound, not GPU work)",
-        "PM4 retained IB (redline champion)", pm4, pm4 / n as f64
+        "  {:<52} {:>10.3} {:>10.4}   host latency/replay",
+        "PM4 retained IB — conservative (serialized)", pm4_cons, pm4_cons / n as f64
+    );
+    println!(
+        "  {:<52} {:>10.3} {:>10.4}   host latency/replay",
+        "PM4 retained IB — aggressive (minimal fence)", pm4_aggr, pm4_aggr / n as f64
     );
     Ok(())
 }

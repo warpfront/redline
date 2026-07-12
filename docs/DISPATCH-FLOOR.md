@@ -89,32 +89,45 @@ per replay of the same work; the hipGraph figure additionally carries relaunch
 overhead the Redline span excludes, a small effect in Redline's favor noted here
 for fairness.
 
-## PM4 champion path (`RecordedGraph`)
+## PM4 champion path — the retained single-stream PM4 IB
 
-The retained single-stream PM4 indirect buffer (`RecordedGraph`) is the champion
-*structure* — one doorbell/submission for the whole batch, versus the AQL path's
-per-dispatch packets. Two things mean its GPU-work speedup is best read off the
-AQL-boundary row rather than a direct PM4 timing here:
+The champion is `SingleQueuePm4Ib`: the N dispatches are lowered into ONE retained
+GFX12 PM4 indirect buffer, submitted with one doorbell, and the CP streams it —
+bypassing the AQL packet processor that HIP (and therefore hipGraph) drives one
+kernel-dispatch packet at a time. It resets one completion signal per replay (the
+general `RecordedGraph` re-arms N per-node signals — an O(N) host cost, the
+documented "token-latency core"; the tight single-IB path avoids it).
 
-- **GPU execution is the same class.** The PM4 IB runs the identical dispatches
-  with the identical minimal (boundary) fences as `BoundarySerialized`, so its
-  GPU execution span is in the same ~1.30 µs/dispatch class — the ~1.6× over
-  hipGraph is a GPU-work result that applies to the PM4 path too. The PM4 path's
-  *additional* edge is submission overhead (one doorbell, not N): a
-  host/submission win, not a GPU-execution one.
-- **The public PM4 replay is host-timed only, and host-timing it is dominated by
-  per-replay signal re-arm.** `RecordedGraph::submit → wait` re-arms N per-node
-  completion signals every replay (the "token-latency core"; the throughput ring
-  is explicitly left as integration work). That host cost scales with N (~1 ms at
-  N=256, ~2 ms at N=512) and swamps the ~0.3 ms of GPU work, so the host figure
-  measures Redline's synchronous wait path, not dispatch efficiency. HSA dispatch
-  profiling (`hsa_amd_profiling_get_dispatch_time`) targets AQL packets and does
-  not populate PM4-IB dispatch timestamps without extra instrumentation.
+Measured end-to-end **host latency** (submit → completion) on the R9700, matched
+to the hipGraph host-latency baseline, and **correctness-gated**:
 
-Bottom line: the defensible dispatch-floor number is the GPU-span **~1.6× over a
-real `hipGraphLaunch`**. A clean PM4-IB GPU-span — to show the submission-overhead
-edge on top of that — needs a pipelined replay that amortizes signal re-arm, or
-explicit timestamp instrumentation of the IB. Tracked as follow-up.
+| | N=256 | N=512 |
+| --- | ---: | ---: |
+| real `hipGraphLaunch` (host) | 2.189 µs/disp | 2.137 µs/disp |
+| PM4 IB conservative (serialized, decode-safe) | 0.211 µs/disp | 0.176 µs/disp |
+| **head-to-head (conservative)** | **10.4×** | **12.1×** |
+| PM4 IB aggressive (minimal fence) | 0.148 µs/disp | 0.124 µs/disp |
+| head-to-head (aggressive) | 14.8× | 17.3× |
+
+**Correctness gate (mandatory — the numbers are below the AQL GPU span, which
+would otherwise be indistinguishable from skipped dispatches).** A per-dispatch
+atomic-increment kernel (`ctr_k`) run through the *same* PM4 IB leaves the counter
+at exactly N — `256/256` and `512/512`, in both the serialized and minimal-fence
+builds. That proves every dispatch executes AND the replay's completion waits for
+wave retirement. With the gate green, the host latency is real.
+
+Why this is ~10× and not the ~1.6× GPU-span number: the GPU *execution* of the
+no-op waves is identical either way; the ~10× is the per-dispatch
+*submission/processing* overhead the retained PM4 IB removes — one CP-streamed
+buffer versus N AQL packets each handled by the packet processor. hipGraph on
+ROCm rides that AQL path and pays it; the retained PM4 IB does not. This is the
+retained-PM4 thesis, measured and gated.
+
+Honest scope: the no-op kernel is the pure floor. Real decode kernels add compute
+both paths pay equally, so the *ratio* shrinks toward 1× as kernel work grows —
+but the ~2 µs/dispatch absolute overhead removed is fixed, and decode's value is
+in having *many* tiny dispatches per token (exactly the #6409 regime), where the
+floor dominates.
 
 ## Honest scope
 
