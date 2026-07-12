@@ -21,8 +21,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use redline_dispatch::aql::{
-    Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargPool, LaunchGeometry, Runtime,
-    SingleQueuePm4Ib, load_symbols,
+    BatchFencePolicy, Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargPool,
+    LaunchGeometry, RecordedDispatch, Runtime, SingleQueueBatchGraph, SingleQueuePm4Ib,
+    load_symbols,
 };
 
 fn median(mut v: Vec<f64>) -> f64 {
@@ -107,6 +108,68 @@ fn measure(
     Ok((median(ts) / count as f64, correct))
 }
 
+/// Redline's GPU-execution span for the gmb_noop dependency chain via the AQL
+/// `SingleQueueBatchGraph` (BoundarySerialized), which exposes GPU timestamps.
+/// This isolates GPU dispatch time from the host submit+wait overhead of the
+/// PM4 host-latency arms — the fair basis versus Vulkan's GPU timestamp.
+fn measure_gpuspan(
+    device: &GpuDevice,
+    pool: &KernargPool,
+    exec: &Executable,
+    n: u32,
+    count: usize,
+    reps: usize,
+    warmup: usize,
+) -> Result<(f64, bool), Box<dyn std::error::Error>> {
+    let mut out = pool.allocate_executable_bytes((n as usize) * 4)?;
+    out.as_mut_bytes().fill(0);
+    let out_addr = out.address() as usize as u64;
+    let block = 256u32;
+    let grid_blocks = n.div_ceil(block);
+    let workitems = grid_blocks * block;
+    let mut dispatches = Vec::with_capacity(count);
+    for i in 0..count {
+        let kernel = exec.kernel("gmb_noop_kernel.kd")?;
+        let mut karg = pool.allocate_for(kernel.metadata())?;
+        {
+            let d = karg.as_mut_bytes();
+            d.fill(0);
+            d[..8].copy_from_slice(&out_addr.to_le_bytes());
+            d[8..12].copy_from_slice(&n.to_le_bytes());
+        }
+        let geometry = LaunchGeometry::new([workitems, 1, 1], [block as u16, 1, 1])?;
+        // BoundarySerialized serializes the batch itself; no explicit deps.
+        let _ = i;
+        dispatches.push(RecordedDispatch::new(0, kernel, geometry, karg)?);
+    }
+    let range = device.queue_size_range();
+    let want = ((count as u32).saturating_add(16)).next_power_of_two();
+    let queue_size = want.clamp(*range.start(), *range.end());
+    // AgentEveryInternalDispatch fences every dispatch at agent scope (no
+    // access/dep declaration needed) — the minimal policy that correctly
+    // serializes the RMW chain in the RecordedDispatch path.
+    let mut graph = SingleQueueBatchGraph::create(
+        device,
+        queue_size,
+        dispatches,
+        BatchFencePolicy::AgentEveryInternalDispatch,
+    )?;
+
+    let _ = unsafe { graph.replay_and_wait()? };
+    let v0 = f32::from_le_bytes(out.as_mut_bytes()[..4].try_into().unwrap());
+    let correct = v0 == count as f32;
+
+    for _ in 0..warmup {
+        let _ = unsafe { graph.replay_and_wait()? };
+    }
+    let mut spans = Vec::with_capacity(reps);
+    for _ in 0..reps {
+        let t = unsafe { graph.replay_and_wait()? };
+        spans.push(t.span_microseconds());
+    }
+    Ok((median(spans) / count as f64, correct))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hsaco = std::env::var("GMB_HSACO").map_err(|_| "set GMB_HSACO to gmb_noop.co")?;
     let n: u32 = std::env::var("GMB_N").ok().and_then(|s| s.parse().ok()).unwrap_or(256);
@@ -142,6 +205,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "{count:>6} | {:>15.4} [{:>4}] | {:>15.4} [{:>4}] | {:>15.4} [{:>4}]",
             r[0].0, pf(r[0].1), r[1].0, pf(r[1].1), r[2].0, pf(r[2].1),
         );
+    }
+    println!();
+    println!("redline GPU-span (AQL AgentEveryInternalDispatch, GPU timestamps — GPU exec, no host):");
+    for &count in &counts {
+        if count < 2 {
+            println!("  count={count:>4}   (n/a — profiling needs >=2 dispatches)");
+            continue;
+        }
+        let (gpu, ok) = measure_gpuspan(&device, &pool, &exec, n, count, reps, warmup)?;
+        println!("  count={count:>4}   {gpu:>10.4} µs/dispatch   [{}]", pf(ok));
     }
     Ok(())
 }

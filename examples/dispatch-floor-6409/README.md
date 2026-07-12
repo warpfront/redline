@@ -35,6 +35,39 @@ PM4 IB) and fences each boundary with the minimal gfx12 dependency fence
 (`wait_compute_idle` + inter-node acquire — L2/MALL stays coherent) instead of
 HIP's heavier per-dispatch fence, so it beats even the graph.
 
+## vs Vulkan — the real #6409 test (and where Redline still loses)
+
+Running lhl's own `vulkan_command_buffer` arm (RADV, R9700, device 3), host
+µs/dispatch at count=941:
+
+| hip_serial | hip_graph | redline | vulkan |
+| ---: | ---: | ---: | ---: |
+| 2.74 | 2.26 | 1.90 | **1.07** |
+
+**Redline beats HIP (1.19–1.44×) but Vulkan beats Redline (~1.78×) on this strict
+serial chain.** This is the honest heart of #6409: Vulkan's compute barrier
+(`SHADER_WRITE → SHADER_READ`) is a *cheaper dependency fence* than Redline's
+`wait_compute_idle` (a full compute-idle drain). From the tuned decomposition,
+Redline's wait costs ~1.47 µs/dispatch; Vulkan gets the equivalent wait+invalidate
+for ~1.07 total. So the remaining gap is **not** submission (Redline already bakes
+that away) and **not** the binding (pure Rust ≈ PyO3) — it is the *fence*.
+
+Two implications:
+
+- **Redline's win is on *independent* work, not strict chains.** The fence-free
+  aggressive path is ~0.11 µs/dispatch (~10× — see
+  [`../../docs/DISPATCH-FLOOR.md`](../../docs/DISPATCH-FLOOR.md)); real decode
+  overlaps its independent branches, where Redline pulls ahead of both HIP and
+  Vulkan.
+- **The optimization target is a lighter dependency fence** — a targeted
+  wait-for-writer + read-cache invalidate matching Vulkan's barrier, instead of
+  the full `wait_compute_idle` drain. Closing that closes the serial-chain gap to
+  Vulkan.
+
+Reproduce the Vulkan arm:
+`python .engines/hipEngine/benchmarks/micro/runners/vulkan_dispatch_floor.py
+--counts 1,50,200,941 --n 256 --reps 50 --device-index <gpu>`.
+
 ## Why 1.2× here and not the ~10× floor (it is NOT the binding)
 
 `crates/redline-dispatch/examples/gmb_floor.rs` runs the *same* experiment in
