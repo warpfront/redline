@@ -25,6 +25,9 @@ pub const RL_ERR_COMPILE: i32 = -4;
 pub const RL_ERR_REPLAY: i32 = -5;
 pub const RL_ERR_HANDLE: i32 = -6;
 
+/// Real-GPU retained-PM4 replay (engine supplies its own kernels + kernargs).
+pub mod gpu;
+
 /// Replay tuning mode. `lanes`/`max_in_flight` are read from the call site.
 #[repr(C)]
 pub enum RlMode {

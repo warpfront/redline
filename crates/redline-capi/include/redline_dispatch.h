@@ -44,6 +44,11 @@ typedef enum RlMode {
 } RlMode;
 
 /**
+ * A GPU binding: ROCr runtime + selected device + kernarg pool.
+ */
+typedef struct RlGpu RlGpu;
+
+/**
  * Opaque capturing graph. Create with [`rl_graph_new`] / [`rl_graph_new_tuned`].
  */
 typedef struct RlGraph RlGraph;
@@ -52,6 +57,21 @@ typedef struct RlGraph RlGraph;
  * Opaque instantiated graph (the analogue of `hipGraphExec_t`).
  */
 typedef struct RlGraphExec RlGraphExec;
+
+/**
+ * A loaded code object; kernels are looked up from it by symbol.
+ */
+typedef struct RlModule RlModule;
+
+/**
+ * A builder accumulating dispatches into one PM4 command buffer.
+ */
+typedef struct RlPm4Builder RlPm4Builder;
+
+/**
+ * A finalized, retained PM4 indirect buffer, replayable end to end.
+ */
+typedef struct RlPm4Ib RlPm4Ib;
 
 /**
  * One buffer access declared by a kernel node.
@@ -172,6 +192,115 @@ int32_t rl_graphexec_launch_mock(const struct RlGraphExec *e);
  * ABI version of this library.
  */
 uint32_t rl_abi_version(void);
+
+/**
+ * Bind ROCr GPU `device_ordinal` (of the `ROCR_VISIBLE_DEVICES` set). Returns
+ * null on failure. Free with [`rl_gpu_free`].
+ */
+struct RlGpu *rl_gpu_new(int32_t device_ordinal);
+
+/**
+ * # Safety
+ * `gpu` must be a pointer from [`rl_gpu_new`], or null.
+ */
+void rl_gpu_free(struct RlGpu *gpu);
+
+/**
+ * Load a code object (HSACO bytes). Writes the module pointer to `out`.
+ *
+ * # Safety
+ * `gpu`/`out` valid or null; `code` valid for `len` bytes.
+ */
+int32_t rl_gpu_load_module(const struct RlGpu *gpu,
+                           const uint8_t *code,
+                           uintptr_t len,
+                           struct RlModule **out);
+
+/**
+ * # Safety
+ * `module` from [`rl_gpu_load_module`], or null.
+ */
+void rl_module_free(struct RlModule *module);
+
+/**
+ * The kernarg segment size (bytes) the engine must supply for `symbol`, or -1.
+ *
+ * # Safety
+ * `module`/`symbol` valid or null; `symbol` NUL-terminated.
+ */
+int64_t rl_module_kernarg_size(const struct RlModule *module, const char *symbol);
+
+/**
+ * New PM4 builder bound to `gpu`. Free with [`rl_pm4_builder_free`] (or hand it
+ * to [`rl_pm4_finalize`], which consumes it). Returns null on failure.
+ *
+ * # Safety
+ * `gpu` valid or null.
+ */
+struct RlPm4Builder *rl_pm4_builder_new(const struct RlGpu *gpu);
+
+/**
+ * Record one dispatch: `symbol` from `module`, `grid`/`block` in **workitems**
+ * (grid = gridDim × blockDim), `dynamic_group_bytes`, and `kernarg`/`kernarg_len`
+ * = the engine's kernarg segment (zero-padded / truncated to the kernel's size).
+ *
+ * # Safety
+ * Pointers valid or null; `symbol` NUL-terminated; `kernarg` valid for
+ * `kernarg_len`.
+ */
+int32_t rl_pm4_dispatch(struct RlPm4Builder *builder,
+                        const struct RlModule *module,
+                        const char *symbol,
+                        uint32_t grid_x,
+                        uint32_t grid_y,
+                        uint32_t grid_z,
+                        uint32_t block_x,
+                        uint32_t block_y,
+                        uint32_t block_z,
+                        uint32_t dynamic_group_bytes,
+                        const uint8_t *kernarg,
+                        uintptr_t kernarg_len);
+
+/**
+ * Insert a compute-idle wait after the dispatches recorded so far (serialize a
+ * dependency boundary).
+ *
+ * # Safety
+ * `builder` valid or null.
+ */
+void rl_pm4_wait_idle(struct RlPm4Builder *builder);
+
+/**
+ * # Safety
+ * `builder` from [`rl_pm4_builder_new`] and NOT already finalized, or null.
+ */
+void rl_pm4_builder_free(struct RlPm4Builder *builder);
+
+/**
+ * Lower the builder into a retained PM4 IB. **Consumes `builder`** (do not use
+ * or free it after this). Writes the IB pointer to `out`.
+ *
+ * # Safety
+ * `gpu`/`out` valid or null; `builder` a live, un-finalized builder pointer.
+ */
+int32_t rl_pm4_finalize(const struct RlGpu *gpu,
+                        struct RlPm4Builder *builder,
+                        struct RlPm4Ib **out);
+
+/**
+ * Replay the retained IB once (submit + wait for completion). Returns `RL_OK`.
+ *
+ * # Safety
+ * `ib` from [`rl_pm4_finalize`], or null; every device pointer encoded in the
+ * engine's kernargs must remain valid.
+ */
+int32_t rl_pm4_replay(struct RlPm4Ib *ib);
+
+/**
+ * # Safety
+ * `ib` from [`rl_pm4_finalize`], or null.
+ */
+void rl_pm4_ib_free(struct RlPm4Ib *ib);
 
 #ifdef __cplusplus
 }  // extern "C"

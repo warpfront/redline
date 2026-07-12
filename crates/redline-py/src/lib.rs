@@ -19,6 +19,10 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use redline_core::aql::{
+    Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargBuffer, KernargPool,
+    LaunchGeometry, Runtime, SingleQueuePm4Ib, load_symbols,
+};
 use redline_core::hipgraph::{Graph, GraphExec, Tuning};
 use redline_core::mock::MockBackend;
 use redline_core::{Access, Dim3, KernelLaunch, NodeId, ReplayToken, ResourceId};
@@ -156,10 +160,161 @@ impl PyGraphExec {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Real-GPU retained-PM4 replay: the fast path for an engine to drive with its
+// own kernels + kernargs (the SingleQueuePm4Ib champion behind a Python surface).
+// ---------------------------------------------------------------------------
+
+/// A GPU binding (ROCr runtime + device + kernarg pool). `Gpu(ordinal)`.
+#[pyclass(unsendable)]
+struct Gpu {
+    device: GpuDevice,
+    pool: KernargPool,
+    _runtime: Runtime,
+}
+
+/// A loaded code object; kernels looked up by symbol.
+#[pyclass(unsendable)]
+struct Module {
+    executable: Executable,
+}
+
+/// A GPU-accessible buffer (for a demo counter / any device data). Its
+/// `address()` goes into a kernarg; `read_u32()` reads it back after replay.
+#[pyclass(unsendable)]
+struct Buffer {
+    buf: KernargBuffer,
+}
+
+/// A finalized retained PM4 indirect buffer; `replay()` submits + waits.
+#[pyclass(unsendable)]
+struct Pm4Ib {
+    ib: SingleQueuePm4Ib,
+    _kernargs: Vec<KernargBuffer>,
+    _modules: Vec<Executable>,
+}
+
+type DispatchSpec = (String, (u32, u32, u32), (u32, u32, u32), u32, Vec<u8>, bool);
+
+#[pymethods]
+impl Gpu {
+    /// Bind ROCr GPU `ordinal` (of the `ROCR_VISIBLE_DEVICES` set).
+    #[new]
+    fn new(ordinal: i32) -> PyResult<Self> {
+        let runtime = Runtime::initialize(load_symbols().map_err(to_py)?).map_err(to_py)?;
+        let ord =
+            usize::try_from(ordinal).map_err(|_| PyValueError::new_err("negative device ordinal"))?;
+        let device = runtime
+            .select_gpu(GpuSelector::Ordinal(ord))
+            .map_err(to_py)?;
+        let pool = KernargPool::discover(&device).map_err(to_py)?;
+        Ok(Self {
+            device,
+            pool,
+            _runtime: runtime,
+        })
+    }
+
+    /// Load a code object (HSACO bytes).
+    fn load_module(&self, code: &[u8]) -> PyResult<Module> {
+        let bytes: std::sync::Arc<[u8]> = code.into();
+        Ok(Module {
+            executable: Executable::load(&self.device, bytes).map_err(to_py)?,
+        })
+    }
+
+    /// Allocate a zeroed, GPU-accessible buffer of `nbytes`.
+    fn alloc(&self, nbytes: usize) -> PyResult<Buffer> {
+        let mut buf = self.pool.allocate_executable_bytes(nbytes).map_err(to_py)?;
+        buf.as_mut_bytes().fill(0);
+        Ok(Buffer { buf })
+    }
+
+    /// Build a retained PM4 IB from `dispatches` — a list of
+    /// `(symbol, grid, block, dynamic_group_bytes, kernarg_bytes, serialize)`
+    /// tuples (grid/block in workitems). `serialize` inserts a compute-idle wait.
+    fn build(&self, module: &Module, dispatches: Vec<DispatchSpec>) -> PyResult<Pm4Ib> {
+        let mut cmd = Gfx12Pm4CommandBuffer::new();
+        let mut kernargs = Vec::with_capacity(dispatches.len());
+        let count = dispatches.len();
+        for (i, (symbol, grid, block, dyn_group, karg_bytes, serialize)) in
+            dispatches.into_iter().enumerate()
+        {
+            let kernel = module.executable.kernel(&symbol).map_err(to_py)?;
+            let block16 = [
+                u16::try_from(block.0).map_err(|_| PyValueError::new_err("block.x > 65535"))?,
+                u16::try_from(block.1).map_err(|_| PyValueError::new_err("block.y > 65535"))?,
+                u16::try_from(block.2).map_err(|_| PyValueError::new_err("block.z > 65535"))?,
+            ];
+            let geometry =
+                LaunchGeometry::new([grid.0, grid.1, grid.2], block16).map_err(to_py)?;
+            let mut karg = self.pool.allocate_for(kernel.metadata()).map_err(to_py)?;
+            {
+                let dst = karg.as_mut_bytes();
+                dst.fill(0);
+                let n = karg_bytes.len().min(dst.len());
+                dst[..n].copy_from_slice(&karg_bytes[..n]);
+            }
+            cmd.dispatch(&kernel, geometry, dyn_group, karg.address())
+                .map_err(to_py)?;
+            kernargs.push(karg);
+            if serialize && i + 1 < count {
+                cmd.wait_compute_idle();
+            }
+        }
+        let ib = SingleQueuePm4Ib::create(&self.device, &self.pool, &cmd).map_err(to_py)?;
+        Ok(Pm4Ib {
+            ib,
+            _kernargs: kernargs,
+            _modules: vec![module.executable.clone()],
+        })
+    }
+}
+
+#[pymethods]
+impl Module {
+    /// The kernarg segment size (bytes) to supply for `symbol`.
+    fn kernarg_size(&self, symbol: &str) -> PyResult<u32> {
+        Ok(self.executable.kernel(symbol).map_err(to_py)?.metadata().kernarg_segment_size)
+    }
+}
+
+#[pymethods]
+impl Buffer {
+    /// The device address (put its little-endian u64 into a kernarg).
+    fn address(&self) -> u64 {
+        self.buf.address() as usize as u64
+    }
+
+    /// Read a little-endian u32 at `offset`.
+    fn read_u32(&mut self, offset: usize) -> PyResult<u32> {
+        let bytes = self.buf.as_mut_bytes();
+        let end = offset
+            .checked_add(4)
+            .filter(|e| *e <= bytes.len())
+            .ok_or_else(|| PyValueError::new_err("read out of bounds"))?;
+        Ok(u32::from_le_bytes(bytes[offset..end].try_into().unwrap()))
+    }
+}
+
+#[pymethods]
+impl Pm4Ib {
+    /// Submit the retained IB and wait for completion.
+    fn replay(&mut self) -> PyResult<()> {
+        // SAFETY: the IB owns its kernargs; device pointers in them must stay valid.
+        unsafe { self.ib.replay_and_wait() }.map_err(to_py)?;
+        Ok(())
+    }
+}
+
 #[pymodule]
 fn redline_dispatch(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGraph>()?;
     m.add_class::<PyGraphExec>()?;
+    m.add_class::<Gpu>()?;
+    m.add_class::<Module>()?;
+    m.add_class::<Buffer>()?;
+    m.add_class::<Pm4Ib>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
