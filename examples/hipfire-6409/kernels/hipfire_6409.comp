@@ -1,0 +1,461 @@
+#version 460
+#extension GL_EXT_integer_dot_product : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
+
+// Every HipEngine-parity row specializes constant 0 to its recorded WG size.
+// One shader module therefore covers WG32/64/128/256 without pretending that
+// a 256-thread shader is a WG64 comparison.
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer ABuffer { uint a[]; };
+layout(set = 0, binding = 1) readonly buffer BBuffer { uint b[]; };
+layout(set = 0, binding = 2) buffer OutputBuffer { uint out_words[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint n0;
+    uint n1;
+    uint output_offset;
+    uint aux;
+} pc;
+
+shared float shared_f32[256];
+shared uint shared_u32[264];
+
+uint hash_u32(uint v) {
+    v ^= v >> 16; v *= 0x7feb352du; v ^= v >> 15;
+    v *= 0x846ca68bu; v ^= v >> 16; return v;
+}
+
+int byte_i8(uint v) {
+    int x = int(v & 255u);
+    return x >= 128 ? x - 256 : x;
+}
+
+int dot_s8_s8(uint x, uint y) {
+    return dotPacked4x8EXT(int32_t(x), int32_t(y));
+}
+
+int dot_u8_s8(uint x, uint y) {
+    return dotPacked4x8EXT(x, int32_t(y));
+}
+
+int scalar_q4(uint x, uint y) {
+    int sum = 0;
+    for (uint lane = 0; lane < 4; ++lane)
+        sum += (int((x >> (lane * 8)) & 15u) - 8) * byte_i8(y >> (lane * 8));
+    return sum;
+}
+
+float load_bf16(uint element) {
+    uint word = b[element >> 1u];
+    uint bits = (word >> ((element & 1u) * 16u)) & 0xffffu;
+    return uintBitsToFloat(bits << 16u);
+}
+
+uint q8_word(uint output_offset, uint scratch_words, uint x_row, uint blocks, uint group) {
+    uint block = group >> 3u;
+    uint packed = group & 7u;
+    if (scratch_words != 0u) {
+        uint base = output_offset - scratch_words;
+        return out_words[base + (x_row * blocks + block) * 9u + 1u + packed];
+    }
+    return b[(x_row * blocks + block) * 9u + 1u + packed];
+}
+
+int workgroup_sum_i32(int value) {
+    int wave_sum = subgroupAdd(value);
+    if (subgroupElect()) shared_u32[gl_SubgroupID] = uint(wave_sum);
+    barrier();
+    int total = 0;
+    if (gl_LocalInvocationID.x == 0u) {
+        for (uint wave = 0u; wave < gl_NumSubgroups; ++wave)
+            total += int(shared_u32[wave]);
+    }
+    barrier();
+    return total;
+}
+
+float wave_then_workgroup_sum(float value) {
+    float wave = subgroupAdd(value);
+    if (subgroupElect()) shared_f32[gl_SubgroupID] = wave;
+    barrier();
+    float total = gl_SubgroupID == 0 && gl_SubgroupInvocationID < gl_NumSubgroups
+        ? shared_f32[gl_SubgroupInvocationID] : 0.0;
+    total = subgroupAdd(total);
+    return total;
+}
+
+float geometry_value(uint row) {
+    float sum = 0.0;
+    for (uint repeat = 0; repeat < pc.aux; ++repeat) {
+        for (uint i = gl_LocalInvocationID.x; i < pc.n0; i += gl_WorkGroupSize.x) {
+            uint j = (i + repeat) % pc.n0;
+            sum = fma(uintBitsToFloat(a[j]), uintBitsToFloat(b[row * pc.n0 + j]), sum);
+        }
+    }
+    return sum;
+}
+
+float lane_bias(uint idx, uint iter, uint lane) {
+    uint bits = idx * 1664525u + iter * 1013904223u + lane * 2246822519u;
+    return float((bits >> 24) & 31u) * 0.000001 + 0.000003;
+}
+
+float vopd_value(uint idx, uint mode) {
+    float v0 = 0.25 + float((idx * 747796405u) & 255u) * 0.0009765625;
+    float v1 = 0.25 + float(((idx * 747796405u) ^ 2891336453u) & 255u) * 0.0009765625;
+    float v2 = v0 + 0.03125, v3 = v1 + 0.046875;
+    uint u0 = idx * 747796405u + 2891336453u;
+    uint u1 = idx ^ 0xa5a5a5a5u;
+    for (uint iter = 0; iter < pc.aux; ++iter) {
+        if (mode == 0u) {
+            v0 = fma(v0, 1.000001, lane_bias(idx, iter, 0u));
+            v1 = fma(v1, 0.999999, lane_bias(idx, iter, 1u));
+            v2 = fma(v2, 1.000002, lane_bias(idx, iter, 2u));
+            v3 = fma(v3, 0.999998, lane_bias(idx, iter, 3u));
+        } else if (mode == 1u) {
+            v0 = fma(v0, 1.000001, lane_bias(idx, iter, 0u));
+            v0 = fma(v0, 0.999999, lane_bias(idx, iter, 1u));
+            v0 = fma(v0, 1.000002, lane_bias(idx, iter, 2u));
+            v0 = fma(v0, 0.999998, lane_bias(idx, iter, 3u));
+        } else if (mode == 2u) {
+            u0 = hash_u32(u0 + iter); u1 = hash_u32(u1 + iter + 1u);
+            v0 = fma(v0, 1.000001, float(u0 & 31u) * 0.000001);
+            v1 = fma(v1, 0.999999, float(u1 & 31u) * 0.000001);
+            v2 = fma(v2, 1.000002, float((u0 >> 7) & 31u) * 0.000001);
+            v3 = fma(v3, 0.999998, float((u1 >> 11) & 31u) * 0.000001);
+        } else {
+            u0 = hash_u32(u0 + iter); u1 = hash_u32(u1 + iter + 1u);
+            int q0 = int((u0 >> (iter & 15u)) & 255u) - 128;
+            int q1 = int((u1 >> ((iter + 3u) & 15u)) & 255u) - 128;
+            v0 = fma(float(q0) * 0.0078125, 0.03125, v0);
+            v1 = fma(float(q1) * 0.0078125, 0.03125, v1);
+        }
+    }
+    return v0 + v1 + v2 + v3;
+}
+
+void main() {
+#if defined(KERNEL_DISPATCH_TINY)
+    uint gid = gl_WorkGroupID.x;
+    if (gl_LocalInvocationID.x == 0u && gid < pc.n0)
+        out_words[pc.output_offset + gid] += 1u;
+
+#elif defined(KERNEL_GEOMETRY_FMA) || defined(KERNEL_REDUCTION_WAVE)
+    uint row = gl_WorkGroupID.x;
+    if (row >= pc.n1) return;
+    float total = wave_then_workgroup_sum(geometry_value(row));
+    if (gl_LocalInvocationID.x == 0u)
+        out_words[pc.output_offset + row] = floatBitsToUint(
+            uintBitsToFloat(out_words[pc.output_offset + row]) + total);
+
+#elif defined(KERNEL_REDUCTION_LDS) || defined(KERNEL_REDUCTION_EXTRA_BARRIER) || \
+      defined(KERNEL_REDUCTION_MULTI4) || defined(KERNEL_REDUCTION_MULTI8) || \
+      defined(KERNEL_REDUCTION_MULTI16)
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    if (row >= pc.n1) return;
+#if defined(KERNEL_REDUCTION_MULTI4) || defined(KERNEL_REDUCTION_MULTI8) || defined(KERNEL_REDUCTION_MULTI16)
+#if defined(KERNEL_REDUCTION_MULTI4)
+    const uint accum_count = 4u;
+#elif defined(KERNEL_REDUCTION_MULTI8)
+    const uint accum_count = 8u;
+#else
+    const uint accum_count = 16u;
+#endif
+    float lane_sum = 0.0;
+    for (uint repeat = 0; repeat < pc.aux; ++repeat) {
+        for (uint base = tid; base < pc.n0; base += gl_WorkGroupSize.x * accum_count) {
+            for (uint slot = 0u; slot < accum_count; ++slot) {
+                uint i = base + slot * gl_WorkGroupSize.x;
+                if (i < pc.n0) {
+                    uint j = (i + repeat) % pc.n0;
+                    lane_sum = fma(
+                        uintBitsToFloat(a[j]),
+                        uintBitsToFloat(b[row * pc.n0 + j]),
+                        lane_sum);
+                }
+            }
+        }
+    }
+    shared_f32[tid] = lane_sum;
+#else
+    shared_f32[tid] = geometry_value(row);
+#endif
+    barrier();
+    for (uint off = gl_WorkGroupSize.x >> 1u; off > 0u; off >>= 1u) {
+        if (tid < off) shared_f32[tid] += shared_f32[tid + off];
+        barrier();
+#if defined(KERNEL_REDUCTION_EXTRA_BARRIER)
+        barrier();
+#endif
+    }
+    if (tid == 0u)
+        out_words[pc.output_offset + row] = floatBitsToUint(
+            uintBitsToFloat(out_words[pc.output_offset + row]) + shared_f32[0]);
+
+#elif defined(KERNEL_MEMORY_COALESCED4)
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.n0) return;
+    float sum = 0.0;
+    for (uint iter = 0; iter < pc.n1; ++iter) {
+        uint base = (iter * pc.n0 * 4u + idx * 4u) & pc.aux;
+        sum = fma(uintBitsToFloat(a[base]), 1.000001, sum);
+        sum = fma(uintBitsToFloat(a[(base + 1u) & pc.aux]), 1.000002, sum);
+        sum = fma(uintBitsToFloat(a[(base + 2u) & pc.aux]), 1.000003, sum);
+        sum = fma(uintBitsToFloat(a[(base + 3u) & pc.aux]), 1.000004, sum);
+    }
+    uint oi = pc.output_offset + idx;
+    out_words[oi] = floatBitsToUint(uintBitsToFloat(out_words[oi]) + sum);
+
+#elif defined(KERNEL_MEMORY_STRIDED4)
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.n0) return;
+    float sum = 0.0;
+    for (uint iter = 0; iter < pc.n1; ++iter) {
+        uint address = (iter * pc.n0 * 4u + idx * 4u) & pc.aux;
+        sum = fma(uintBitsToFloat(a[address]), 1.000001, sum);
+    }
+    uint oi = pc.output_offset + idx;
+    out_words[oi] = floatBitsToUint(uintBitsToFloat(out_words[oi]) + sum);
+
+#elif defined(KERNEL_MEMORY_GATHER)
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.n0) return;
+    float sum = 0.0;
+    for (uint iter = 0; iter < pc.n1; ++iter)
+        sum = fma(uintBitsToFloat(a[b[iter * pc.n0 + idx] & pc.aux]), 1.000001, sum);
+    uint oi = pc.output_offset + idx;
+    out_words[oi] = floatBitsToUint(uintBitsToFloat(out_words[oi]) + sum);
+
+#elif defined(KERNEL_MEMORY_INTERLEAVE4)
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.n0) return;
+    float sum = 0.0;
+    uint state = idx * 747796405u + 2891336453u;
+    for (uint iter = 0; iter < pc.n1; ++iter) {
+        uint base = (iter * pc.n0 * 4u + idx * 4u) & pc.aux;
+        for (uint j = 0; j < 4; ++j) {
+            state = hash_u32(state + iter + j);
+            float bias = float(state & 255u) * 0.0000001;
+            sum = fma(uintBitsToFloat(a[(base + j) & pc.aux]) + bias,
+                      0.999999 + float(j) * 0.000001, sum);
+        }
+    }
+    uint oi = pc.output_offset + idx;
+    out_words[oi] = floatBitsToUint(uintBitsToFloat(out_words[oi]) + sum);
+
+#elif defined(KERNEL_DOT_Q8) || defined(KERNEL_DOT_Q4) || defined(KERNEL_DOT_Q6) || defined(KERNEL_DOT_SCALAR)
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.n0) return;
+    int sum = 0;
+    for (uint iter = 0; iter < pc.n1; ++iter) {
+        uint base = ((iter * pc.n0 + idx) * 16u) & pc.aux;
+        for (uint g = 0; g < 16; ++g) {
+            uint w = a[(base + g) & pc.aux], x = b[(base + g) & pc.aux];
+#if defined(KERNEL_DOT_Q8)
+            sum += dot_s8_s8(w, x);
+#elif defined(KERNEL_DOT_Q4)
+            sum += dot_u8_s8(w, x);
+#elif defined(KERNEL_DOT_Q6)
+            sum += dot_u8_s8(w, x) - 32 * dot_u8_s8(0x01010101u, x);
+#else
+            sum += scalar_q4(w, x);
+#endif
+        }
+    }
+    out_words[pc.output_offset + idx] += uint(sum);
+
+#elif defined(KERNEL_VOPD_INDEPENDENT) || defined(KERNEL_VOPD_DEPENDENT) || defined(KERNEL_VOPD_MIXED) || defined(KERNEL_VOPD_DEQUANT)
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.n0) return;
+#if defined(KERNEL_VOPD_INDEPENDENT)
+    const uint mode = 0u;
+#elif defined(KERNEL_VOPD_DEPENDENT)
+    const uint mode = 1u;
+#elif defined(KERNEL_VOPD_MIXED)
+    const uint mode = 2u;
+#else
+    const uint mode = 3u;
+#endif
+    uint oi = pc.output_offset + idx;
+    out_words[oi] = floatBitsToUint(uintBitsToFloat(out_words[oi]) + vopd_value(idx, mode));
+
+#elif defined(KERNEL_SAMPLER_TOPK)
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    if (row >= pc.n1 || pc.aux == 0u || pc.aux > 8u) return;
+    if (tid < pc.aux) shared_u32[256u + tid] = 0xffffffffu;
+    barrier();
+    for (uint pass = 0u; pass < pc.aux; ++pass) {
+        float best = -3.402823466e38;
+        uint best_i = 0xffffffffu;
+        for (uint col = tid; col < pc.n0; col += gl_WorkGroupSize.x) {
+            bool already = false;
+            for (uint prior = 0u; prior < pass; ++prior)
+                if (shared_u32[256u + prior] == col) already = true;
+            float candidate = uintBitsToFloat(a[row * pc.n0 + col]);
+            if (!already && (candidate > best || (candidate == best && col < best_i))) {
+                best = candidate;
+                best_i = col;
+            }
+        }
+        shared_f32[tid] = best;
+        shared_u32[tid] = best_i;
+        barrier();
+        for (uint off = gl_WorkGroupSize.x >> 1u; off > 0u; off >>= 1u) {
+            if (tid < off) {
+                float other = shared_f32[tid + off];
+                uint other_i = shared_u32[tid + off];
+                if (other > shared_f32[tid] ||
+                    (other == shared_f32[tid] && other_i < shared_u32[tid])) {
+                    shared_f32[tid] = other;
+                    shared_u32[tid] = other_i;
+                }
+            }
+            barrier();
+        }
+        if (tid == 0u) shared_u32[256u + pass] = shared_u32[0];
+        barrier();
+    }
+    if (tid < pc.aux)
+        out_words[pc.output_offset + row * pc.aux + tid] +=
+            shared_u32[256u + tid] + 1u;
+
+#elif defined(KERNEL_SAMPLER_ARGMAX)
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    if (row >= pc.n1) return;
+    float best = -3.402823466e38;
+    uint best_i = 0xffffffffu;
+    for (uint col = tid; col < pc.n0; col += gl_WorkGroupSize.x) {
+        float v = uintBitsToFloat(a[row * pc.n0 + col]);
+        if (v > best || (v == best && col < best_i)) { best = v; best_i = col; }
+    }
+    for (uint off = 16u; off > 0u; off >>= 1u) {
+        float ov = subgroupShuffleDown(best, off);
+        uint oi = subgroupShuffleDown(best_i, off);
+        if (gl_SubgroupInvocationID < off && (ov > best || (ov == best && oi < best_i))) {
+            best = ov; best_i = oi;
+        }
+    }
+    if (subgroupElect()) { shared_f32[gl_SubgroupID] = best; shared_u32[gl_SubgroupID] = best_i; }
+    barrier();
+    if (gl_SubgroupID == 0u) {
+        best = gl_SubgroupInvocationID < gl_NumSubgroups ? shared_f32[gl_SubgroupInvocationID] : -3.402823466e38;
+        best_i = gl_SubgroupInvocationID < gl_NumSubgroups ? shared_u32[gl_SubgroupInvocationID] : 0xffffffffu;
+        for (uint off = 16u; off > 0u; off >>= 1u) {
+            float ov = subgroupShuffleDown(best, off);
+            uint oi = subgroupShuffleDown(best_i, off);
+            if (gl_SubgroupInvocationID < off && (ov > best || (ov == best && oi < best_i))) {
+                best = ov; best_i = oi;
+            }
+        }
+        if (subgroupElect()) out_words[pc.output_offset + row] += best_i + 1u;
+    }
+
+#elif defined(KERNEL_TWO_STAGE_PARTIAL)
+    uint gid = gl_WorkGroupID.x;
+    uint row = gid / pc.aux, split = gid - row * pc.aux;
+    if (row >= pc.n1) return;
+    uint begin = (pc.n0 * split) / pc.aux;
+    uint end = (pc.n0 * (split + 1u)) / pc.aux;
+    float sum = 0.0;
+    for (uint i = begin + gl_LocalInvocationID.x; i < end; i += gl_WorkGroupSize.x)
+        sum = fma(uintBitsToFloat(a[i]), uintBitsToFloat(b[row * pc.n0 + i]), sum);
+    float total = wave_then_workgroup_sum(sum);
+    if (gl_LocalInvocationID.x == 0u) {
+        uint oi = pc.output_offset + row * pc.aux + split;
+        out_words[oi] = floatBitsToUint(uintBitsToFloat(out_words[oi]) + total);
+    }
+
+#elif defined(KERNEL_TWO_STAGE_FINAL)
+    uint row = gl_WorkGroupID.x;
+    if (row >= pc.n1) return;
+    float sum = 0.0;
+    for (uint i = gl_LocalInvocationID.x; i < pc.aux; i += gl_WorkGroupSize.x)
+        sum += uintBitsToFloat(out_words[pc.output_offset + row * pc.aux + i]);
+    float total = wave_then_workgroup_sum(sum);
+    if (gl_LocalInvocationID.x == 0u) {
+        uint oi = pc.output_offset + pc.n1 * pc.aux + row;
+        out_words[oi] = floatBitsToUint(uintBitsToFloat(out_words[oi]) + total);
+    }
+
+#elif defined(KERNEL_Q8_1_QUANTIZE_Q4) || defined(KERNEL_Q8_1_QUANTIZE_Q6) || \
+      defined(KERNEL_Q8_1_QUANTIZE_DENSE)
+    uint gid = gl_WorkGroupID.x;
+    uint blocks = (pc.n0 + 31u) >> 5u;
+    uint row = gid / blocks;
+    uint block = gid - row * blocks;
+    uint lane = gl_LocalInvocationID.x;
+    if (row >= pc.n1 || lane >= 32u) return;
+    uint element = row * pc.n0 + block * 32u + lane;
+    float value = block * 32u + lane < pc.n0 ? load_bf16(element) : 0.0;
+    float amax = subgroupMax(abs(value));
+    float sum = subgroupAdd(value);
+    float d = amax == 0.0 ? 0.0 : amax * (1.0 / 127.0);
+    int q = d == 0.0 ? 0 : int(round(value / d));
+    q = clamp(q, -128, 127);
+    uint base = pc.output_offset + gid * 9u;
+    if (lane < 9u) out_words[base + lane] = 0u;
+    memoryBarrierBuffer();
+    barrier();
+    if (lane == 0u) out_words[base] = packHalf2x16(vec2(d, sum));
+    atomicOr(out_words[base + 1u + (lane >> 2u)],
+             (uint(q) & 255u) << ((lane & 3u) * 8u));
+
+#elif defined(KERNEL_Q4_SELECTED_DUAL)
+    uint pair = gl_WorkGroupID.x, tid = gl_LocalInvocationID.x;
+    uint groups = pc.n0 >> 2, row0 = pair * 2u, row1 = row0 + 1u;
+    int acc0 = 0, acc1 = 0;
+    for (uint g = tid; g < groups; g += gl_WorkGroupSize.x) {
+        uint x0 = q8_word(pc.output_offset, pc.aux, (row0 / 1024u) & 3u, pc.n0 >> 5u, g);
+        uint x1 = q8_word(pc.output_offset, pc.aux, (row1 / 1024u) & 3u, pc.n0 >> 5u, g);
+        int sx0 = dot_u8_s8(0x01010101u, x0);
+        int sx1 = dot_u8_s8(0x01010101u, x1);
+        if (row0 < pc.n1) acc0 += dot_u8_s8(a[row0 * groups + g], x0) - 8 * sx0;
+        if (row1 < pc.n1) acc1 += dot_u8_s8(a[row1 * groups + g], x1) - 8 * sx1;
+    }
+    acc0 = workgroup_sum_i32(acc0); acc1 = workgroup_sum_i32(acc1);
+    if (tid == 0u) {
+        if (row0 < pc.n1) out_words[pc.output_offset + row0] += uint(acc0);
+        if (row1 < pc.n1) out_words[pc.output_offset + row1] += uint(acc1);
+    }
+
+#elif defined(KERNEL_Q6_X8)
+    uint tile = gl_WorkGroupID.x, tid = gl_LocalInvocationID.x;
+    uint groups = pc.n0 >> 2, row0 = tile * 8u;
+    int acc[8]; for (uint r = 0; r < 8; ++r) acc[r] = 0;
+    for (uint g = tid; g < groups; g += gl_WorkGroupSize.x) {
+        uint x = q8_word(pc.output_offset, pc.aux, row0 / 2048u, pc.n0 >> 5u, g);
+        int sx32 = 32 * dot_u8_s8(0x01010101u, x);
+        for (uint r = 0; r < 8; ++r)
+            if (row0 + r < pc.n1) acc[r] += dot_u8_s8(a[(row0 + r) * groups + g], x) - sx32;
+    }
+    for (uint r = 0; r < 8; ++r) acc[r] = workgroup_sum_i32(acc[r]);
+    if (tid == 0u) for (uint r = 0; r < 8; ++r)
+        if (row0 + r < pc.n1) out_words[pc.output_offset + row0 + r] += uint(acc[r]);
+
+#elif defined(KERNEL_DENSE_Q8) || defined(KERNEL_DENSE_Q8_SINGLE)
+    uint tile = gl_WorkGroupID.x, tid = gl_LocalInvocationID.x;
+    uint groups = pc.n0 >> 2;
+#if defined(KERNEL_DENSE_Q8_SINGLE)
+    const uint tile_width = 1u;
+#else
+    const uint tile_width = 4u;
+#endif
+    uint row0 = tile * tile_width;
+    int acc[4]; for (uint r = 0; r < 4; ++r) acc[r] = 0;
+    for (uint g = tid; g < groups; g += gl_WorkGroupSize.x) {
+        uint x = q8_word(pc.output_offset, pc.aux, row0 / 2048u, pc.n0 >> 5u, g);
+        for (uint r = 0; r < tile_width; ++r)
+            if (row0 + r < pc.n1) acc[r] += dot_s8_s8(a[(row0 + r) * groups + g], x);
+    }
+    for (uint r = 0; r < tile_width; ++r) acc[r] = workgroup_sum_i32(acc[r]);
+    if (tid == 0u) for (uint r = 0; r < tile_width; ++r)
+        if (row0 + r < pc.n1) out_words[pc.output_offset + row0 + r] += uint(acc[r]);
+#endif
+}

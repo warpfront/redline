@@ -7,10 +7,11 @@
  *   retained PM4 IB, replays it, and HIP reads the counter back. It must equal N
  *   iff every dispatch executed against the engine-owned buffer.
  *
- * Build (hipcc links HIP; pass the redline static lib):
- *   hipcc gpu_smoke.c -I <include> <libredline_dispatch.a> -lpthread -ldl -lm -o gpu_smoke
+ * Build (hipcc links HIP; load Redline from <libdir>):
+ *   hipcc -x hip gpu_smoke.c -I <include> -L <libdir> -lredline_dispatch \
+ *     -Wl,-rpath,<libdir> -lpthread -ldl -lm -o gpu_smoke
  * Run (one device; ROCR_VISIBLE_DEVICES filters HIP too, so both target it):
- *   ROCR_VISIBLE_DEVICES=3 ./gpu_smoke 256 bench/floor_kernel_ctr.co
+ *   ROCR_VISIBLE_DEVICES=3 ./gpu_smoke 256 counter.co counter.radiowave.json
  */
 #include "redline_dispatch.h"
 #include <hip/hip_runtime.h>
@@ -31,6 +32,7 @@
 int main(int argc, char **argv) {
     int N = argc > 1 ? atoi(argv[1]) : 256;
     const char *co = argc > 2 ? argv[2] : "bench/floor_kernel_ctr.co";
+    const char *radiowave_manifest = argc > 3 ? argv[3] : NULL;
 
     /* read the code object bytes */
     FILE *f = fopen(co, "rb");
@@ -51,8 +53,27 @@ int main(int argc, char **argv) {
     RlGpu *gpu = rl_gpu_new(0);
     if (!gpu) { fprintf(stderr, "rl_gpu_new failed\n"); return 1; }
     RlModule *mod = NULL;
-    if (rl_gpu_load_module(gpu, code, (size_t)len, &mod) != RL_OK) {
-        fprintf(stderr, "rl_gpu_load_module failed\n");
+    int load_rc = RL_OK;
+    if (radiowave_manifest) {
+        FILE *mf = fopen(radiowave_manifest, "rb");
+        if (!mf) { perror("open Radiowave manifest"); return 1; }
+        fseek(mf, 0, SEEK_END);
+        long manifest_len = ftell(mf);
+        fseek(mf, 0, SEEK_SET);
+        unsigned char *manifest = (unsigned char *)malloc(manifest_len);
+        if (fread(manifest, 1, manifest_len, mf) != (size_t)manifest_len) {
+            fprintf(stderr, "read Radiowave manifest\n");
+            return 1;
+        }
+        fclose(mf);
+        load_rc = rl_gpu_load_module_radiowave(
+            gpu, code, (size_t)len, manifest, (size_t)manifest_len, &mod);
+        free(manifest);
+    } else {
+        load_rc = rl_gpu_load_module(gpu, code, (size_t)len, &mod);
+    }
+    if (load_rc != RL_OK) {
+        fprintf(stderr, "module load failed: %d\n", load_rc);
         return 1;
     }
     long ksz = rl_module_kernarg_size(mod, "ctr_k.kd");
@@ -71,7 +92,10 @@ int main(int argc, char **argv) {
             fprintf(stderr, "dispatch %d failed\n", i);
             return 1;
         }
-        if (i + 1 < N) rl_pm4_wait_idle(b); /* serialize the atomics */
+        if (i + 1 < N && rl_pm4_wait_rmw(b, mod, "ctr_k.kd") != RL_OK) {
+            fprintf(stderr, "dependency %d failed\n", i);
+            return 1;
+        }
     }
     RlPm4Ib *ib = NULL;
     if (rl_pm4_finalize(gpu, b, &ib) != RL_OK) { fprintf(stderr, "finalize failed\n"); return 1; }
@@ -81,7 +105,9 @@ int main(int argc, char **argv) {
     unsigned int h = 0;
     HCHECK(hipMemcpy(&h, d_counter, sizeof(unsigned int), hipMemcpyDeviceToHost));
     int pass = (h == (unsigned)N);
-    printf("real-GPU C-ABI gate: counter = %u / %d  [%s]\n", h, N, pass ? "PASS" : "FAIL");
+    printf("real-GPU C-ABI gate: counter = %u / %d certified=%s [%s]\n",
+           h, N, rl_module_radiowave_certified(mod) ? "yes" : "no",
+           pass ? "PASS" : "FAIL");
 
     rl_pm4_ib_free(ib);
     rl_module_free(mod);

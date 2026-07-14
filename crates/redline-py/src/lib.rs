@@ -19,9 +19,11 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use radiowave::{CodeObjectCertification, MutableReadCache};
 use redline_core::aql::{
-    Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargBuffer, KernargPool,
-    LaunchGeometry, Runtime, SingleQueuePm4Ib, load_symbols,
+    DeviceBuffer as HsaDeviceBuffer, DevicePool, Executable, Gfx12Pm4CommandBuffer, GpuDevice,
+    GpuSelector, KernargBuffer, KernargPool, LaunchGeometry, Runtime, SingleQueuePm4Ib,
+    load_symbols,
 };
 use redline_core::hipgraph::{Graph, GraphExec, Tuning};
 use redline_core::mock::MockBackend;
@@ -170,6 +172,7 @@ impl PyGraphExec {
 struct Gpu {
     device: GpuDevice,
     pool: KernargPool,
+    device_pool: DevicePool,
     _runtime: Runtime,
 }
 
@@ -177,6 +180,7 @@ struct Gpu {
 #[pyclass(unsendable)]
 struct Module {
     executable: Executable,
+    certification: Option<CodeObjectCertification>,
 }
 
 /// A GPU-accessible buffer (for a demo counter / any device data). Its
@@ -184,6 +188,12 @@ struct Module {
 #[pyclass(unsendable)]
 struct Buffer {
     buf: KernargBuffer,
+}
+
+/// Coarse-grained GPU-local storage with explicit host copies.
+#[pyclass(unsendable)]
+struct DeviceBuffer {
+    buf: HsaDeviceBuffer,
 }
 
 /// A finalized retained PM4 indirect buffer; `replay()` submits + waits.
@@ -202,24 +212,34 @@ impl Gpu {
     #[new]
     fn new(ordinal: i32) -> PyResult<Self> {
         let runtime = Runtime::initialize(load_symbols().map_err(to_py)?).map_err(to_py)?;
-        let ord =
-            usize::try_from(ordinal).map_err(|_| PyValueError::new_err("negative device ordinal"))?;
+        let ord = usize::try_from(ordinal)
+            .map_err(|_| PyValueError::new_err("negative device ordinal"))?;
         let device = runtime
             .select_gpu(GpuSelector::Ordinal(ord))
             .map_err(to_py)?;
         let pool = KernargPool::discover(&device).map_err(to_py)?;
+        let device_pool = DevicePool::discover(&device).map_err(to_py)?;
         Ok(Self {
             device,
             pool,
+            device_pool,
             _runtime: runtime,
         })
     }
 
-    /// Load a code object (HSACO bytes).
-    fn load_module(&self, code: &[u8]) -> PyResult<Module> {
+    /// Load a code object. Supplying a Radiowave manifest verifies the exact
+    /// bytes and enables per-consumer VMEM-only dependency boundaries. Omitting
+    /// it retains the fail-closed generic same-agent boundary.
+    #[pyo3(signature = (code, manifest=None))]
+    fn load_module(&self, code: &[u8], manifest: Option<&str>) -> PyResult<Module> {
+        let certification = manifest
+            .map(|encoded| CodeObjectCertification::from_json(code, encoded))
+            .transpose()
+            .map_err(to_py)?;
         let bytes: std::sync::Arc<[u8]> = code.into();
         Ok(Module {
             executable: Executable::load(&self.device, bytes).map_err(to_py)?,
+            certification,
         })
     }
 
@@ -230,24 +250,34 @@ impl Gpu {
         Ok(Buffer { buf })
     }
 
+    /// Allocate zeroed coarse-grained memory in the GPU-local pool.
+    fn alloc_device(&self, nbytes: usize) -> PyResult<DeviceBuffer> {
+        let mut buf = self.device_pool.allocate(nbytes).map_err(to_py)?;
+        let zeros = vec![0_u8; nbytes];
+        // SAFETY: the newly allocated buffer has no GPU users.
+        unsafe { buf.copy_from_host(&zeros) }.map_err(to_py)?;
+        Ok(DeviceBuffer { buf })
+    }
+
     /// Build a retained PM4 IB from `dispatches` — a list of
     /// `(symbol, grid, block, dynamic_group_bytes, kernarg_bytes, serialize)`
-    /// tuples (grid/block in workitems). `serialize` inserts a compute-idle wait.
+    /// tuples (grid/block in workitems). `serialize` inserts the safe RMW
+    /// boundary selected from the verified next consumer.
     fn build(&self, module: &Module, dispatches: Vec<DispatchSpec>) -> PyResult<Pm4Ib> {
-        let mut cmd = Gfx12Pm4CommandBuffer::new();
+        // Match the certified Hipfire retained-tape policy: preserve SH-register
+        // state within the IB and omit writes whose values have not changed.
+        let mut cmd = Gfx12Pm4CommandBuffer::new_stateful();
         let mut kernargs = Vec::with_capacity(dispatches.len());
-        let count = dispatches.len();
         for (i, (symbol, grid, block, dyn_group, karg_bytes, serialize)) in
-            dispatches.into_iter().enumerate()
+            dispatches.iter().enumerate()
         {
-            let kernel = module.executable.kernel(&symbol).map_err(to_py)?;
+            let kernel = module.executable.kernel(symbol).map_err(to_py)?;
             let block16 = [
                 u16::try_from(block.0).map_err(|_| PyValueError::new_err("block.x > 65535"))?,
                 u16::try_from(block.1).map_err(|_| PyValueError::new_err("block.y > 65535"))?,
                 u16::try_from(block.2).map_err(|_| PyValueError::new_err("block.z > 65535"))?,
             ];
-            let geometry =
-                LaunchGeometry::new([grid.0, grid.1, grid.2], block16).map_err(to_py)?;
+            let geometry = LaunchGeometry::new([grid.0, grid.1, grid.2], block16).map_err(to_py)?;
             let mut karg = self.pool.allocate_for(kernel.metadata()).map_err(to_py)?;
             {
                 let dst = karg.as_mut_bytes();
@@ -255,16 +285,24 @@ impl Gpu {
                 let n = karg_bytes.len().min(dst.len());
                 dst[..n].copy_from_slice(&karg_bytes[..n]);
             }
-            cmd.dispatch(&kernel, geometry, dyn_group, karg.address())
+            cmd.dispatch(&kernel, geometry, *dyn_group, karg.address())
                 .map_err(to_py)?;
             kernargs.push(karg);
-            if serialize && i + 1 < count {
-                // Dependency boundary: wait for the writer to retire, then
-                // invalidate scalar/vector read caches so the next dispatch sees
-                // its L2-committed output (required for a non-atomic RMW chain;
-                // still the minimal gfx12 fence — L2/MALL stays coherent).
-                cmd.wait_compute_idle();
-                cmd.acquire_inter_node_gfx12();
+            if *serialize && i + 1 < dispatches.len() {
+                let consumer = &dispatches[i + 1].0;
+                match module
+                    .certification
+                    .as_ref()
+                    .map_or(MutableReadCache::ScalarOrUnknown, |certification| {
+                        certification.mutable_read_cache(consumer)
+                    }) {
+                    MutableReadCache::VmemOnly => {
+                        cmd.dependency_rmw_hip_llvm_vmem_gfx12();
+                    }
+                    MutableReadCache::ScalarOrUnknown => {
+                        cmd.dependency_rmw_same_agent_gfx12();
+                    }
+                }
             }
         }
         let ib = SingleQueuePm4Ib::create(&self.device, &self.pool, &cmd).map_err(to_py)?;
@@ -280,7 +318,49 @@ impl Gpu {
 impl Module {
     /// The kernarg segment size (bytes) to supply for `symbol`.
     fn kernarg_size(&self, symbol: &str) -> PyResult<u32> {
-        Ok(self.executable.kernel(symbol).map_err(to_py)?.metadata().kernarg_segment_size)
+        Ok(self
+            .executable
+            .kernel(symbol)
+            .map_err(to_py)?
+            .metadata()
+            .kernarg_segment_size)
+    }
+
+    /// True when this module's exact bytes were verified against a Radiowave
+    /// manifest containing code-object inspection evidence.
+    #[getter]
+    fn radiowave_certified(&self) -> bool {
+        self.certification.is_some()
+    }
+
+    /// `"vmem_only"` only for a verified kernel; every other case is
+    /// `"scalar_or_unknown"` and uses the fail-closed boundary.
+    fn mutable_read_cache(&self, symbol: &str) -> &'static str {
+        match self
+            .certification
+            .as_ref()
+            .map_or(MutableReadCache::ScalarOrUnknown, |certification| {
+                certification.mutable_read_cache(symbol)
+            }) {
+            MutableReadCache::VmemOnly => "vmem_only",
+            MutableReadCache::ScalarOrUnknown => "scalar_or_unknown",
+        }
+    }
+
+    /// Selected scheduler profile recorded by the verified manifest.
+    #[getter]
+    fn scheduler_profile(&self) -> Option<&str> {
+        self.certification
+            .as_ref()
+            .map(|certification| certification.manifest().scheduler_profile.as_str())
+    }
+
+    /// Selected wavefront width recorded by the verified manifest.
+    #[getter]
+    fn wavefront_size(&self) -> Option<u32> {
+        self.certification
+            .as_ref()
+            .map(|certification| certification.manifest().wavefront.width())
     }
 }
 
@@ -303,6 +383,30 @@ impl Buffer {
 }
 
 #[pymethods]
+impl DeviceBuffer {
+    /// The device address (put its little-endian u64 into a kernarg).
+    fn address(&self) -> u64 {
+        self.buf.address() as usize as u64
+    }
+
+    /// Copy the complete allocation to the host and decode little-endian u32s.
+    fn read_u32s(&self) -> PyResult<Vec<u32>> {
+        if self.buf.len() % 4 != 0 {
+            return Err(PyValueError::new_err(
+                "device buffer length is not a multiple of four",
+            ));
+        }
+        let mut bytes = vec![0_u8; self.buf.len()];
+        // SAFETY: callers use this after retained replay completion.
+        unsafe { self.buf.copy_to_host(&mut bytes) }.map_err(to_py)?;
+        Ok(bytes
+            .chunks_exact(4)
+            .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+            .collect())
+    }
+}
+
+#[pymethods]
 impl Pm4Ib {
     /// Submit the retained IB and wait for completion.
     fn replay(&mut self) -> PyResult<()> {
@@ -319,6 +423,7 @@ fn redline_dispatch(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Gpu>()?;
     m.add_class::<Module>()?;
     m.add_class::<Buffer>()?;
+    m.add_class::<DeviceBuffer>()?;
     m.add_class::<Pm4Ib>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())

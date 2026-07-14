@@ -55,6 +55,8 @@ pub struct SingleQueuePm4Ib {
     completion: CompletionSignal,
     indirect: KernargBuffer,
     batch: Vec<PacketImage>,
+    timestamps: Option<KernargBuffer>,
+    timestamp_frequency_hz: Option<u64>,
     usable: bool,
 }
 
@@ -64,9 +66,39 @@ impl SingleQueuePm4Ib {
         pool: &KernargPool,
         commands: &Gfx12Pm4CommandBuffer,
     ) -> Result<Self, ReplayError> {
+        Self::create_inner(device, pool, commands, false)
+    }
+
+    /// Create a retained IB whose one vendor-AQL completion signal carries
+    /// ROCr dispatch timestamps for the complete indirect buffer execution.
+    pub fn create_profiled(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx12Pm4CommandBuffer,
+    ) -> Result<Self, ReplayError> {
+        Self::create_inner(device, pool, commands, true)
+    }
+
+    fn create_inner(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx12Pm4CommandBuffer,
+        profiling: bool,
+    ) -> Result<Self, ReplayError> {
         if commands.is_empty() {
             return Err(ReplayError::EmptyGraph);
         }
+        let mut timestamps = if profiling {
+            Some(pool.allocate_executable_bytes(16)?)
+        } else {
+            None
+        };
+        let timed_commands = timestamps.as_mut().map(|buffer| {
+            buffer.as_mut_bytes().fill(0);
+            let start = buffer.address() as usize as u64;
+            commands.with_gpu_timestamps(start, start + 8)
+        });
+        let commands = timed_commands.as_ref().unwrap_or(commands);
         let bytes = commands.as_bytes();
         let mut indirect = pool.allocate_executable_bytes(bytes.len())?;
         indirect.write_exact(&bytes)?;
@@ -78,11 +110,16 @@ impl SingleQueuePm4Ib {
         )?;
         let queue_size = *device.queue_size_range().start();
         let queues = QueueSet::create(device, 1, queue_size)?;
+        let timestamp_frequency_hz = profiling
+            .then(|| device.gpu_timestamp_frequency_hz())
+            .transpose()?;
         Ok(Self {
             queues,
             completion,
             indirect,
             batch: vec![packet],
+            timestamps,
+            timestamp_frequency_hz,
             usable: true,
         })
     }
@@ -106,6 +143,38 @@ impl SingleQueuePm4Ib {
     /// must remain live and GPU-accessible until this returns `Ok`. After an
     /// error they must remain live through this object's destruction.
     pub unsafe fn replay_and_wait(&mut self) -> Result<(), ReplayError> {
+        // SAFETY: forwarded from this method's caller.
+        unsafe { self.replay_and_wait_inner()? };
+        Ok(())
+    }
+
+    /// Replay once and return ROCr's GPU timestamp span around the vendor AQL
+    /// packet. The packet contains exactly one PM4 indirect buffer, so this is
+    /// the retained graph's GPU execution interval rather than a host clock.
+    pub unsafe fn replay_and_wait_profiled(&mut self) -> Result<GpuMultiQueueTiming, ReplayError> {
+        let frequency_hz = self
+            .timestamp_frequency_hz
+            .ok_or(ReplayError::ProfilingUnavailable)?;
+        // SAFETY: forwarded from this method's caller.
+        unsafe { self.replay_and_wait_inner()? };
+        let bytes = self
+            .timestamps
+            .as_mut()
+            .ok_or(ReplayError::ProfilingUnavailable)?
+            .as_mut_bytes();
+        let start = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+        let end = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        if start == 0 || end < start {
+            return Err(ReplayError::InvalidGpuTimestamp { start, end });
+        }
+        Ok(GpuMultiQueueTiming {
+            first_start: start,
+            last_end: end,
+            frequency_hz,
+        })
+    }
+
+    unsafe fn replay_and_wait_inner(&mut self) -> Result<(), ReplayError> {
         if !self.usable {
             return Err(ReplayError::GraphInactive);
         }
@@ -2259,6 +2328,10 @@ pub enum ReplayError {
     },
     ProfilingUnavailable,
     ProfilingDoesNotCoverBatch,
+    InvalidGpuTimestamp {
+        start: u64,
+        end: u64,
+    },
 }
 
 impl From<RuntimeError> for ReplayError {
@@ -2355,6 +2428,10 @@ impl fmt::Display for ReplayError {
                 write!(f, "derived packet policy shape mismatch: {detail}")
             }
             Self::ProfilingUnavailable => write!(f, "AQL batch profiling is not enabled"),
+            Self::InvalidGpuTimestamp { start, end } => write!(
+                f,
+                "retained PM4 GPU timestamp bracket is invalid: start={start}, end={end}"
+            ),
             Self::ProfilingDoesNotCoverBatch => write!(
                 f,
                 "last dispatches are barrier-free, so first/last queue timestamps do not cover the batch"

@@ -1,0 +1,30 @@
+[hip] rows=1 vocab=32768 wg=64 median=83.1323 us correctness=pass
+[hip] rows=4 vocab=32768 wg=64 median=83.6482 us correctness=pass
+[hip] rows=8 vocab=32768 wg=64 median=83.8004 us correctness=pass
+[hip] rows=1 vocab=32768 wg=256 median=28.1682 us correctness=fail
+[hip] rows=4 vocab=32768 wg=256 median=27.9441 us correctness=pass
+[hip] rows=8 vocab=32768 wg=256 median=27.9841 us correctness=fail
+[hip] rows=1 vocab=32768 wg=64 median=414.782 us correctness=pass
+[hip] rows=4 vocab=32768 wg=64 median=414.418 us correctness=pass
+[hip] rows=8 vocab=32768 wg=64 median=416.494 us correctness=pass
+[hip] rows=1 vocab=32768 wg=256 median=117.656 us correctness=pass
+[hip] rows=4 vocab=32768 wg=256 median=119.764 us correctness=pass
+[hip] rows=8 vocab=32768 wg=256 median=117.424 us correctness=pass
+Traceback (most recent call last):
+  File "/tmp/hipEngine-f2c/benchmarks/micro/runners/sampler_argmax.py", line 1115, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/tmp/hipEngine-f2c/benchmarks/micro/runners/sampler_argmax.py", line 1102, in main
+    result = _run_hip(args, rows_list, workgroups, top_k_list)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/hipEngine-f2c/benchmarks/micro/runners/sampler_argmax.py", line 641, in _run_hip
+    return _normalize_result(
+           ^^^^^^^^^^^^^^^^^^
+  File "/tmp/hipEngine-f2c/benchmarks/micro/runners/sampler_argmax.py", line 461, in _normalize_result
+    contract = timing_contract.make_timed_row_contract(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/hipEngine-f2c/benchmarks/micro/timing_contract.py", line 220, in make_timed_row_contract
+    validate_timed_row(contract, expected_repetitions=repetitions)
+  File "/tmp/hipEngine-f2c/benchmarks/micro/timing_contract.py", line 257, in validate_timed_row
+    raise ValueError("timed dependency contract is not validated")
+ValueError: timed dependency contract is not validated

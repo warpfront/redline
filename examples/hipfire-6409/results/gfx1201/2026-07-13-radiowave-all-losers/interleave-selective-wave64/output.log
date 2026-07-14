@@ -1,0 +1,36 @@
+initializing Hipfire HIP bridge
+initializing Redline retained-PM4 backend
+initializing RADV Vulkan backend
+[1/6] serial_latency/memory-waitcnt/variant=interleave4,n=4096,body=16;hip-wave=64 (64 operations; order redline -> vulkan -> hipgraph -> hip)
+  redline      6.9406 us/op correctness=true mismatches=0
+  vulkan       6.2475 us/op correctness=true mismatches=0
+  hipgraph     8.3819 us/op correctness=true mismatches=0
+  hip          8.6275 us/op correctness=true mismatches=0
+[2/6] serial_latency/memory-waitcnt/variant=interleave4,n=32768,body=16;hip-wave=64 (32 operations; order vulkan -> hipgraph -> hip -> redline)
+  vulkan      10.1713 us/op correctness=true mismatches=0
+  hipgraph    48.6912 us/op correctness=true mismatches=0
+  hip         48.7000 us/op correctness=true mismatches=0
+  redline     12.7375 us/op correctness=true mismatches=0
+[3/6] independent_throughput/memory-waitcnt/variant=interleave4,n=4096,body=16;hip-wave=64 (64 operations; order hipgraph -> hip -> redline -> vulkan)
+  hipgraph    15.9419 us/op correctness=true mismatches=0
+  hip         15.3362 us/op correctness=true mismatches=0
+  redline      1.1062 us/op correctness=true mismatches=0
+  vulkan       1.6275 us/op correctness=true mismatches=0
+[4/6] independent_throughput/memory-waitcnt/variant=interleave4,n=32768,body=16;hip-wave=64 (32 operations; order hip -> redline -> vulkan -> hipgraph)
+  hip         62.0687 us/op correctness=true mismatches=0
+  redline      7.6612 us/op correctness=true mismatches=0
+  vulkan       6.5625 us/op correctness=true mismatches=0
+  hipgraph    50.9562 us/op correctness=true mismatches=0
+[5/6] single_kernel_aggressive/memory-waitcnt/variant=interleave4,n=4096,body=16;hip-wave=64 (1 operations; order redline -> vulkan -> hipgraph -> hip)
+  redline      7.6800 us/op correctness=true mismatches=0
+  vulkan      10.0000 us/op correctness=true mismatches=0
+  hipgraph    17.9200 us/op correctness=true mismatches=0
+  hip         11.7200 us/op correctness=true mismatches=0
+[6/6] single_kernel_aggressive/memory-waitcnt/variant=interleave4,n=32768,body=16;hip-wave=64 (1 operations; order vulkan -> hipgraph -> hip -> redline)
+  vulkan      11.1600 us/op correctness=true mismatches=0
+  hipgraph    26.7200 us/op correctness=true mismatches=0
+  hip         19.8000 us/op correctness=true mismatches=0
+  redline     10.2400 us/op correctness=true mismatches=0
+wrote results/gfx1201/2026-07-13-radiowave-all-losers/interleave-selective-wave64/results.json
+wrote results/gfx1201/2026-07-13-radiowave-all-losers/interleave-selective-wave64/REPORT.md
+Redline wins 3/6 (50.00%). Four-way placements: 1st 3, 2nd 3, 3rd 0, 4th 0.

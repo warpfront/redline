@@ -1,0 +1,2062 @@
+{
+  "schema_version": 2,
+  "kind": "hipfire-6409-four-way",
+  "generated_unix_seconds": 1783934770,
+  "methodology": {
+    "code_identity": "For every row, HIP, HipGraph, and Redline load exactly the same hipcc code object selected by the recorded wave policy. Vulkan runs matched GLSL algorithms compiled for RADV.",
+    "correctness": "Every timed sequence is reset before timing and checked against a CPU oracle after its final sample. Only four-way correctness-passing rows are ranked.",
+    "redline_dependency": "Required RMW edges use wait_compute_idle plus the RADV-global gfx12 acquire policy. Independent single-stage and aggressive single-kernel tapes contain no dependency fence; their system ownership acquire occurs outside timing.",
+    "timers": {
+      "hip": "HIP device events",
+      "hipgraph": "HIP device events around graph replay",
+      "redline": "GPU-written PM4 COPY_DATA/RELEASE_MEM timestamps",
+      "vulkan": "Vulkan timestamp queries"
+    },
+    "timing_modes": {
+      "independent_throughput": "Disjoint output slices with no inter-operation dependency; HIP and Vulkan use up to four queues/streams while Redline uses one retained IB. Single-stage Redline rows omit dependency fences from the timed IB.",
+      "serial_latency": "One true output RMW chain. Every operation is separated by the backend's required compute-write to compute-read/write dependency.",
+      "single_kernel_aggressive": "Exactly one dispatch and one output operation. Redline's timed retained IB contains no entry acquire or dependency fence; the HIP-to-PM4 ownership acquire is replayed and waited outside the GPU timestamp window. Two-stage rows are excluded."
+    },
+    "vulkan_memory": "Device-local buffers with staging transfers outside the timing window.",
+    "wave_policy": {
+      "all_wave32": "Every HIP-family row selects the wave32 code object.",
+      "blanket_wave64": "Every kernel family with any prior Vulkan-over-Redline row selects wave64.",
+      "radiowave_tuned": "The targeted kernels plus every VOPD variant select wave64; dispatch_tiny uses one 32-lane workgroup because only lane zero is live; interleave selects scalar-buffer loads for independent throughput and B128 loads with a four-wave HIP workgroup for aggressive latency while Vulkan retains its native shader geometry.",
+      "selected": "radiowave_tuned",
+      "targeted_wave64": "Only q4_selected_dual, q6_x8, dense_q8, and vopd_dependent select wave64."
+    }
+  },
+  "environment": {
+    "hip_arch": "gfx1201",
+    "hipcc": "HIP version: 7.2.26015-fc0010cf6a\nAMD clang version 22.0.0git (https://github.com/RadeonOpenCompute/llvm-project roc-7.2.0 26014 7b800a19466229b8479a78de19143dc33c3ab9b5)\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /opt/rocm-7.2.0/lib/llvm/bin\nConfiguration file: /opt/rocm-7.2.0/lib/llvm/bin/clang++.cfg",
+    "hipfire_clone_dirty": true,
+    "hipfire_device": "HIP ordinal 0",
+    "hipfire_redline_commit": "455ffb9dfd6a5712889b504737f88fbbe87d3efe",
+    "hsaco_wave32_sha256": "568f97005f36ad8750587a001581f19da00bbf75d264f749736df44546249610",
+    "hsaco_wave64_sha256": "86883c4ad1bc30e3f7cc05caf4dd660c175f78fc3e70d6861eddeb2d4661dfeb",
+    "redline_device": "gfx1201",
+    "redline_pci": "0000:3d:00.0",
+    "repository_commit": "687b03db810607a3cb2516f95dfbeab65efbdd29",
+    "repository_dirty": true,
+    "vulkan_compute_queues": 4,
+    "vulkan_device": "AMD Radeon Graphics (RADV GFX1201)",
+    "vulkan_pci": "0000:3d:00.0",
+    "vulkan_summary": "==========\nVULKANINFO\n==========\n\nVulkan Instance Version: 1.3.275\n\n\nInstance Extensions: count = 24\n-------------------------------\nVK_EXT_acquire_drm_display             : extension revision 1\nVK_EXT_acquire_xlib_display            : extension revision 1\nVK_EXT_debug_report                    : extension revision 10\nVK_EXT_debug_utils                     : extension revision 2\nVK_EXT_direct_mode_display             : extension revision 1\nVK_EXT_display_surface_counter         : extension revision 1\nVK_EXT_headless_surface                : extension revision 1\nVK_EXT_surface_maintenance1            : extension revision 1\nVK_EXT_swapchain_colorspace            : extension revision 5\nVK_KHR_device_group_creation           : extension revision 1\nVK_KHR_display                         : extension revision 23\nVK_KHR_external_fence_capabilities     : extension revision 1\nVK_KHR_external_memory_capabilities    : extension revision 1\nVK_KHR_external_semaphore_capabilities : extension revision 1\nVK_KHR_get_display_properties2         : extension revision 1\nVK_KHR_get_physical_device_properties2 : extension revision 2\nVK_KHR_get_surface_capabilities2       : extension revision 1\nVK_KHR_portability_enumeration         : extension revision 1\nVK_KHR_surface                         : extension revision 25\nVK_KHR_surface_protected_capabilities  : extension revision 1\nVK_KHR_wayland_surface                 : extension revision 6\nVK_KHR_xcb_surface                     : extension revision 6\nVK_KHR_xlib_surface                    : extension revision 6\nVK_LUNARG_direct_driver_loading        : extension revision 1\n\nInstance Layers: count = 3\n--------------------------\nVK_LAYER_INTEL_nullhw       INTEL NULL HW                1.1.73   version 1\nVK_LAYER_MESA_device_select Linux device selection layer 1.4.303  version 1\nVK_LAYER_MESA_overlay       Mesa Overlay layer           1.4.303  version 1\n\nDevices:\n========\nGPU0:\n\tapiVersion         = 1.4.318\n\tdriverVersion      = 25.2.8\n\tvendorID           = 0x1002\n\tdeviceID           = 0x7550\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU\n\tdeviceName         = AMD Radeon Graphics (RADV GFX1201)\n\tdriverID           = DRIVER_ID_MESA_RADV\n\tdriverName         = radv\n\tdriverInfo         = Mesa 25.2.8-0ubuntu0.24.04.2\n\tconformanceVersion = 1.4.0.0\n\tdeviceUUID         = 00000000-3d00-0000-0000-000000000000\n\tdriverUUID         = 414d442d-4d45-5341-2d44-525600000000\nGPU1:\n\tapiVersion         = 1.4.318\n\tdriverVersion      = 25.2.8\n\tvendorID           = 0x10005\n\tdeviceID           = 0x0000\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_CPU\n\tdeviceName         = llvmpipe (LLVM 20.1.2, 256 bits)\n\tdriverID           = DRIVER_ID_MESA_LLVMPIPE\n\tdriverName         = llvmpipe\n\tdriverInfo         = Mesa 25.2.8-0ubuntu0.24.04.2 (LLVM 20.1.2)\n\tconformanceVersion = 1.3.1.1\n\tdeviceUUID         = 6d657361-3235-2e32-2e38-2d3075627500\n\tdriverUUID         = 6c6c766d-7069-7065-5555-494400000000"
+  },
+  "config": {
+    "filter": "/vopd/",
+    "logical_matrix_rows": 133,
+    "max_rows": null,
+    "samples": 11,
+    "selected_rows": 12,
+    "warmups": 3,
+    "wave_policy": "radiowave_tuned"
+  },
+  "rows": [
+    {
+      "key": "serial_latency/vopd/variant=independent-fma,n=32768,body=64;hip-wave=64",
+      "mode": "serial_latency",
+      "family": "vopd",
+      "name": "variant=independent-fma,n=32768,body=64",
+      "kernel": "vopd_independent",
+      "second_kernel": null,
+      "n0": 32768,
+      "n1": 0,
+      "aux": 64,
+      "block": 256,
+      "wave_size": 64,
+      "grid_groups": 128,
+      "iterations": 32,
+      "logical_operations": 32,
+      "redline_submission_policy": "dependency_safe_timed_ib",
+      "backend_order": [
+        "redline",
+        "vulkan",
+        "hipgraph",
+        "hip"
+      ],
+      "backends": {
+        "hip": {
+          "distribution": {
+            "samples_us": [
+              48.4575629234314,
+              48.43253269791603,
+              48.380061984062195,
+              48.43878000974655,
+              48.40131103992462,
+              48.44878241419792,
+              48.468779772520065,
+              48.387560993433,
+              48.4037809073925,
+              48.44006150960922,
+              48.45128208398819
+            ],
+            "median_us": 48.43878000974655,
+            "p05_us": 48.3838114887476,
+            "p95_us": 48.46317134797573,
+            "min_us": 48.380061984062195,
+            "max_us": 48.468779772520065
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.00006103515625,
+            "max_rel": 1.0012069549842335e-6
+          },
+          "error": null
+        },
+        "hipgraph": {
+          "distribution": {
+            "samples_us": [
+              48.29378053545952,
+              48.318810760974884,
+              48.41503128409386,
+              48.23878034949303,
+              47.41128161549568,
+              46.91627994179726,
+              47.23631218075752,
+              47.64503240585327,
+              46.59128189086914,
+              46.38628289103508,
+              46.77381366491318
+            ],
+            "median_us": 47.41128161549568,
+            "p05_us": 46.48878239095211,
+            "p95_us": 48.36692102253437,
+            "min_us": 46.38628289103508,
+            "max_us": 48.41503128409386
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.00006103515625,
+            "max_rel": 1.0012069549842335e-6
+          },
+          "error": null
+        },
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              12.4925,
+              12.4975,
+              12.505,
+              12.49,
+              12.49625,
+              12.50375,
+              12.5025,
+              12.48875,
+              12.48625,
+              12.51125,
+              12.4875
+            ],
+            "median_us": 12.49625,
+            "p05_us": 12.486875000000001,
+            "p95_us": 12.508125,
+            "min_us": 12.48625,
+            "max_us": 12.51125
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.00006103515625,
+            "max_rel": 1.0012069549842335e-6
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              9.175,
+              9.18,
+              9.1875,
+              9.16625,
+              9.1675,
+              9.1625,
+              9.16625,
+              9.16375,
+              9.16875,
+              9.16625,
+              9.17875
+            ],
+            "median_us": 9.1675,
+            "p05_us": 9.163125,
+            "p95_us": 9.18375,
+            "min_us": 9.1625,
+            "max_us": 9.1875
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 7.62939453125e-6,
+            "max_rel": 1.9455016354373124e-7
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "serial_latency/vopd/variant=dependent-fma,n=32768,body=64;hip-wave=64",
+      "mode": "serial_latency",
+      "family": "vopd",
+      "name": "variant=dependent-fma,n=32768,body=64",
+      "kernel": "vopd_dependent",
+      "second_kernel": null,
+      "n0": 32768,
+      "n1": 0,
+      "aux": 64,
+      "block": 256,
+      "wave_size": 64,
+      "grid_groups": 128,
+      "iterations": 32,
+      "logical_operations": 32,
+      "redline_submission_policy": "dependency_safe_timed_ib",
+      "backend_order": [
+        "vulkan",
+        "hipgraph",
+        "hip",
+        "redline"
+      ],
+      "backends": {
+        "hip": {
+          "distribution": {
+            "samples_us": [
+              47.90753126144409,
+              47.95128107070923,
+              47.968748956918716,
+              47.958750277757645,
+              47.95128107070923,
+              47.93127998709679,
+              47.93878272175789,
+              47.972530126571655,
+              47.917529940605164,
+              47.943782061338425,
+              47.917529940605164
+            ],
+            "median_us": 47.943782061338425,
+            "p05_us": 47.91253060102463,
+            "p95_us": 47.970639541745186,
+            "min_us": 47.90753126144409,
+            "max_us": 47.972530126571655
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.00006103515625,
+            "max_rel": 9.505229064138909e-7
+          },
+          "error": null
+        },
+        "hipgraph": {
+          "distribution": {
+            "samples_us": [
+              48.0087511241436,
+              47.98128083348274,
+              48.033781349658966,
+              48.01125079393387,
+              47.93628305196762,
+              47.972530126571655,
+              47.9312501847744,
+              47.97378182411194,
+              47.91628196835518,
+              47.98249900341034,
+              47.9925312101841
+            ],
+            "median_us": 47.98128083348274,
+            "p05_us": 47.92376607656479,
+            "p95_us": 48.02251607179642,
+            "min_us": 47.91628196835518,
+            "max_us": 48.033781349658966
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.00006103515625,
+            "max_rel": 9.505229064138909e-7
+          },
+          "error": null
+        },
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              11.66375,
+              11.67375,
+              11.7,
+              11.68,
+              11.67,
+              11.68125,
+              11.6725,
+              11.66625,
+              11.68,
+              11.67125,
+              11.6775
+            ],
+            "median_us": 11.67375,
+            "p05_us": 11.665,
+            "p95_us": 11.690625,
+            "min_us": 11.66375,
+            "max_us": 11.7
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.00006103515625,
+            "max_rel": 9.505229064138909e-7
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              9.30875,
+              9.31375,
+              9.315,
+              9.30625,
+              9.30875,
+              9.31,
+              9.31,
+              9.3125,
+              9.315,
+              9.30375,
+              9.3075
+            ],
+            "median_us": 9.31,
+            "p05_us": 9.305,
+            "p95_us": 9.315,
+            "min_us": 9.30375,
+            "max_us": 9.315
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.00002288818359375,
+            "max_rel": 5.989441811973852e-7
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "serial_latency/vopd/variant=mixed-int-float,n=32768,body=64;hip-wave=64",
+      "mode": "serial_latency",
+      "family": "vopd",
+      "name": "variant=mixed-int-float,n=32768,body=64",
+      "kernel": "vopd_mixed",
+      "second_kernel": null,
+      "n0": 32768,
+      "n1": 0,
+      "aux": 64,
+      "block": 256,
+      "wave_size": 64,
+      "grid_groups": 128,
+      "iterations": 32,
+      "logical_operations": 32,
+      "redline_submission_policy": "dependency_safe_timed_ib",
+      "backend_order": [
+        "hipgraph",
+        "hip",
+        "redline",
+        "vulkan"
+      ],
+      "backends": {
+        "hip": {
+          "distribution": {
+            "samples_us": [
+              54.20000106096268,
+              54.24625054001808,
+              54.200030863285065,
+              54.20752987265587,
+              54.2050302028656,
+              54.148782044649124,
+              54.1275329887867,
+              54.15375158190727,
+              54.2125329375267,
+              54.16003242135048,
+              54.22003194689751
+            ],
+            "median_us": 54.200030863285065,
+            "p05_us": 54.13815751671791,
+            "p95_us": 54.233141243457794,
+            "min_us": 54.1275329887867,
+            "max_us": 54.24625054001808
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.00006103515625,
+            "max_rel": 1.0016151043557738e-6
+          },
+          "error": null
+        },
+        "hipgraph": {
+          "distribution": {
+            "samples_us": [
+              54.00381237268448,
+              53.931280970573425,
+              53.96506190299988,
+              53.96128073334694,
+              53.992561995983124,
+              53.92878130078316,
+              53.96631360054016,
+              53.93877997994423,
+              53.96381393074989,
+              53.96378040313721,
+              53.995031863451004
+            ],
+            "median_us": 53.96381393074989,
+            "p05_us": 53.93003113567829,
+            "p95_us": 53.99942211806774,
+            "min_us": 53.92878130078316,
+            "max_us": 54.00381237268448
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.00006103515625,
+            "max_rel": 1.0016151043557738e-6
+          },
+          "error": null
+        },
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              26.24375,
+              26.2925,
+              26.21875,
+              26.1725,
+              26.19875,
+              26.16375,
+              26.17375,
+              26.17375,
+              26.16,
+              26.16375,
+              25.9
+            ],
+            "median_us": 26.17375,
+            "p05_us": 26.03,
+            "p95_us": 26.268124999999998,
+            "min_us": 25.9,
+            "max_us": 26.2925
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.00006103515625,
+            "max_rel": 1.0016151043557738e-6
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              16.53375,
+              16.37875,
+              16.17875,
+              16.125,
+              16.00625,
+              15.89625,
+              15.8775,
+              15.88125,
+              15.96125,
+              16.01625,
+              16.1825
+            ],
+            "median_us": 16.01625,
+            "p05_us": 15.879375,
+            "p95_us": 16.45625,
+            "min_us": 15.8775,
+            "max_us": 16.53375
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "serial_latency/vopd/variant=dequant-like,n=32768,body=64;hip-wave=64",
+      "mode": "serial_latency",
+      "family": "vopd",
+      "name": "variant=dequant-like,n=32768,body=64",
+      "kernel": "vopd_dequant",
+      "second_kernel": null,
+      "n0": 32768,
+      "n1": 0,
+      "aux": 64,
+      "block": 256,
+      "wave_size": 64,
+      "grid_groups": 128,
+      "iterations": 32,
+      "logical_operations": 32,
+      "redline_submission_policy": "dependency_safe_timed_ib",
+      "backend_order": [
+        "hip",
+        "redline",
+        "vulkan",
+        "hipgraph"
+      ],
+      "backends": {
+        "hip": {
+          "distribution": {
+            "samples_us": [
+              52.12128162384033,
+              52.08127945661545,
+              52.02377960085869,
+              52.0462803542614,
+              52.03003063797951,
+              52.0537830889225,
+              52.00628191232681,
+              52.08753049373627,
+              52.083782851696014,
+              52.108779549598694,
+              52.08003148436546
+            ],
+            "median_us": 52.08003148436546,
+            "p05_us": 52.01503075659275,
+            "p95_us": 52.11503058671951,
+            "min_us": 52.00628191232681,
+            "max_us": 52.12128162384033
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "hipgraph": {
+          "distribution": {
+            "samples_us": [
+              51.90253257751465,
+              51.888782531023026,
+              51.91003158688545,
+              51.83003097772598,
+              51.89378187060356,
+              51.98878049850464,
+              51.84503272175789,
+              51.81378126144409,
+              51.850032061338425,
+              51.88377946615219,
+              51.80378258228302
+            ],
+            "median_us": 51.88377946615219,
+            "p05_us": 51.808781921863556,
+            "p95_us": 51.949406042695045,
+            "min_us": 51.80378258228302,
+            "max_us": 51.98878049850464
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              22.4225,
+              22.41375,
+              22.395,
+              22.38,
+              22.39,
+              22.39375,
+              22.42125,
+              22.38125,
+              22.36875,
+              22.375,
+              22.38625
+            ],
+            "median_us": 22.39,
+            "p05_us": 22.371875,
+            "p95_us": 22.421875,
+            "min_us": 22.36875,
+            "max_us": 22.4225
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              15.04625,
+              14.7625,
+              14.6925,
+              14.5875,
+              14.4775,
+              14.42625,
+              14.31,
+              14.3225,
+              14.4325,
+              14.505,
+              14.5875
+            ],
+            "median_us": 14.505,
+            "p05_us": 14.31625,
+            "p95_us": 14.904375,
+            "min_us": 14.31,
+            "max_us": 15.04625
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "independent_throughput/vopd/variant=independent-fma,n=32768,body=64;hip-wave=64",
+      "mode": "independent_throughput",
+      "family": "vopd",
+      "name": "variant=independent-fma,n=32768,body=64",
+      "kernel": "vopd_independent",
+      "second_kernel": null,
+      "n0": 32768,
+      "n1": 0,
+      "aux": 64,
+      "block": 256,
+      "wave_size": 64,
+      "grid_groups": 128,
+      "iterations": 32,
+      "logical_operations": 32,
+      "redline_submission_policy": "aggressive_unfenced_timed_ib_external_ownership_acquire",
+      "backend_order": [
+        "redline",
+        "vulkan",
+        "hipgraph",
+        "hip"
+      ],
+      "backends": {
+        "hip": {
+          "distribution": {
+            "samples_us": [
+              50.49378052353859,
+              50.71878060698509,
+              50.61125010251999,
+              50.113748759031296,
+              49.29753020405769,
+              49.40753057599068,
+              49.74503070116043,
+              49.71003159880638,
+              48.944998532533646,
+              48.948779702186584,
+              49.63003098964691
+            ],
+            "median_us": 49.71003159880638,
+            "p05_us": 48.946889117360115,
+            "p95_us": 50.66501535475254,
+            "min_us": 48.944998532533646,
+            "max_us": 50.71878060698509
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 2.182064001246395e-7
+          },
+          "error": null
+        },
+        "hipgraph": {
+          "distribution": {
+            "samples_us": [
+              55.350031703710556,
+              55.35378307104111,
+              55.38628250360489,
+              55.32631278038025,
+              55.36378175020218,
+              55.218782275915146,
+              55.243782699108124,
+              55.19502982497215,
+              55.23503199219704,
+              55.22878095507622,
+              55.16756325960159
+            ],
+            "median_us": 55.243782699108124,
+            "p05_us": 55.18129654228687,
+            "p95_us": 55.375032126903534,
+            "min_us": 55.16756325960159,
+            "max_us": 55.38628250360489
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 2.182064001246395e-7
+          },
+          "error": null
+        },
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              8.57375,
+              8.565,
+              8.58125,
+              8.5825,
+              8.57625,
+              8.55125,
+              8.55875,
+              8.55375,
+              8.5575,
+              8.55125,
+              8.5625
+            ],
+            "median_us": 8.5625,
+            "p05_us": 8.55125,
+            "p95_us": 8.581875,
+            "min_us": 8.55125,
+            "max_us": 8.5825
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 2.182064001246395e-7
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              7.6025,
+              8.08125,
+              7.5875,
+              8.09375,
+              7.59875,
+              8.08375,
+              7.5975,
+              8.0825,
+              7.59,
+              8.08,
+              7.5925
+            ],
+            "median_us": 7.6025,
+            "p05_us": 7.58875,
+            "p95_us": 8.088750000000001,
+            "min_us": 7.5875,
+            "max_us": 8.09375
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 1.288464199635674e-7
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "independent_throughput/vopd/variant=dependent-fma,n=32768,body=64;hip-wave=64",
+      "mode": "independent_throughput",
+      "family": "vopd",
+      "name": "variant=dependent-fma,n=32768,body=64",
+      "kernel": "vopd_dependent",
+      "second_kernel": null,
+      "n0": 32768,
+      "n1": 0,
+      "aux": 64,
+      "block": 256,
+      "wave_size": 64,
+      "grid_groups": 128,
+      "iterations": 32,
+      "logical_operations": 32,
+      "redline_submission_policy": "aggressive_unfenced_timed_ib_external_ownership_acquire",
+      "backend_order": [
+        "vulkan",
+        "hipgraph",
+        "hip",
+        "redline"
+      ],
+      "backends": {
+        "hip": {
+          "distribution": {
+            "samples_us": [
+              36.67128086090088,
+              36.56125068664551,
+              35.83874925971031,
+              36.983780562877655,
+              36.833781749010086,
+              35.690031945705414,
+              36.438748240470886,
+              36.48253157734871,
+              36.46253049373627,
+              36.526281386613846,
+              36.27375140786171
+            ],
+            "median_us": 36.48253157734871,
+            "p05_us": 35.76439060270786,
+            "p95_us": 36.90878115594387,
+            "min_us": 35.690031945705414,
+            "max_us": 36.983780562877655
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 1.1882041743513772e-7
+          },
+          "error": null
+        },
+        "hipgraph": {
+          "distribution": {
+            "samples_us": [
+              45.27253285050392,
+              45.577529817819595,
+              45.391250401735306,
+              45.96628248691559,
+              45.729998499155045,
+              45.065030455589294,
+              45.8875298500061,
+              46.008750796318054,
+              45.55002972483635,
+              45.43500021100044,
+              45.7012802362442
+            ],
+            "median_us": 45.577529817819595,
+            "p05_us": 45.16878165304661,
+            "p95_us": 45.98751664161682,
+            "min_us": 45.065030455589294,
+            "max_us": 46.008750796318054
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 1.1882041743513772e-7
+          },
+          "error": null
+        },
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              4.75,
+              4.74125,
+              4.74625,
+              4.74375,
+              4.74625,
+              4.74125,
+              4.72875,
+              4.695,
+              4.69875,
+              4.7,
+              4.7
+            ],
+            "median_us": 4.74125,
+            "p05_us": 4.696875,
+            "p95_us": 4.748125,
+            "min_us": 4.695,
+            "max_us": 4.75
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 1.1882041743513772e-7
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              6.475,
+              6.925,
+              6.47375,
+              6.81625,
+              6.385,
+              6.83,
+              6.2875,
+              6.73375,
+              6.2875,
+              6.6725,
+              6.22375
+            ],
+            "median_us": 6.475,
+            "p05_us": 6.255625,
+            "p95_us": 6.8774999999999995,
+            "min_us": 6.22375,
+            "max_us": 6.925
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 1.1920928955078125e-7,
+            "max_rel": 1.0606616810617903e-7
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "independent_throughput/vopd/variant=mixed-int-float,n=32768,body=64;hip-wave=64",
+      "mode": "independent_throughput",
+      "family": "vopd",
+      "name": "variant=mixed-int-float,n=32768,body=64",
+      "kernel": "vopd_mixed",
+      "second_kernel": null,
+      "n0": 32768,
+      "n1": 0,
+      "aux": 64,
+      "block": 256,
+      "wave_size": 64,
+      "grid_groups": 128,
+      "iterations": 32,
+      "logical_operations": 32,
+      "redline_submission_policy": "aggressive_unfenced_timed_ib_external_ownership_acquire",
+      "backend_order": [
+        "hipgraph",
+        "hip",
+        "redline",
+        "vulkan"
+      ],
+      "backends": {
+        "hip": {
+          "distribution": {
+            "samples_us": [
+              31.38503059744835,
+              32.42500126361847,
+              31.283780932426453,
+              31.38500079512596,
+              31.3887819647789,
+              31.386248767375946,
+              31.428780406713486,
+              31.293749809265137,
+              31.39503300189972,
+              32.35375136137009,
+              31.332530081272125
+            ],
+            "median_us": 31.386248767375946,
+            "p05_us": 31.288765370845795,
+            "p95_us": 32.38937631249428,
+            "min_us": 31.283780932426453,
+            "max_us": 32.42500126361847
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 2.1838161750896457e-7
+          },
+          "error": null
+        },
+        "hipgraph": {
+          "distribution": {
+            "samples_us": [
+              39.43753242492676,
+              40.146250277757645,
+              39.91253301501274,
+              40.150001645088196,
+              40.16502946615219,
+              40.131282061338425,
+              39.97249901294708,
+              38.8750322163105,
+              38.83250057697296,
+              39.92503136396408,
+              40.00750184059143
+            ],
+            "median_us": 39.97249901294708,
+            "p05_us": 38.85376639664173,
+            "p95_us": 40.15751555562019,
+            "min_us": 38.83250057697296,
+            "max_us": 40.16502946615219
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 2.1838161750896457e-7
+          },
+          "error": null
+        },
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              10.0425,
+              10.03625,
+              10.005,
+              10.0,
+              9.9925,
+              9.95375,
+              9.9625,
+              9.925,
+              9.92875,
+              9.92375,
+              9.89375
+            ],
+            "median_us": 9.9625,
+            "p05_us": 9.908750000000001,
+            "p95_us": 10.039375,
+            "min_us": 9.89375,
+            "max_us": 10.0425
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 2.1838161750896457e-7
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              7.3925,
+              7.395,
+              7.3925,
+              7.37375,
+              7.35875,
+              7.37125,
+              7.3275,
+              7.32625,
+              7.3275,
+              7.56875,
+              7.31
+            ],
+            "median_us": 7.37125,
+            "p05_us": 7.318125,
+            "p95_us": 7.481875,
+            "min_us": 7.31,
+            "max_us": 7.56875
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "independent_throughput/vopd/variant=dequant-like,n=32768,body=64;hip-wave=64",
+      "mode": "independent_throughput",
+      "family": "vopd",
+      "name": "variant=dequant-like,n=32768,body=64",
+      "kernel": "vopd_dequant",
+      "second_kernel": null,
+      "n0": 32768,
+      "n1": 0,
+      "aux": 64,
+      "block": 256,
+      "wave_size": 64,
+      "grid_groups": 128,
+      "iterations": 32,
+      "logical_operations": 32,
+      "redline_submission_policy": "aggressive_unfenced_timed_ib_external_ownership_acquire",
+      "backend_order": [
+        "hip",
+        "redline",
+        "vulkan",
+        "hipgraph"
+      ],
+      "backends": {
+        "hip": {
+          "distribution": {
+            "samples_us": [
+              31.675029546022415,
+              31.792499125003815,
+              31.681280583143234,
+              32.13503211736679,
+              32.17500075697899,
+              31.27003088593483,
+              32.46749937534332,
+              31.53878077864647,
+              31.542498618364334,
+              31.644999980926514,
+              31.435031443834305
+            ],
+            "median_us": 31.675029546022415,
+            "p05_us": 31.352531164884567,
+            "p95_us": 32.321250066161156,
+            "min_us": 31.27003088593483,
+            "max_us": 32.46749937534332
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "hipgraph": {
+          "distribution": {
+            "samples_us": [
+              36.47378087043762,
+              35.78750044107437,
+              36.637529730796814,
+              36.6087481379509,
+              36.528781056404114,
+              36.57500073313713,
+              36.44128143787384,
+              35.80375015735626,
+              36.71128302812576,
+              36.45750135183334,
+              36.5300327539444
+            ],
+            "median_us": 36.528781056404114,
+            "p05_us": 35.79562529921532,
+            "p95_us": 36.67440637946129,
+            "min_us": 35.78750044107437,
+            "max_us": 36.71128302812576
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              8.33625,
+              8.33875,
+              8.3375,
+              8.3,
+              8.30625,
+              8.29875,
+              8.2775,
+              8.26875,
+              8.28125,
+              8.2375,
+              8.24875
+            ],
+            "median_us": 8.29875,
+            "p05_us": 8.243125,
+            "p95_us": 8.338125,
+            "min_us": 8.2375,
+            "max_us": 8.33875
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              6.57625,
+              6.54375,
+              6.54625,
+              6.51,
+              6.53875,
+              6.4825,
+              6.515,
+              6.48125,
+              6.48625,
+              6.45625,
+              6.48625
+            ],
+            "median_us": 6.51,
+            "p05_us": 6.46875,
+            "p95_us": 6.561249999999999,
+            "min_us": 6.45625,
+            "max_us": 6.57625
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1048576,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "single_kernel_aggressive/vopd/variant=independent-fma,n=32768,body=64;hip-wave=64",
+      "mode": "single_kernel_aggressive",
+      "family": "vopd",
+      "name": "variant=independent-fma,n=32768,body=64",
+      "kernel": "vopd_independent",
+      "second_kernel": null,
+      "n0": 32768,
+      "n1": 0,
+      "aux": 64,
+      "block": 256,
+      "wave_size": 64,
+      "grid_groups": 128,
+      "iterations": 32,
+      "logical_operations": 1,
+      "redline_submission_policy": "aggressive_unfenced_timed_ib_external_ownership_acquire",
+      "backend_order": [
+        "redline",
+        "vulkan",
+        "hipgraph",
+        "hip"
+      ],
+      "backends": {
+        "hip": {
+          "distribution": {
+            "samples_us": [
+              28.839999809861183,
+              28.79999950528145,
+              28.79999950528145,
+              28.680000454187393,
+              28.599999845027924,
+              28.55999954044819,
+              28.680000454187393,
+              28.79999950528145,
+              28.64000014960766,
+              28.759999200701714,
+              28.680000454187393
+            ],
+            "median_us": 28.680000454187393,
+            "p05_us": 28.579999692738056,
+            "p95_us": 28.819999657571316,
+            "min_us": 28.55999954044819,
+            "max_us": 28.839999809861183
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 2.182064001246395e-7
+          },
+          "error": null
+        },
+        "hipgraph": {
+          "distribution": {
+            "samples_us": [
+              34.40000116825104,
+              34.359999001026154,
+              34.48000177741051,
+              34.359999001026154,
+              34.52000021934509,
+              34.359999001026154,
+              34.40000116825104,
+              34.43999961018562,
+              34.279998391866684,
+              34.279998391866684,
+              34.43999961018562
+            ],
+            "median_us": 34.40000116825104,
+            "p05_us": 34.279998391866684,
+            "p95_us": 34.5000009983778,
+            "min_us": 34.279998391866684,
+            "max_us": 34.52000021934509
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 2.182064001246395e-7
+          },
+          "error": null
+        },
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              8.76,
+              8.48,
+              8.24,
+              8.4,
+              10.48,
+              7.96,
+              8.52,
+              8.48,
+              8.2,
+              8.36,
+              8.64
+            ],
+            "median_us": 8.48,
+            "p05_us": 8.08,
+            "p95_us": 9.620000000000001,
+            "min_us": 7.96,
+            "max_us": 10.48
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 2.182064001246395e-7
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              8.2,
+              8.2,
+              8.2,
+              8.2,
+              8.2,
+              8.24,
+              8.24,
+              8.24,
+              8.16,
+              8.24,
+              8.2
+            ],
+            "median_us": 8.2,
+            "p05_us": 8.18,
+            "p95_us": 8.24,
+            "min_us": 8.16,
+            "max_us": 8.24
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 1.288464199635674e-7
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "single_kernel_aggressive/vopd/variant=dependent-fma,n=32768,body=64;hip-wave=64",
+      "mode": "single_kernel_aggressive",
+      "family": "vopd",
+      "name": "variant=dependent-fma,n=32768,body=64",
+      "kernel": "vopd_dependent",
+      "second_kernel": null,
+      "n0": 32768,
+      "n1": 0,
+      "aux": 64,
+      "block": 256,
+      "wave_size": 64,
+      "grid_groups": 128,
+      "iterations": 32,
+      "logical_operations": 1,
+      "redline_submission_policy": "aggressive_unfenced_timed_ib_external_ownership_acquire",
+      "backend_order": [
+        "vulkan",
+        "hipgraph",
+        "hip",
+        "redline"
+      ],
+      "backends": {
+        "hip": {
+          "distribution": {
+            "samples_us": [
+              28.519999235868454,
+              28.64000014960766,
+              28.519999235868454,
+              28.4000001847744,
+              28.519999235868454,
+              28.920000419020653,
+              28.519999235868454,
+              28.519999235868454,
+              28.55999954044819,
+              28.519999235868454,
+              28.55999954044819
+            ],
+            "median_us": 28.519999235868454,
+            "p05_us": 28.459999710321426,
+            "p95_us": 28.780000284314156,
+            "min_us": 28.4000001847744,
+            "max_us": 28.920000419020653
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 1.1882041743513772e-7
+          },
+          "error": null
+        },
+        "hipgraph": {
+          "distribution": {
+            "samples_us": [
+              34.48000177741051,
+              34.279998391866684,
+              34.12000089883804,
+              34.52000021934509,
+              34.43999961018562,
+              34.359999001026154,
+              34.43999961018562,
+              34.43999961018562,
+              34.279998391866684,
+              34.359999001026154,
+              34.2399999499321
+            ],
+            "median_us": 34.359999001026154,
+            "p05_us": 34.18000042438507,
+            "p95_us": 34.5000009983778,
+            "min_us": 34.12000089883804,
+            "max_us": 34.52000021934509
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 1.1882041743513772e-7
+          },
+          "error": null
+        },
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              8.64,
+              7.6,
+              7.84,
+              8.0,
+              7.84,
+              7.64,
+              8.2,
+              7.68,
+              7.8,
+              8.12,
+              7.8
+            ],
+            "median_us": 7.84,
+            "p05_us": 7.619999999999999,
+            "p95_us": 8.42,
+            "min_us": 7.6,
+            "max_us": 8.64
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 1.1882041743513772e-7
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              8.28,
+              8.28,
+              8.32,
+              8.32,
+              8.24,
+              8.28,
+              8.24,
+              8.32,
+              8.32,
+              8.36,
+              8.28
+            ],
+            "median_us": 8.28,
+            "p05_us": 8.24,
+            "p95_us": 8.34,
+            "min_us": 8.24,
+            "max_us": 8.36
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 1.1920928955078125e-7,
+            "max_rel": 1.0606616810617903e-7
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "single_kernel_aggressive/vopd/variant=mixed-int-float,n=32768,body=64;hip-wave=64",
+      "mode": "single_kernel_aggressive",
+      "family": "vopd",
+      "name": "variant=mixed-int-float,n=32768,body=64",
+      "kernel": "vopd_mixed",
+      "second_kernel": null,
+      "n0": 32768,
+      "n1": 0,
+      "aux": 64,
+      "block": 256,
+      "wave_size": 64,
+      "grid_groups": 128,
+      "iterations": 32,
+      "logical_operations": 1,
+      "redline_submission_policy": "aggressive_unfenced_timed_ib_external_ownership_acquire",
+      "backend_order": [
+        "hipgraph",
+        "hip",
+        "redline",
+        "vulkan"
+      ],
+      "backends": {
+        "hip": {
+          "distribution": {
+            "samples_us": [
+              31.39999881386757,
+              31.39999881386757,
+              31.47999942302704,
+              31.360000371932983,
+              31.279999762773514,
+              31.3199982047081,
+              31.3199982047081,
+              31.360000371932983,
+              31.560000032186508,
+              31.401000916957855,
+              31.3199982047081
+            ],
+            "median_us": 31.360000371932983,
+            "p05_us": 31.299998983740807,
+            "p95_us": 31.519999727606773,
+            "min_us": 31.279999762773514,
+            "max_us": 31.560000032186508
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 2.1838161750896457e-7
+          },
+          "error": null
+        },
+        "hipgraph": {
+          "distribution": {
+            "samples_us": [
+              36.959998309612274,
+              37.39999979734421,
+              37.039998918771744,
+              36.8800014257431,
+              37.11999952793121,
+              37.51999884843826,
+              37.28000074625015,
+              37.08000108599663,
+              37.11999952793121,
+              37.039998918771744,
+              36.959998309612274
+            ],
+            "median_us": 37.08000108599663,
+            "p05_us": 36.91999986767769,
+            "p95_us": 37.459999322891235,
+            "min_us": 36.8800014257431,
+            "max_us": 37.51999884843826
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 2.1838161750896457e-7
+          },
+          "error": null
+        },
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              14.52,
+              14.64,
+              15.08,
+              14.28,
+              14.8,
+              14.8,
+              14.52,
+              14.6,
+              15.08,
+              14.44,
+              15.04
+            ],
+            "median_us": 14.64,
+            "p05_us": 14.36,
+            "p95_us": 15.08,
+            "min_us": 14.28,
+            "max_us": 15.08
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 2.384185791015625e-7,
+            "max_rel": 2.1838161750896457e-7
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              11.72,
+              11.76,
+              11.8,
+              11.76,
+              11.72,
+              11.72,
+              11.76,
+              11.68,
+              11.96,
+              11.68,
+              11.72
+            ],
+            "median_us": 11.72,
+            "p05_us": 11.68,
+            "p95_us": 11.88,
+            "min_us": 11.68,
+            "max_us": 11.96
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "single_kernel_aggressive/vopd/variant=dequant-like,n=32768,body=64;hip-wave=64",
+      "mode": "single_kernel_aggressive",
+      "family": "vopd",
+      "name": "variant=dequant-like,n=32768,body=64",
+      "kernel": "vopd_dequant",
+      "second_kernel": null,
+      "n0": 32768,
+      "n1": 0,
+      "aux": 64,
+      "block": 256,
+      "wave_size": 64,
+      "grid_groups": 128,
+      "iterations": 32,
+      "logical_operations": 1,
+      "redline_submission_policy": "aggressive_unfenced_timed_ib_external_ownership_acquire",
+      "backend_order": [
+        "hip",
+        "redline",
+        "vulkan",
+        "hipgraph"
+      ],
+      "backends": {
+        "hip": {
+          "distribution": {
+            "samples_us": [
+              30.36000020802021,
+              30.719999223947525,
+              30.319999903440475,
+              30.319999903440475,
+              30.36000020802021,
+              30.319999903440475,
+              30.319999903440475,
+              30.27999959886074,
+              30.319999903440475,
+              30.36000020802021,
+              30.20000085234642
+            ],
+            "median_us": 30.319999903440475,
+            "p05_us": 30.24000022560358,
+            "p95_us": 30.539999715983868,
+            "min_us": 30.20000085234642,
+            "max_us": 30.719999223947525
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "hipgraph": {
+          "distribution": {
+            "samples_us": [
+              35.96000000834465,
+              36.04000061750412,
+              36.20000183582306,
+              36.159999668598175,
+              35.96000000834465,
+              36.04000061750412,
+              35.87999939918518,
+              35.920001566410065,
+              36.079999059438705,
+              35.999998450279236,
+              35.999998450279236
+            ],
+            "median_us": 35.999998450279236,
+            "p05_us": 35.90000048279762,
+            "p95_us": 36.18000075221062,
+            "min_us": 35.87999939918518,
+            "max_us": 36.20000183582306
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              12.64,
+              13.32,
+              13.16,
+              12.68,
+              13.36,
+              13.24,
+              12.64,
+              13.24,
+              13.12,
+              12.8,
+              13.4
+            ],
+            "median_us": 13.16,
+            "p05_us": 12.64,
+            "p95_us": 13.379999999999999,
+            "min_us": 12.64,
+            "max_us": 13.4
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              10.96,
+              10.96,
+              10.96,
+              10.92,
+              10.96,
+              10.88,
+              10.92,
+              11.2,
+              10.96,
+              11.04,
+              10.96
+            ],
+            "median_us": 10.96,
+            "p05_us": 10.9,
+            "p95_us": 11.12,
+            "min_us": 10.88,
+            "max_us": 11.2
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 32768,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    }
+  ],
+  "summary": {
+    "attempted_rows": 12,
+    "families": {
+      "independent_throughput/vopd": {
+        "bench_n": 4,
+        "redline_wins": 1,
+        "win_percent": 25.0
+      },
+      "serial_latency/vopd": {
+        "bench_n": 4,
+        "redline_wins": 0,
+        "win_percent": 0.0
+      },
+      "single_kernel_aggressive/vopd": {
+        "bench_n": 4,
+        "redline_wins": 1,
+        "win_percent": 25.0
+      }
+    },
+    "matched_rows": 12,
+    "pairwise": {
+      "redline_over_hip": {
+        "bench_n": 12,
+        "losses": 0,
+        "max_ratio": 0.4829102416199917,
+        "median_ratio": 0.28528562145479774,
+        "min_ratio": 0.12995945717055857,
+        "ties": 0,
+        "win_percent": 100.0,
+        "wins": 12
+      },
+      "redline_over_hipgraph": {
+        "bench_n": 12,
+        "losses": 0,
+        "max_ratio": 0.4850240947311094,
+        "median_ratio": 0.24787273698017037,
+        "min_ratio": 0.10402604131798072,
+        "ties": 0,
+        "win_percent": 100.0,
+        "wins": 12
+      },
+      "redline_over_vulkan": {
+        "bench_n": 12,
+        "losses": 10,
+        "max_ratio": 1.6341996409896198,
+        "median_ratio": 1.251520210203715,
+        "min_ratio": 0.7322393822393822,
+        "ties": 0,
+        "win_percent": 16.666666666666668,
+        "wins": 2
+      }
+    },
+    "placements": {
+      "hip": {
+        "bench_n": 12,
+        "first": 0,
+        "fourth": 3,
+        "second": 0,
+        "third": 9,
+        "win_percent": 0.0,
+        "wins": 0
+      },
+      "hipgraph": {
+        "bench_n": 12,
+        "first": 0,
+        "fourth": 9,
+        "second": 0,
+        "third": 3,
+        "win_percent": 0.0,
+        "wins": 0
+      },
+      "redline": {
+        "bench_n": 12,
+        "first": 2,
+        "fourth": 0,
+        "second": 10,
+        "third": 0,
+        "win_percent": 16.666666666666668,
+        "wins": 2
+      },
+      "vulkan": {
+        "bench_n": 12,
+        "first": 10,
+        "fourth": 0,
+        "second": 2,
+        "third": 0,
+        "win_percent": 83.33333333333333,
+        "wins": 10
+      }
+    },
+    "redline_losses": [
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 9.1675,
+            "redline_slower_percent": 36.310335424052354
+          }
+        ],
+        "key": "serial_latency/vopd/variant=independent-fma,n=32768,body=64;hip-wave=64",
+        "redline_median_us": 12.49625,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 36.310335424052354,
+        "winner": "vulkan",
+        "winner_median_us": 9.1675
+      },
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 9.31,
+            "redline_slower_percent": 25.38936627282491
+          }
+        ],
+        "key": "serial_latency/vopd/variant=dependent-fma,n=32768,body=64;hip-wave=64",
+        "redline_median_us": 11.67375,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 25.38936627282491,
+        "winner": "vulkan",
+        "winner_median_us": 9.31
+      },
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 16.01625,
+            "redline_slower_percent": 63.41996409896198
+          }
+        ],
+        "key": "serial_latency/vopd/variant=mixed-int-float,n=32768,body=64;hip-wave=64",
+        "redline_median_us": 26.17375,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 63.41996409896198,
+        "winner": "vulkan",
+        "winner_median_us": 16.01625
+      },
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 14.505,
+            "redline_slower_percent": 54.36056532230265
+          }
+        ],
+        "key": "serial_latency/vopd/variant=dequant-like,n=32768,body=64;hip-wave=64",
+        "redline_median_us": 22.39,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 54.36056532230265,
+        "winner": "vulkan",
+        "winner_median_us": 14.505
+      },
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 7.6025,
+            "redline_slower_percent": 12.62742518908253
+          }
+        ],
+        "key": "independent_throughput/vopd/variant=independent-fma,n=32768,body=64;hip-wave=64",
+        "redline_median_us": 8.5625,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 12.62742518908253,
+        "winner": "vulkan",
+        "winner_median_us": 7.6025
+      },
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 7.37125,
+            "redline_slower_percent": 35.15346786501612
+          }
+        ],
+        "key": "independent_throughput/vopd/variant=mixed-int-float,n=32768,body=64;hip-wave=64",
+        "redline_median_us": 9.9625,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 35.15346786501612,
+        "winner": "vulkan",
+        "winner_median_us": 7.37125
+      },
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 6.51,
+            "redline_slower_percent": 27.47695852534562
+          }
+        ],
+        "key": "independent_throughput/vopd/variant=dequant-like,n=32768,body=64;hip-wave=64",
+        "redline_median_us": 8.29875,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 27.47695852534562,
+        "winner": "vulkan",
+        "winner_median_us": 6.51
+      },
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 8.2,
+            "redline_slower_percent": 3.4146341463414887
+          }
+        ],
+        "key": "single_kernel_aggressive/vopd/variant=independent-fma,n=32768,body=64;hip-wave=64",
+        "redline_median_us": 8.48,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 3.4146341463414887,
+        "winner": "vulkan",
+        "winner_median_us": 8.2
+      },
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 11.72,
+            "redline_slower_percent": 24.914675767918084
+          }
+        ],
+        "key": "single_kernel_aggressive/vopd/variant=mixed-int-float,n=32768,body=64;hip-wave=64",
+        "redline_median_us": 14.64,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 24.914675767918084,
+        "winner": "vulkan",
+        "winner_median_us": 11.72
+      },
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 10.96,
+            "redline_slower_percent": 20.07299270072991
+          }
+        ],
+        "key": "single_kernel_aggressive/vopd/variant=dequant-like,n=32768,body=64;hip-wave=64",
+        "redline_median_us": 13.16,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 20.07299270072991,
+        "winner": "vulkan",
+        "winner_median_us": 10.96
+      }
+    ],
+    "redline_win_percent": 16.666666666666668,
+    "redline_wins": 2,
+    "rejected_rows": 0
+  },
+  "hipengine_baseline": {
+    "matched_rows": 212,
+    "redline_over_hip": {
+      "losses": 55,
+      "max": 2.1453295371747503,
+      "median": 0.8341528052799501,
+      "min": 0.01945250190539805,
+      "ties": 0,
+      "wins": 157
+    },
+    "redline_over_vulkan": {
+      "losses": 26,
+      "max": 1.853491271820449,
+      "median": 0.47875302797479874,
+      "min": 0.1446808510638298,
+      "ties": 0,
+      "wins": 186
+    }
+  }
+}

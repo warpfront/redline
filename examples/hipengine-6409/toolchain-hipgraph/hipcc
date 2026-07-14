@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
+"""hipcc wrapper that substitutes only hipEngine's sequence timer with a HIP graph.
+
+Unlike the Redline wrapper this needs no code-object extraction or manifest: the
+hipGraph shim is pure HIP. It force-includes the shim before any C++ harness that
+opts in by including micro_timing_hip.hpp, and otherwise passes through.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+REAL_HIPCC = Path(os.environ.get("REDLINE_REAL_HIPCC", "/opt/rocm/bin/hipcc"))
+ROOT = Path(__file__).resolve().parents[3]
+OVERRIDE = ROOT / "examples/hipengine-6409/hipgraph_timing_override.hpp"
+
+
+def hip_source(args: list[str]) -> Path | None:
+    for arg in args:
+        if arg.endswith((".hip", ".cu")):
+            path = Path(arg)
+            return path if path.is_absolute() else Path.cwd() / path
+    return None
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if args == ["--version"] and os.environ.get("HIPGRAPH_HIPCC_VERSION_SUFFIX"):
+        completed = subprocess.run([str(REAL_HIPCC), *args], check=False)
+        print(f"hipGraph sidecar build {os.environ['HIPGRAPH_HIPCC_VERSION_SUFFIX']}")
+        return completed.returncode
+    source = hip_source(args)
+    eligible = (
+        source is not None
+        and "--genco" not in args
+        and "-c" not in args
+        and "-E" not in args
+        and "-###" not in args
+        and b"micro_timing_hip.hpp" in source.read_bytes()
+    )
+    if not eligible:
+        return subprocess.call([str(REAL_HIPCC), *args])
+
+    timing_include = next(
+        (
+            parent / "benchmarks/micro/runners"
+            for parent in source.parents
+            if (parent / "benchmarks/micro/runners/micro_timing_hip.hpp").exists()
+        ),
+        source.parent,
+    )
+    compile_args = list(args)
+    source_index = next(i for i, arg in enumerate(compile_args) if arg.endswith((".hip", ".cu")))
+    injected = [
+        "-include",
+        str(OVERRIDE),
+        f"-I{source.parent}",
+        f"-I{timing_include}",
+    ]
+    compile_args[source_index:source_index] = injected
+    return subprocess.call([str(REAL_HIPCC), *compile_args])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

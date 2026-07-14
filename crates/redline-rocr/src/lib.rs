@@ -38,12 +38,15 @@ pub use packet::{
     BARRIER_DEPENDENCY_CAPACITY, FenceScope, HeaderPolicy, KernelMetadata, LaunchGeometry,
     PacketError,
 };
-pub use pm4::{Gfx12Pm4CommandBuffer, Pm4BuildError};
+pub use pm4::{
+    Gfx12DispatchMode, Gfx12KernelImage, Gfx12Pm4CommandBuffer, Gfx12RmwAcquirePolicy,
+    Pm4BuildError,
+};
 pub use runtime::DEFAULT_WAIT_TIMEOUT;
 pub use runtime::{
-    AqlQueue, CompletionSignal, Executable, GpuDevice, GpuSelector, KernargBuffer, KernargPool,
-    Kernel, KernelPm4Metadata, PciBusId, PciBusIdParseError, QueueDepthReport, QueueDepthSample,
-    QueueDepthStats, QueueSet, Runtime, RuntimeError,
+    AqlQueue, CompletionSignal, DeviceBuffer, DevicePool, Executable, GpuDevice, GpuSelector,
+    KernargBuffer, KernargPool, Kernel, KernelPm4Metadata, PciBusId, PciBusIdParseError,
+    QueueDepthReport, QueueDepthSample, QueueDepthStats, QueueSet, Runtime, RuntimeError,
 };
 
 /// Load the installed public ROCr runtime without a link-time ROCm dependency.

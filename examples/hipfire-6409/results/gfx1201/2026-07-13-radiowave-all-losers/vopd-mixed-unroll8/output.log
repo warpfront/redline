@@ -1,0 +1,21 @@
+initializing Hipfire HIP bridge
+initializing Redline retained-PM4 backend
+initializing RADV Vulkan backend
+[1/3] serial_latency/vopd/variant=mixed-int-float,n=32768,body=64;hip-wave=64 (32 operations; order redline -> vulkan -> hipgraph -> hip)
+  redline     24.1650 us/op correctness=true mismatches=0
+  vulkan      16.7162 us/op correctness=true mismatches=0
+  hipgraph    55.8151 us/op correctness=true mismatches=0
+  hip         56.0075 us/op correctness=true mismatches=0
+[2/3] independent_throughput/vopd/variant=mixed-int-float,n=32768,body=64;hip-wave=64 (32 operations; order vulkan -> hipgraph -> hip -> redline)
+  vulkan      15.1925 us/op correctness=true mismatches=0
+  hipgraph    63.3150 us/op correctness=true mismatches=0
+  hip         60.0325 us/op correctness=true mismatches=0
+  redline     19.5075 us/op correctness=true mismatches=0
+[3/3] single_kernel_aggressive/vopd/variant=mixed-int-float,n=32768,body=64;hip-wave=64 (1 operations; order hipgraph -> hip -> redline -> vulkan)
+  hipgraph    69.4000 us/op correctness=true mismatches=0
+  hip         61.4010 us/op correctness=true mismatches=0
+  redline     25.3600 us/op correctness=true mismatches=0
+  vulkan      21.4000 us/op correctness=true mismatches=0
+wrote results/gfx1201/2026-07-13-radiowave-all-losers/vopd-mixed-unroll8/results.json
+wrote results/gfx1201/2026-07-13-radiowave-all-losers/vopd-mixed-unroll8/REPORT.md
+Redline wins 0/3 (0.00%). Four-way placements: 1st 0, 2nd 3, 3rd 0, 4th 0.

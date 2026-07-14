@@ -24,6 +24,7 @@ pub const RL_ERR_RECORD: i32 = -3;
 pub const RL_ERR_COMPILE: i32 = -4;
 pub const RL_ERR_REPLAY: i32 = -5;
 pub const RL_ERR_HANDLE: i32 = -6;
+pub const RL_ERR_CERTIFICATION: i32 = -7;
 
 /// Real-GPU retained-PM4 replay (engine supplies its own kernels + kernargs).
 pub mod gpu;
@@ -75,7 +76,11 @@ pub extern "C" fn rl_graph_new() -> *mut RlGraph {
 
 /// Create an empty graph with explicit tuning.
 #[unsafe(no_mangle)]
-pub extern "C" fn rl_graph_new_tuned(lanes: usize, mode: RlMode, max_in_flight: usize) -> *mut RlGraph {
+pub extern "C" fn rl_graph_new_tuned(
+    lanes: usize,
+    mode: RlMode,
+    max_in_flight: usize,
+) -> *mut RlGraph {
     let tuning = match mode {
         RlMode::Latency => Tuning::latency(),
         RlMode::Overlap => Tuning::overlap(lanes),
@@ -163,8 +168,10 @@ pub unsafe extern "C" fn rl_graph_kernel(
     let Ok(name) = (unsafe { CStr::from_ptr(name) }).to_str() else {
         return RL_ERR_UTF8;
     };
-    let (Ok(grid), Ok(block)) = (Dim3::new(grid_x, grid_y, grid_z), Dim3::new(block_x, block_y, block_z))
-    else {
+    let (Ok(grid), Ok(block)) = (
+        Dim3::new(grid_x, grid_y, grid_z),
+        Dim3::new(block_x, block_y, block_z),
+    ) else {
         return RL_ERR_RECORD;
     };
     let Ok(launch) = KernelLaunch::new(name, grid, block) else {
@@ -227,7 +234,10 @@ pub unsafe extern "C" fn rl_graph_kernel(
 /// # Safety
 /// `g`, `out_exec` must be valid or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rl_graph_instantiate(g: *mut RlGraph, out_exec: *mut *mut RlGraphExec) -> i32 {
+pub unsafe extern "C" fn rl_graph_instantiate(
+    g: *mut RlGraph,
+    out_exec: *mut *mut RlGraphExec,
+) -> i32 {
     let Some(g) = (unsafe { g.as_ref() }) else {
         return RL_ERR_NULL;
     };

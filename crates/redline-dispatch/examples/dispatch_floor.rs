@@ -29,7 +29,8 @@ use std::time::Instant;
 
 use redline_dispatch::aql::{
     BatchFencePolicy, Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargPool,
-    LaunchGeometry, RecordedDispatch, Runtime, SingleQueueBatchGraph, SingleQueuePm4Ib, load_symbols,
+    LaunchGeometry, RecordedDispatch, Runtime, SingleQueueBatchGraph, SingleQueuePm4Ib,
+    load_symbols,
 };
 
 fn env_usize(key: &str, default: usize) -> usize {
@@ -120,7 +121,7 @@ fn measure_pm4_ib_host(
     let pool = KernargPool::discover(device)?;
     let kernel = exec.kernel(symbol)?;
     let kernarg = pool.allocate_for(kernel.metadata())?;
-    let mut cmd = Gfx12Pm4CommandBuffer::new();
+    let mut cmd = Gfx12Pm4CommandBuffer::new_stateful();
     for i in 0..n {
         let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1])?;
         cmd.dispatch(&kernel, geometry, 0, kernarg.address())?;
@@ -163,7 +164,7 @@ fn verify_pm4_execution(
     let mut kernarg = pool.allocate_for(kernel.metadata())?;
     kernarg.as_mut_bytes()[..8].copy_from_slice(&counter_addr.to_le_bytes());
 
-    let mut cmd = Gfx12Pm4CommandBuffer::new();
+    let mut cmd = Gfx12Pm4CommandBuffer::new_stateful();
     for i in 0..n {
         let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1])?;
         cmd.dispatch(&kernel, geometry, 0, kernarg.address())?;
@@ -199,20 +200,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // is the aggressive policy — correct ONLY when dispatches are genuinely
     // independent (disjoint writable state), as the no-op kernel here is.
     let policies = [
-        ("SystemEveryDispatch      (HIP per-dispatch floor)", BatchFencePolicy::SystemEveryDispatch),
-        ("SystemAcquireAgentRelease", BatchFencePolicy::SystemAcquireAgentRelease),
-        ("AgentEveryInternalDispatch", BatchFencePolicy::AgentEveryInternalDispatch),
-        ("BoundarySerialized       (redline safe / decode)", BatchFencePolicy::BoundarySerialized),
-        ("BoundaryIndependent      (redline aggressive / indep-only)", BatchFencePolicy::BoundaryIndependent),
+        (
+            "SystemEveryDispatch      (HIP per-dispatch floor)",
+            BatchFencePolicy::SystemEveryDispatch,
+        ),
+        (
+            "SystemAcquireAgentRelease",
+            BatchFencePolicy::SystemAcquireAgentRelease,
+        ),
+        (
+            "AgentEveryInternalDispatch",
+            BatchFencePolicy::AgentEveryInternalDispatch,
+        ),
+        (
+            "BoundarySerialized       (redline safe / decode)",
+            BatchFencePolicy::BoundarySerialized,
+        ),
+        (
+            "BoundaryIndependent      (redline aggressive / indep-only)",
+            BatchFencePolicy::BoundaryIndependent,
+        ),
     ];
 
     let mut results = Vec::with_capacity(policies.len());
     for (name, policy) in policies {
-        results.push((name, measure(&device, &exec, &symbol, n, m, warmup, policy)?));
+        results.push((
+            name,
+            measure(&device, &exec, &symbol, n, m, warmup, policy)?,
+        ));
     }
     let floor = results[0].1;
 
-    println!("  {:<52} {:>10} {:>10} {:>9}", "policy", "us", "us/disp", "vs floor");
+    println!(
+        "  {:<52} {:>10} {:>10} {:>9}",
+        "policy", "us", "us/disp", "vs floor"
+    );
     for (name, us) in &results {
         let per = us / n as f64;
         let ratio = if *us > 0.0 { floor / us } else { 0.0 };
@@ -243,11 +265,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pm4_aggr = measure_pm4_ib_host(&device, &exec, &symbol, n, m, warmup, false)?;
     println!(
         "  {:<52} {:>10.3} {:>10.4}   host latency/replay",
-        "PM4 retained IB — conservative (serialized)", pm4_cons, pm4_cons / n as f64
+        "PM4 retained IB — conservative (serialized)",
+        pm4_cons,
+        pm4_cons / n as f64
     );
     println!(
         "  {:<52} {:>10.3} {:>10.4}   host latency/replay",
-        "PM4 retained IB — aggressive (minimal fence)", pm4_aggr, pm4_aggr / n as f64
+        "PM4 retained IB — aggressive (minimal fence)",
+        pm4_aggr,
+        pm4_aggr / n as f64
     );
     Ok(())
 }

@@ -25,6 +25,8 @@
 
 #define RL_ERR_HANDLE -6
 
+#define RL_ERR_CERTIFICATION -7
+
 /**
  * Replay tuning mode. `lanes`/`max_in_flight` are read from the call site.
  */
@@ -42,6 +44,28 @@ typedef enum RlMode {
      */
     Throughput = 2,
 } RlMode;
+
+/**
+ * Scheduler profile recorded by a verified Radiowave manifest.
+ */
+typedef enum RlSchedulerProfile {
+    RlSchedulerUnknown = 0,
+    RlSchedulerDefault = 1,
+    RlSchedulerMaxIlp = 2,
+    RlSchedulerIterativeIlp = 3,
+    RlSchedulerMemoryClause = 4,
+    RlSchedulerPipelineIlp = 5,
+} RlSchedulerProfile;
+
+/**
+ * Mutable-resource read-cache classification from a verified Radiowave
+ * manifest. Missing modules/kernels return `RlMutableScalarOrUnknown` and therefore
+ * retain the fail-closed scalar-cache invalidation.
+ */
+typedef enum RlMutableReadCache {
+    RlMutableScalarOrUnknown = 0,
+    RlMutableVmemOnly = 1,
+} RlMutableReadCache;
 
 /**
  * A GPU binding: ROCr runtime + selected device + kernarg pool.
@@ -217,6 +241,21 @@ int32_t rl_gpu_load_module(const struct RlGpu *gpu,
                            struct RlModule **out);
 
 /**
+ * Load a code object only after verifying its Radiowave JSON manifest binds
+ * to these exact bytes and contains code-object inspection evidence.
+ *
+ * # Safety
+ * `gpu`/`out` valid or null; `code` and `manifest` valid for their stated
+ * lengths. The manifest need not be NUL-terminated.
+ */
+int32_t rl_gpu_load_module_radiowave(const struct RlGpu *gpu,
+                                     const uint8_t *code,
+                                     uintptr_t len,
+                                     const uint8_t *manifest,
+                                     uintptr_t manifest_len,
+                                     struct RlModule **out);
+
+/**
  * # Safety
  * `module` from [`rl_gpu_load_module`], or null.
  */
@@ -229,6 +268,41 @@ void rl_module_free(struct RlModule *module);
  * `module`/`symbol` valid or null; `symbol` NUL-terminated.
  */
 int64_t rl_module_kernarg_size(const struct RlModule *module, const char *symbol);
+
+/**
+ * Whether `module` was loaded with and verified against a Radiowave manifest.
+ *
+ * # Safety
+ * `module` from a module-load function, or null.
+ */
+bool rl_module_radiowave_certified(const struct RlModule *module);
+
+/**
+ * Scheduler profile in the verified manifest, or `RlSchedulerUnknown`.
+ *
+ * # Safety
+ * `module` from a module-load function, or null.
+ */
+enum RlSchedulerProfile rl_module_scheduler_profile(const struct RlModule *module);
+
+/**
+ * Wavefront width in the verified manifest, or zero for an uncertified/null
+ * module.
+ *
+ * # Safety
+ * `module` from a module-load function, or null.
+ */
+uint32_t rl_module_wavefront_size(const struct RlModule *module);
+
+/**
+ * Return the verified mutable-resource cache class for `symbol`. Unknown raw
+ * modules, missing symbols, invalid UTF-8, and null pointers fail closed.
+ *
+ * # Safety
+ * `module`/`symbol` valid or null; `symbol` NUL-terminated.
+ */
+enum RlMutableReadCache rl_module_kernel_read_cache(const struct RlModule *module,
+                                                    const char *symbol);
 
 /**
  * New PM4 builder bound to `gpu`. Free with [`rl_pm4_builder_free`] (or hand it
@@ -262,13 +336,28 @@ int32_t rl_pm4_dispatch(struct RlPm4Builder *builder,
                         uintptr_t kernarg_len);
 
 /**
- * Insert a compute-idle wait after the dispatches recorded so far (serialize a
- * dependency boundary).
+ * Insert a dependency boundary after the dispatches recorded so far: wait for
+ * the writer to retire, then invalidate scalar/vector read caches so the next
+ * dispatch sees its L2-committed output. Required for a non-atomic read-modify-
+ * write chain (decode); still the minimal gfx12 fence (L2/MALL stays coherent).
  *
  * # Safety
  * `builder` valid or null.
  */
 void rl_pm4_wait_idle(struct RlPm4Builder *builder);
+
+/**
+ * Insert a same-agent RMW dependency selected for the next consumer. A
+ * verified VMEM-only Radiowave consumer omits the unrelated scalar-cache
+ * invalidation; every raw, missing, or ambiguous consumer uses the generic
+ * fail-closed boundary.
+ *
+ * # Safety
+ * `builder`/`module` valid or null; `consumer_symbol` NUL-terminated.
+ */
+int32_t rl_pm4_wait_rmw(struct RlPm4Builder *builder,
+                        const struct RlModule *module,
+                        const char *consumer_symbol);
 
 /**
  * # Safety
@@ -288,6 +377,17 @@ int32_t rl_pm4_finalize(const struct RlGpu *gpu,
                         struct RlPm4Ib **out);
 
 /**
+ * Profiled form of [`rl_pm4_finalize`]. The resulting IB can be replayed with
+ * [`rl_pm4_replay_profiled`] to obtain the GPU execution span in microseconds.
+ *
+ * # Safety
+ * Identical to [`rl_pm4_finalize`].
+ */
+int32_t rl_pm4_finalize_profiled(const struct RlGpu *gpu,
+                                 struct RlPm4Builder *builder,
+                                 struct RlPm4Ib **out);
+
+/**
  * Replay the retained IB once (submit + wait for completion). Returns `RL_OK`.
  *
  * # Safety
@@ -295,6 +395,16 @@ int32_t rl_pm4_finalize(const struct RlGpu *gpu,
  * engine's kernargs must remain valid.
  */
 int32_t rl_pm4_replay(struct RlPm4Ib *ib);
+
+/**
+ * Replay a profiled retained IB and write its GPU execution span in
+ * microseconds to `out_gpu_us`.
+ *
+ * # Safety
+ * `ib` must come from [`rl_pm4_finalize_profiled`]; `out_gpu_us` must be a
+ * valid writable pointer. Pointee lifetimes match [`rl_pm4_replay`].
+ */
+int32_t rl_pm4_replay_profiled(struct RlPm4Ib *ib, double *out_gpu_us);
 
 /**
  * # Safety

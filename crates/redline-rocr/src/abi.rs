@@ -37,6 +37,7 @@ pub const AGENT_INFO_QUEUE_TYPE: u32 = 15;
 pub const AGENT_INFO_DEVICE: u32 = 17;
 pub const AMD_AGENT_INFO_BDFID: u32 = 0xA006;
 pub const AMD_AGENT_INFO_DOMAIN: u32 = 0xA00F;
+pub const AMD_AGENT_INFO_TIMESTAMP_FREQUENCY: u32 = 0xA016;
 
 pub const PROFILE_BASE: u32 = 0;
 pub const PROFILE_FULL: u32 = 1;
@@ -65,11 +66,14 @@ pub const KERNEL_DISPATCH_SETUP_DIMENSIONS: u16 = 0;
 pub const AMD_SEGMENT_GLOBAL: u32 = 0;
 pub const AMD_MEMORY_POOL_GLOBAL_FLAG_KERNARG_INIT: u32 = 1;
 pub const AMD_MEMORY_POOL_GLOBAL_FLAG_FINE_GRAINED: u32 = 2;
+pub const AMD_MEMORY_POOL_GLOBAL_FLAG_COARSE_GRAINED: u32 = 4;
 pub const AMD_MEMORY_POOL_INFO_SEGMENT: u32 = 0;
 pub const AMD_MEMORY_POOL_INFO_GLOBAL_FLAGS: u32 = 1;
 pub const AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALLOWED: u32 = 5;
 pub const AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_GRANULE: u32 = 6;
 pub const AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALIGNMENT: u32 = 7;
+pub const AMD_MEMORY_POOL_INFO_LOCATION: u32 = 17;
+pub const AMD_MEMORY_POOL_LOCATION_GPU: u32 = 1;
 pub const AMD_MEMORY_POOL_STANDARD_FLAG: u32 = 0;
 pub const AMD_MEMORY_POOL_EXECUTABLE_FLAG: u32 = 1 << 2;
 
@@ -175,6 +179,7 @@ pub type MemoryPoolGetInfoFn = unsafe extern "C" fn(MemoryPool, u32, *mut c_void
 pub type MemoryPoolAllocateFn =
     unsafe extern "C" fn(MemoryPool, usize, u32, *mut *mut c_void) -> Status;
 pub type MemoryPoolFreeFn = unsafe extern "C" fn(*mut c_void) -> Status;
+pub type MemoryCopyFn = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> Status;
 pub type AgentsAllowAccessFn =
     unsafe extern "C" fn(u32, *const Agent, *const u32, *const c_void) -> Status;
 
@@ -228,6 +233,7 @@ pub struct Symbols {
     pub memory_pool_get_info: MemoryPoolGetInfoFn,
     pub memory_pool_allocate: MemoryPoolAllocateFn,
     pub memory_pool_free: MemoryPoolFreeFn,
+    pub memory_copy: MemoryCopyFn,
     pub agents_allow_access: AgentsAllowAccessFn,
     pub code_object_reader_create_from_memory: CodeObjectReaderCreateFromMemoryFn,
     pub code_object_reader_destroy: CodeObjectReaderDestroyFn,
@@ -320,6 +326,7 @@ impl Symbols {
             memory_pool_get_info: symbol!("hsa_amd_memory_pool_get_info", MemoryPoolGetInfoFn),
             memory_pool_allocate: symbol!("hsa_amd_memory_pool_allocate", MemoryPoolAllocateFn),
             memory_pool_free: symbol!("hsa_amd_memory_pool_free", MemoryPoolFreeFn),
+            memory_copy: symbol!("hsa_memory_copy", MemoryCopyFn),
             agents_allow_access: symbol!("hsa_amd_agents_allow_access", AgentsAllowAccessFn),
             code_object_reader_create_from_memory: symbol!(
                 "hsa_code_object_reader_create_from_memory",

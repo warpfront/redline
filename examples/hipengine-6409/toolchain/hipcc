@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
+"""hipcc wrapper that substitutes only hipEngine's sequence timer with Redline."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+REAL_HIPCC = Path(os.environ.get("REDLINE_REAL_HIPCC", "/opt/rocm/bin/hipcc"))
+ROOT = Path(__file__).resolve().parents[3]
+OVERRIDE = ROOT / "examples/hipengine-6409/redline_timing_override.hpp"
+MANIFEST_TOOL = ROOT / "examples/hipengine-6409/hsaco_manifest.py"
+CAPI_INCLUDE = ROOT / "crates/redline-capi/include"
+CAPI_LIB = ROOT / "target/release"
+RADIOWAVE_BIN = ROOT / "target/release/radiowave"
+BUNDLER = Path("/opt/rocm/llvm/bin/clang-offload-bundler")
+
+
+def output_path(args: list[str]) -> Path | None:
+    try:
+        value = args[args.index("-o") + 1]
+    except (ValueError, IndexError):
+        return None
+    path = Path(value)
+    return path if path.is_absolute() else Path.cwd() / path
+
+
+def hip_source(args: list[str]) -> Path | None:
+    for arg in args:
+        if arg.endswith((".hip", ".cu")):
+            path = Path(arg)
+            return path if path.is_absolute() else Path.cwd() / path
+    return None
+
+
+def device_compile_flags(args: list[str], source: Path, output: Path) -> list[str]:
+    """Preserve every codegen flag while removing only host-link operands."""
+    result: list[str] = []
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+            continue
+        if arg == "-o":
+            skip = True
+            continue
+        path = Path(arg)
+        resolved = path if path.is_absolute() else Path.cwd() / path
+        if resolved in {source, output} or arg in {"-shared", "-fPIC"}:
+            continue
+        result.append(arg)
+    return result
+
+
+def quoted_define(name: str, path: Path) -> str:
+    return f'-D{name}="{path}"'
+
+
+def offload_arch(args: list[str]) -> str:
+    for index, arg in enumerate(args):
+        if arg.startswith("--offload-arch="):
+            return arg.split("=", 1)[1]
+        if arg == "--offload-arch" and index + 1 < len(args):
+            return args[index + 1]
+    return os.environ.get("HIPENGINE_HIP_ARCH", "gfx1201")
+
+
+def radiowave_wave64(source: Path, args: list[str]) -> bool:
+    if "-mwavefrontsize64" in args:
+        return True
+    if "-mno-wavefrontsize64" in args:
+        return False
+    lowered = source.name.lower()
+    if "hip_vopd_sweep" in lowered:
+        return True
+    if "hip_memory_waitcnt" in lowered and "-DHIPENGINE_MEM_MODE=3" in args:
+        return True
+    return False
+
+
+def radiowave_device_flags(args: list[str], source: Path, output: Path) -> list[str]:
+    result = device_compile_flags(args, source, output)
+    filtered: list[str] = []
+    skip = False
+    for arg in result:
+        if skip:
+            skip = False
+            continue
+        if arg == "--offload-arch":
+            skip = True
+            continue
+        if arg.startswith("--offload-arch=") or arg in {
+            "-mwavefrontsize64",
+            "-mno-wavefrontsize64",
+        }:
+            continue
+        filtered.append(arg)
+    return filtered
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if args == ["--version"] and os.environ.get("REDLINE_HIPCC_VERSION_SUFFIX"):
+        completed = subprocess.run([str(REAL_HIPCC), *args], check=False)
+        print(f"Redline sidecar build {os.environ['REDLINE_HIPCC_VERSION_SUFFIX']}")
+        return completed.returncode
+    source = hip_source(args)
+    output = output_path(args)
+    eligible = (
+        source is not None
+        and output is not None
+        and "--genco" not in args
+        and "-c" not in args
+        and "-E" not in args
+        and "-###" not in args
+    )
+    if not eligible:
+        return subprocess.call([str(REAL_HIPCC), *args])
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    bundle = output.with_suffix(output.suffix + ".redline.co")
+    hsaco = output.with_suffix(output.suffix + ".redline.hsaco")
+    manifest = output.with_suffix(output.suffix + ".redline.manifest.json")
+    radiowave_manifest = output.with_suffix(output.suffix + ".redline.radiowave.json")
+
+    if not RADIOWAVE_BIN.exists():
+        raise RuntimeError(f"Radiowave binary is missing: {RADIOWAVE_BIN}")
+    arch = offload_arch(args)
+    profile = os.environ.get("RADIOWAVE_SCHEDULER_PROFILE", "default")
+    radiowave = [
+        str(RADIOWAVE_BIN),
+        "compile",
+        "--source",
+        str(source),
+        "--output",
+        str(bundle),
+        "--manifest",
+        str(radiowave_manifest),
+        "--arch",
+        arch,
+        "--scheduler-profile",
+        profile,
+        "--hipcc",
+        str(REAL_HIPCC),
+        "--wave64" if radiowave_wave64(source, args) else "--wave32",
+    ]
+    if not any(arg in {"-ffast-math", "-Ofast"} for arg in args):
+        radiowave.append("--no-fast-math")
+    for flag in radiowave_device_flags(args, source, output):
+        radiowave.extend(("--arg", flag))
+    if subprocess.call(radiowave) != 0:
+        return 1
+
+    listed = subprocess.check_output(
+        [str(BUNDLER), "-type=o", f"-input={bundle}", "-list"], text=True
+    ).splitlines()
+    target = next((line for line in listed if "amdgcn-amd-amdhsa" in line), None)
+    if not target:
+        raise RuntimeError("hipcc output contains no AMDGPU offload bundle")
+    subprocess.check_call(
+        [
+            str(BUNDLER),
+            "-type=o",
+            f"-input={bundle}",
+            f"-targets={target}",
+            f"-output={hsaco}",
+            "-unbundle",
+        ]
+    )
+    subprocess.check_call([sys.executable, str(MANIFEST_TOOL), str(hsaco), "--out", str(manifest)])
+
+    compile_args = list(args)
+    # The C++ synthetic harnesses opt in by including the shared timing header.
+    # Production slice libraries use Python timing instead; for those, retain
+    # the ordinary shared-library build and only emit the adjacent HSACO and
+    # manifest sidecars consumed by redline_hip_timing.py.
+    if b"micro_timing_hip.hpp" in source.read_bytes():
+        source_index = next(i for i, arg in enumerate(compile_args) if arg.endswith((".hip", ".cu")))
+        timing_include = next(
+            (
+                parent / "benchmarks/micro/runners"
+                for parent in source.parents
+                if (parent / "benchmarks/micro/runners/micro_timing_hip.hpp").exists()
+            ),
+            source.parent,
+        )
+        injected = [
+            "-include",
+            str(OVERRIDE),
+            f"-I{source.parent}",
+            f"-I{timing_include}",
+            f"-I{CAPI_INCLUDE}",
+            quoted_define("REDLINE_DEFAULT_HSACO", bundle),
+            quoted_define("REDLINE_DEFAULT_HSACO_MANIFEST", manifest),
+            quoted_define("REDLINE_DEFAULT_RADIOWAVE_MANIFEST", radiowave_manifest),
+        ]
+        compile_args[source_index:source_index] = injected
+        compile_args.extend(
+            [
+                f"-L{CAPI_LIB}",
+                "-lredline_dispatch",
+                f"-Wl,-rpath,{CAPI_LIB}",
+            ]
+        )
+    return subprocess.call([str(REAL_HIPCC), *compile_args])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

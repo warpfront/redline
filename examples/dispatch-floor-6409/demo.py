@@ -17,7 +17,7 @@ Both arms verify correctness (every element == count). The headline speedup is
 host µs/dispatch (matched to hipEngine's `host_wall` domain).
 
     pip install redline-dispatch
-    ROCR_VISIBLE_DEVICES=3 python demo.py
+    ROCR_VISIBLE_DEVICES=0 python demo.py
 """
 import os
 import shutil
@@ -69,14 +69,18 @@ def run_hipgraph(count):
 def run_redline(gpu, mod, count):
     grid_blocks = (N + BLOCK - 1) // BLOCK
     workitems = grid_blocks * BLOCK
-    out = gpu.alloc(N * 4)  # zeroed
+    out = gpu.alloc_device(N * 4)  # zeroed GPU-local memory
     kernarg = out.address().to_bytes(8, "little") + N.to_bytes(4, "little")
     dispatches = [("gmb_noop_kernel.kd", (workitems, 1, 1), (BLOCK, 1, 1), 0, kernarg, True)
                   for _ in range(count)]
     ib = gpu.build(mod, dispatches)
     ib.replay()  # correctness pass from the zeroed buffer
-    val = struct.unpack("<f", struct.pack("<I", out.read_u32(0)))[0]
-    correct = val == float(count)
+    # Validate the complete timed grid, not only element zero. A partial-grid
+    # dispatch bug must not be allowed to certify the PM4 timing.
+    correct = all(
+        struct.unpack("<f", struct.pack("<I", word))[0] == float(count)
+        for word in out.read_u32s()
+    )
     for _ in range(WARMUP):
         ib.replay()
     samples = []

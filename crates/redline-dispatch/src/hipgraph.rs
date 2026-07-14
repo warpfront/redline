@@ -57,8 +57,8 @@
 use std::num::NonZeroUsize;
 
 use crate::{
-    Access, CompileError, CompileOptions, CompiledPlan, DeviceRegion, DispatchBackend, KernelLaunch,
-    NodeId, RecordError, Recorder, ReplayMode, ReplayToken, ResourceId,
+    Access, CompileError, CompileOptions, CompiledPlan, DeviceRegion, DispatchBackend,
+    KernelLaunch, NodeId, RecordError, Recorder, ReplayMode, ReplayToken, ResourceId,
 };
 
 /// Replay tuning knobs.

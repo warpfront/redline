@@ -16,10 +16,11 @@ hazard-checked safety.
 
 On RDNA, Vulkan/RADV command-buffer replay is measurably faster than HIP graph
 replay at the tiny-dispatch floor — the well-documented HIP dispatch-floor gap
-(see e.g. [ROCm/ROCm#6409](https://github.com/ROCm/ROCm/issues/6409)). The cause
-is not the kernels; it is that HIP re-submits and applies a system-scope
-acquire/release fence *per dispatch*, while a retained command buffer submits
-once with only the fences the data flow requires.
+(see e.g. [ROCm/ROCm#6409](https://github.com/ROCm/ROCm/issues/6409)). It is not
+one problem: HIP pays a per-dispatch submission/dependency floor, while some
+kernels also expose ACO-versus-LLVM lowering differences. A retained command
+buffer removes the first cost by submitting once with only the fences the data
+flow requires.
 
 Redline closes that gap **on the pure ROCm/HIP stack**:
 
@@ -43,10 +44,60 @@ timestamps:
 | Real single-token dispatch DAG  |    1.076×  |  1.059–1.060×   |
 | Expanded independent launch set |    1.378×  |  1.265–1.292×   |
 
-The independent-set GPU lower bounds remain above the historical RADV **1.14×**
-result on the same launch set. A standalone reproduction harness is being lifted
-out alongside these crates; until then the ratios above are reported as
-certified in the originating integration, not yet as a one-command repro here.
+The standalone Hipfire-native ROCm issue 6409 harness now covers 45 shapes in
+serial, independent, and aggressive single-kernel modes. The current
+Radiowave-certified HIP policy and minimal same-agent RMW boundary take
+**121/133 four-way first places (90.98%)**, beat Vulkan strictly in **121/133
+(90.98%)**, and take **39/45 safe serial** plus **40/43 aggressive** rows. The
+941-launch correct RMW chain runs at **0.7549 us/dispatch**, versus Vulkan at
+**1.0400 us**. All 532 row-runs in the counterbalanced four-pass gfx1201 A/B
+passed all four backend CPU oracles. See the
+[certified-boundary report](examples/hipfire-6409/results/gfx1201/2026-07-13-radiowave-vmem-final/comparison/REPORT.md)
+and [aggregate artifact](examples/hipfire-6409/results/gfx1201/2026-07-13-radiowave-vmem-final/comparison/aggregate.json).
+
+The result also transfers back to the pinned HipEngine #6409 suite without
+replacing its kernels: Radiowave + Redline beats Vulkan in **192/212 matched
+kernel rows (90.57%)**, up from 186/212 before the full compiler/submission
+contract was integrated. All 224 Redline rows pass their CPU oracles. See the
+[HipEngine integration report](examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/REPORT.md)
+and [matched summary](examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/summary.json).
+
+For the historical wave control, a counterbalanced
+all32/targeted64/blanket64 comparison passed all 133 four-way CPU oracles in
+every replicate. Targeted wave64 took 94/133 aggregate first places and its
+unfenced single-kernel mode took 36/43. See the
+[`hipfire-6409` wave-policy report](examples/hipfire-6409/results/gfx1201/2026-07-12-wave-policy-comparison/REPORT.md)
+and [aggregate artifact](examples/hipfire-6409/results/gfx1201/2026-07-12-wave-policy-comparison/aggregate.json).
+
+The first low-margin tuning pass with ordinary hipcc buffer
+operations raises that policy to **98/133** aggregate firsts: packed Q8/Q4
+independent throughput and the aggressive gather row cross Vulkan, with all
+133 correctness oracles still passing. See the
+[loser-tuning report](examples/hipfire-6409/results/gfx1201/2026-07-12-loser-tuning/REPORT.md)
+and [tuned aggregate](examples/hipfire-6409/results/gfx1201/2026-07-12-loser-tuning/full-buffer/aggregate.json).
+
+The accepted lowering rules live in **Radiowave**, Redline's compiler
+policy crate. Callers compile HIP through its Rust API or CLI; Radiowave
+force-includes reviewed gfx11/gfx12 buffer-resource helpers, selects tested
+wave/workgroup/source variants, invokes the installed LLVM/hipcc backend,
+inspects the AMDGPU code object for instruction-class and register/spill
+regressions, certifies whether mutable reads are VMEM-only for Redline's
+minimal cache boundary, and emits a hashed JSON build manifest. Scalar or
+ambiguous consumers fail closed to the broader same-agent shader-cache
+invalidation. It is a policy layer
+around upstream ROCm, not a compiler fork or Vulkan path. See
+[`crates/radiowave`](crates/radiowave/README.md).
+
+The same contract is exposed outside Rust. The C ABI function
+`rl_gpu_load_module_radiowave` and Python `Gpu.load_module(code, manifest)`
+bind the exact code-object bytes to the manifest before loading them. Their
+module queries expose the certified scheduler profile, wavefront width, and
+per-kernel mutable-read cache class. `rl_pm4_wait_rmw` in C and `Gpu.build()`
+in Python then select the VMEM-only boundary from the *next consumer*; raw
+modules, stale manifests, missing symbols, and scalar/unknown consumers fail
+closed to the generic same-agent boundary. See the
+[`redline-capi` header](crates/redline-capi/include/redline_dispatch.h) and
+[`redline-py` example](crates/redline-py/README.md).
 
 ## Migrating from HipGraph (or a Vulkan command buffer)
 
@@ -104,6 +155,9 @@ stream; raise it to overlap independent branches.
 
 ## Crates
 
+- **`radiowave`** — the HIP compiler policy boundary: reviewed lowering
+  helpers, wave/target configuration, LLVM/hipcc invocation, code-object
+  inspection, and reproducible build manifests.
 - **`redline-dispatch`** — backend-neutral record/replay core: the dispatch DAG,
   hazard checking, minimal-fence derivation, the `hipgraph` adapter, and HIP /
   public-AQL replay backends.

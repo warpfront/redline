@@ -1,0 +1,116 @@
+{
+  "kind": "hipfire_hipengine_exact_source_control",
+  "schema_version": 2,
+  "ratio_convention": "Redline GPU time / Vulkan GPU time; below 1.0 favors Redline",
+  "correctness": {
+    "direct_rust_vopd_policy_observations": "48/48 pass",
+    "direct_rust_memory_policy_observations": "48/48 pass",
+    "production_c_abi_rows": "56/56 pass"
+  },
+  "matched_hipengine_vulkan_control": {
+    "method": "exact HipEngine HIP code objects and fixtures through Hipfire Redline, compared with the retained matched HipEngine Vulkan implementations",
+    "bench_n": 88,
+    "wins": 85,
+    "win_percent": 96.5909090909091,
+    "redline_over_vulkan_geomean": 0.370343,
+    "families": [
+      {
+        "family": "vopd",
+        "wins": 16,
+        "bench_n": 16,
+        "redline_over_vulkan_geomean": 0.568055
+      },
+      {
+        "family": "memory-waitcnt",
+        "wins": 13,
+        "bench_n": 16,
+        "redline_over_vulkan_geomean": 0.859077
+      },
+      {
+        "family": "dense-q8",
+        "wins": 40,
+        "bench_n": 40,
+        "redline_over_vulkan_geomean": 0.215256
+      },
+      {
+        "family": "q4-selected-dual",
+        "wins": 10,
+        "bench_n": 10,
+        "redline_over_vulkan_geomean": 0.457471
+      },
+      {
+        "family": "q6-x8-selected-down",
+        "wins": 6,
+        "bench_n": 6,
+        "redline_over_vulkan_geomean": 0.32867
+      }
+    ]
+  },
+  "retained_hipfire_vulkan_diagnostic": {
+    "method": "reuse the retained Hipfire Vulkan rows as a second reference; the Redline and Vulkan measurements are cross-session and the Vulkan implementations are not byte/source-identical to HipEngine Vulkan",
+    "status": "diagnostic only, not a controlled same-session substitution",
+    "bench_n": 88,
+    "hipfire_custom_source_wins": 45,
+    "exact_hipengine_source_wins": 65,
+    "delta_wins": 20,
+    "exact_source_win_percent": 73.86363636363636,
+    "exact_source_redline_over_vulkan_geomean": 0.478253,
+    "families": [
+      {
+        "family": "vopd",
+        "hipfire_custom_source_wins": 5,
+        "exact_source_wins": 8,
+        "bench_n": 16
+      },
+      {
+        "family": "memory-waitcnt",
+        "hipfire_custom_source_wins": 4,
+        "exact_source_wins": 9,
+        "bench_n": 16
+      },
+      {
+        "family": "dense-q8",
+        "hipfire_custom_source_wins": 32,
+        "exact_source_wins": 40,
+        "bench_n": 40
+      },
+      {
+        "family": "q4-selected-dual",
+        "hipfire_custom_source_wins": 2,
+        "exact_source_wins": 2,
+        "bench_n": 10
+      },
+      {
+        "family": "q6-x8-selected-down",
+        "hipfire_custom_source_wins": 2,
+        "exact_source_wins": 6,
+        "bench_n": 6
+      }
+    ],
+    "full_matrix_row_replacement_estimate": {
+      "measured_hipfire_custom_source_wins": 185,
+      "estimated_exact_source_wins": 205,
+      "bench_n": 240,
+      "estimated_win_percent": 85.41666666666667,
+      "status": "not a measured result; do not report as a new 240-row run"
+    }
+  },
+  "memory_exact": {
+    "hipengine_compatible_wins_vs_hipengine_vulkan": 13,
+    "hipfire_safe_wins_vs_hipengine_vulkan": 13,
+    "bench_n": 16,
+    "hipengine_compatible_redline_over_hipengine_vulkan_geomean": 0.859077,
+    "hipfire_safe_redline_over_hipengine_vulkan_geomean": 0.885132,
+    "rust_compatible_over_c_abi_geomean": 0.99022,
+    "rust_safe_over_c_abi_geomean": 1.02025
+  },
+  "production_exact": {
+    "wins_vs_hipengine_vulkan": 56,
+    "bench_n": 56,
+    "redline_over_retained_hipengine_vulkan_geomean": 0.2577,
+    "serial_redline_over_retained_hipengine_vulkan_geomean": 0.269843,
+    "independent_redline_over_retained_hipengine_vulkan_geomean": 0.246104,
+    "preheat_replays_per_measured_ib": 1000,
+    "vulkan_comparison": "retained correctness-gated HipEngine suite artifact; symmetric high-preheat rerun rejected because upstream warmup also multiplies CPU oracle fixtures"
+  }
+}
