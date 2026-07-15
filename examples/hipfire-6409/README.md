@@ -150,6 +150,19 @@ The corresponding full serial-plus-independent Q4 certifications take
 [gfx1151 Q1 control](results/gfx1151/2026-07-14-redline-current-q1-independent/REPORT.md),
 and [gfx1151 Q4 certification](results/gfx1151/2026-07-14-redline-multiqueue-q4/REPORT.md).
 
+The local gfx1201 reproduction has a different queue-count optimum. With the
+same Radiowave HSACO hashes in every run, Q1 wins **88/120** independent rows,
+Q2 wins **99/120**, and Q4 wins only **15/120**. Q2 gives a **1.028x** median
+Redline speedup over Q1, converts 11 losses with no regressions, and takes
+**187/240 rows (77.92%)** in the full serial-plus-independent certification.
+Q4 is a useful negative control: its median independent Redline time is
+**6.525x** Q2, so four-way queue fan-out is not a portable default for gfx12.
+All rows in all four runs pass their CPU oracle. See the
+[gfx1201 Q1 control](results/gfx1201/2026-07-14-redline-current-q1-independent/REPORT.md),
+[gfx1201 Q2 causal run](results/gfx1201/2026-07-14-redline-multiqueue-q2-independent/REPORT.md),
+[gfx1201 Q2 certification](results/gfx1201/2026-07-14-redline-multiqueue-q2/REPORT.md),
+and [gfx1201 Q4 negative control](results/gfx1201/2026-07-14-redline-multiqueue-q4/REPORT.md).
+
 ## Legacy Radiowave and minimal-boundary result
 
 The fail-closed Radiowave/Redline path raises Redline to **121/133 four-way
