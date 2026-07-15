@@ -10,15 +10,17 @@ mod vulkan_backend;
 use anyhow::{bail, Context, Result};
 use common::{median, Distribution, Measurement};
 use hip_backend::{embedded_code_object, HipBackend};
+use radiowave::recipes::{RecipeCatalog, SelectionMode};
 use radiowave::{SchedulerProfile, Wavefront};
 use redline_backend::{RedlineBackend, RmwBoundary};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use spec::{
-    fixture, matrix, validate, Correctness, MatrixProfile, RowSpec, TimingMode, WavePolicy,
+    apply_radiowave_runtime_policy_with_catalog_and_mode, fixture, matrix_with_catalog_and_mode,
+    validate, Correctness, MatrixProfile, RowSpec, TimingMode, WavePolicy,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -40,11 +42,19 @@ struct Config {
     list: bool,
     wave_policy: WavePolicy,
     rmw_boundary: RmwBoundary,
+    redline_queue_count: usize,
     scheduler_profile: SchedulerProfile,
+    scheduler_profile_explicit: bool,
     interleave_aggressive_b32: bool,
     mixed_paired_hash: bool,
     matrix_profile: MatrixProfile,
     include_aggressive: bool,
+    target_architecture: String,
+    recipe_catalog: RecipeCatalog,
+    recipe_catalog_source: String,
+    recipe_mode: SelectionMode,
+    recipe_allowlist: BTreeSet<String>,
+    active_backends: Vec<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,8 +92,11 @@ struct RowResult {
     grid_groups: u32,
     iterations: usize,
     logical_operations: usize,
+    redline_queue_count: usize,
     redline_submission_policy: &'static str,
     redline_dependency_cache_policies: BTreeMap<String, String>,
+    radiowave_recipes: Vec<String>,
+    radiowave_lowerings: Vec<radiowave::recipes::SourceLowering>,
     backend_order: Vec<String>,
     backends: BTreeMap<String, BackendResult>,
 }
@@ -103,7 +116,13 @@ struct Artifact {
 
 fn main() -> Result<()> {
     let config = parse_args()?;
-    let all_specs = matrix(config.matrix_profile, config.wave_policy);
+    let all_specs = matrix_with_catalog_and_mode(
+        config.matrix_profile,
+        config.wave_policy,
+        &config.target_architecture,
+        &config.recipe_catalog,
+        config.recipe_mode,
+    );
     let timing_modes = selected_timing_modes(config.include_aggressive);
     if config.list {
         for &mode in &timing_modes {
@@ -119,12 +138,13 @@ fn main() -> Result<()> {
     println!("initializing Hipfire HIP bridge");
     let hip = HipBackend::new()?;
     println!("initializing Redline retained-PM4 backend");
-    let redline = RedlineBackend::new(config.rmw_boundary)?;
+    let redline = RedlineBackend::new(config.rmw_boundary, config.redline_queue_count)?;
     println!("initializing RADV Vulkan backend");
-    let vulkan = VulkanBackend::new()?;
-    if hip.arch != "gfx1201" {
+    let vulkan = VulkanBackend::new(Some(&redline.pci))?;
+    if hip.arch != config.target_architecture {
         bail!(
-            "this direct-PM4 benchmark is pinned to gfx1201, HIP reports {}",
+            "Radiowave target {} does not match HIP device {}",
+            config.target_architecture,
             hip.arch
         );
     }
@@ -161,33 +181,22 @@ fn main() -> Result<()> {
 
     let mut rows = Vec::with_capacity(selected.len());
     for (row_index, (mode, mut spec)) in selected.into_iter().enumerate() {
-        spec.scheduler_profile = config.scheduler_profile;
         if config.wave_policy == WavePolicy::RadiowaveTuned {
-            match spec.kernel {
-                "vopd_dequant" => spec.kernel = "vopd_dequant_chunk16",
-                "vopd_mixed" if config.mixed_paired_hash => spec.kernel = "vopd_mixed_pair",
-                _ => {}
-            }
+            apply_radiowave_runtime_policy_with_catalog_and_mode(
+                &mut spec,
+                mode,
+                &config.target_architecture,
+                config.interleave_aggressive_b32,
+                config.mixed_paired_hash,
+                &config.recipe_catalog,
+                config.recipe_mode,
+            )?;
         }
-        if config.wave_policy == WavePolicy::RadiowaveTuned && spec.kernel == "memory_interleave4" {
-            match mode {
-                TimingMode::IndependentThroughput => {
-                    spec.kernel = "memory_interleave4_buffer";
-                }
-                TimingMode::SingleKernelAggressive => {
-                    spec.kernel = if config.interleave_aggressive_b32 {
-                        "memory_interleave4_block64_b32"
-                    } else {
-                        "memory_interleave4_block64"
-                    };
-                    spec.block = 64;
-                    spec.grid_groups = spec.n0.div_ceil(spec.block);
-                }
-                TimingMode::SerialLatency => {}
-            }
+        if config.scheduler_profile_explicit || config.wave_policy != WavePolicy::RadiowaveTuned {
+            spec.scheduler_profile = config.scheduler_profile;
         }
         let fixture = fixture(&mut spec);
-        let mut order = BACKENDS.to_vec();
+        let mut order = config.active_backends.clone();
         let order_len = order.len();
         order.rotate_left(row_index % order_len);
         println!(
@@ -222,6 +231,7 @@ fn main() -> Result<()> {
             }
             backends.insert((*backend).to_owned(), result);
         }
+        let redline_queue_count = redline.queue_count_for(mode, spec.logical_iterations(mode));
         rows.push(RowResult {
             key: spec.key(mode),
             mode,
@@ -239,30 +249,60 @@ fn main() -> Result<()> {
             grid_groups: spec.grid_groups,
             iterations: spec.iterations,
             logical_operations: spec.logical_iterations(mode),
-            redline_submission_policy: redline_submission_policy(&spec, mode),
+            redline_queue_count,
+            redline_submission_policy: redline_submission_policy(&spec, mode, redline_queue_count),
             redline_dependency_cache_policies: redline_dependency_cache_policies(
                 &redline, &spec, mode,
             ),
+            radiowave_recipes: spec.radiowave_recipes.iter().cloned().collect(),
+            radiowave_lowerings: spec.radiowave_lowerings.iter().cloned().collect(),
             backend_order: order.into_iter().map(str::to_owned).collect(),
             backends,
         });
     }
 
-    let summary = summarize(&rows);
+    let summary = summarize(&rows, &config.active_backends);
     let hipengine_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(HIPENGINE_SUMMARY);
     let hipengine_baseline = fs::read(&hipengine_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-    let selected_wave32 = embedded_code_object(config.scheduler_profile, Wavefront::Wave32);
-    let selected_wave64 = embedded_code_object(config.scheduler_profile, Wavefront::Wave64);
+    let scheduler_profiles_used = SchedulerProfile::ALL
+        .into_iter()
+        .filter(|profile| rows.iter().any(|row| row.scheduler_profile == *profile))
+        .collect::<Vec<_>>();
+    let hsaco_wave32_sha256 = scheduler_profiles_used
+        .iter()
+        .map(|profile| {
+            let code = embedded_code_object(*profile, Wavefront::Wave32);
+            (
+                profile.as_str().to_owned(),
+                format!("{:x}", Sha256::digest(code.code)),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let hsaco_wave64_sha256 = scheduler_profiles_used
+        .iter()
+        .map(|profile| {
+            let code = embedded_code_object(*profile, Wavefront::Wave64);
+            (
+                profile.as_str().to_owned(),
+                format!("{:x}", Sha256::digest(code.code)),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let scheduler_policy = if config.scheduler_profile_explicit {
+        config.scheduler_profile.as_str()
+    } else {
+        "radiowave-recipe-or-default"
+    };
     let artifact = Artifact {
         schema_version: 2,
-        kind: "hipfire-6409-four-way",
+        kind: "hipfire-6409-backend-comparison",
         generated_unix_seconds: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
         methodology: json!({
             "timing_modes": {
                 "serial_latency": "One true output RMW chain. Every operation is separated by the backend's required compute-write to compute-read/write dependency. Redline reuses immutable kernargs when every operation has identical arguments.",
-                "independent_throughput": "Disjoint output slices with no inter-operation dependency; HIP and Vulkan use up to four queues/streams while Redline uses one retained IB. Single-stage Redline rows omit dependency fences from the timed IB.",
+                "independent_throughput": "Disjoint output slices with no inter-operation dependency; HIP, Vulkan, and Redline use up to four queues/streams. Redline release-publishes one retained PM4 IB per active lane before ringing any doorbell and measures the earliest GPU start through the latest GPU end. Serial RMW rows remain single-queue.",
                 "single_kernel_aggressive": "Exactly one dispatch and one output operation. Redline's timed retained IB contains no entry acquire or dependency fence; the HIP-to-PM4 ownership acquire is replayed and waited outside the GPU timestamp window. Two-stage rows are excluded."
             },
             "timers": {
@@ -271,8 +311,9 @@ fn main() -> Result<()> {
                 "redline": "GPU-written PM4 COPY_DATA/RELEASE_MEM timestamps",
                 "vulkan": "Vulkan timestamp queries"
             },
-            "code_identity": "For every row, HIP, HipGraph, and Redline load exactly the same hipcc code object selected by the recorded wave and scheduler policies. Vulkan runs matched GLSL algorithms compiled for RADV.",
-            "scheduler_profile": config.scheduler_profile.as_str(),
+            "code_identity": "For every row, HIP, HipGraph, and Redline load exactly the same Radiowave-produced hipcc code object selected by the recorded wave, recipe, and scheduler policies. Vulkan runs matched GLSL algorithms compiled for RADV.",
+            "scheduler_profile": scheduler_policy,
+            "radiowave_recipe_mode": selection_mode_name(config.recipe_mode),
             "wave_policy": {
                 "selected": config.wave_policy.as_str(),
                 "all_wave32": "Every HIP-family row selects the wave32 code object.",
@@ -280,7 +321,7 @@ fn main() -> Result<()> {
                 "radiowave_tuned": "The targeted kernels, interleave, and every VOPD variant select wave64; dispatch_tiny uses one 32-lane workgroup because only lane zero is live; interleave selects buffer output for independent throughput and B128 loads with a one-wave HIP workgroup for aggressive latency while Vulkan retains its native shader geometry.",
                 "blanket_wave64": "Every kernel family with any prior Vulkan-over-Redline row selects wave64."
             },
-            "correctness": "Every timed sequence is reset before timing and checked against a CPU oracle after its final sample. Only four-way correctness-passing rows are ranked.",
+            "correctness": "Every timed sequence is reset before timing and checked against a CPU oracle after its final sample. Only rows passing every selected backend are ranked.",
             "matrix_parity": "The default hipengine profile reproduces the pinned HipEngine f2c row set: the same family, operation, shape/sweep axes, repetition count, and serial/independent modes, totaling 112 core configurations plus 8 dispatch controls per mode. Each row is deliberately fired through Hipfire's existing Radiowave-tuned launch policy, so wave size, workgroup geometry, source variant, ABI, and machine code are optimization variables rather than parity constraints.",
             "vulkan_memory": "Device-local buffers with staging transfers outside the timing window.",
             "redline_dependency": format!("{} Every Redline sample completes its HIP-to-PM4 system ownership acquire before the timed retained tape. Independent single-stage and aggressive single-kernel tapes contain no dependency fence.", redline.rmw_boundary.description())
@@ -290,6 +331,7 @@ fn main() -> Result<()> {
             "hipfire_device": "HIP ordinal 0",
             "redline_device": redline.name,
             "redline_pci": redline.pci,
+            "redline_independent_queues": config.redline_queue_count,
             "vulkan_device": vulkan.name,
             "vulkan_pci": vulkan.pci,
             "vulkan_compute_queues": vulkan.queue_count,
@@ -297,8 +339,8 @@ fn main() -> Result<()> {
             "repository_dirty": !command_output("git", &["status", "--porcelain"]).is_empty(),
             "hipfire_redline_commit": command_output("git", &["-C", "../../engines/hipfire", "rev-parse", "HEAD"]),
             "hipfire_clone_dirty": !command_output("git", &["-C", "../../engines/hipfire", "status", "--porcelain"]).is_empty(),
-            "hsaco_wave32_sha256": format!("{:x}", Sha256::digest(selected_wave32.code)),
-            "hsaco_wave64_sha256": format!("{:x}", Sha256::digest(selected_wave64.code)),
+            "hsaco_wave32_sha256_by_scheduler": hsaco_wave32_sha256,
+            "hsaco_wave64_sha256_by_scheduler": hsaco_wave64_sha256,
             "hipcc": command_output("/opt/rocm/bin/hipcc", &["--version"]),
             "vulkan_summary": command_output("vulkaninfo", &["--summary"]),
         }),
@@ -308,14 +350,22 @@ fn main() -> Result<()> {
             "filter": config.filter,
             "max_rows": config.max_rows,
             "wave_policy": config.wave_policy.as_str(),
-            "scheduler_profile": config.scheduler_profile.as_str(),
+            "radiowave_target_architecture": config.target_architecture,
+            "radiowave_recipe_schema": radiowave::recipes::RECIPE_SCHEMA_VERSION,
+            "radiowave_recipe_catalog": config.recipe_catalog_source,
+            "radiowave_recipe_mode": selection_mode_name(config.recipe_mode),
+            "radiowave_recipe_allowlist": config.recipe_allowlist,
+            "scheduler_profile": scheduler_policy,
+            "scheduler_profile_override": config.scheduler_profile_explicit.then(|| config.scheduler_profile.as_str()),
             "interleave_aggressive_b32": config.interleave_aggressive_b32,
             "mixed_paired_hash": config.mixed_paired_hash,
             "redline_rmw_boundary": config.rmw_boundary.as_str(),
+            "redline_independent_queues": config.redline_queue_count,
             "matrix_profile": config.matrix_profile.as_str(),
             "include_aggressive_extension": config.include_aggressive,
             "selected_rows": rows.len(),
             "logical_matrix_rows": timing_modes.iter().copied().map(|mode| all_specs.iter().filter(|spec| spec.supports_mode(mode)).count()).sum::<usize>(),
+            "backends": config.active_backends,
         }),
         rows,
         summary,
@@ -331,7 +381,7 @@ fn main() -> Result<()> {
 
     let matched = artifact.summary["matched_rows"].as_u64().unwrap_or(0);
     if matched == 0 {
-        bail!("the run produced no correctness-passing four-way rows");
+        bail!("the run produced no correctness-passing comparison rows");
     }
     Ok(())
 }
@@ -364,7 +414,10 @@ fn result_from_measurement(
     }
 }
 
-fn redline_submission_policy(spec: &RowSpec, mode: TimingMode) -> &'static str {
+fn redline_submission_policy(spec: &RowSpec, mode: TimingMode, queue_count: usize) -> &'static str {
+    if mode == TimingMode::IndependentThroughput && queue_count > 1 {
+        return "independent_lane_local_retained_pm4";
+    }
     if spec.second_kernel.is_none()
         && (mode != TimingMode::SerialLatency || spec.logical_iterations(mode) == 1)
     {
@@ -399,9 +452,9 @@ fn redline_dependency_cache_policies(
     policies
 }
 
-fn summarize(rows: &[RowResult]) -> Value {
+fn summarize(rows: &[RowResult], active_backends: &[&str]) -> Value {
     let mut matched_rows = 0usize;
-    let mut placements = BACKENDS
+    let mut placements = active_backends
         .iter()
         .map(|&name| (name.to_owned(), [0usize; 4]))
         .collect::<BTreeMap<_, _>>();
@@ -410,7 +463,7 @@ fn summarize(rows: &[RowResult]) -> Value {
     let mut family: BTreeMap<String, Vec<&RowResult>> = BTreeMap::new();
 
     for row in rows {
-        if !BACKENDS
+        if !active_backends
             .iter()
             .all(|name| row.backends.get(*name).is_some_and(BackendResult::accepted))
         {
@@ -421,7 +474,7 @@ fn summarize(rows: &[RowResult]) -> Value {
             .entry(format!("{}/{}", row.mode.as_str(), row.family))
             .or_default()
             .push(row);
-        let mut ranked = BACKENDS
+        let mut ranked = active_backends
             .iter()
             .map(|&name| (name, row.backends[name].median_us().unwrap()))
             .collect::<Vec<_>>();
@@ -430,7 +483,7 @@ fn summarize(rows: &[RowResult]) -> Value {
             placements.get_mut(*name).unwrap()[place] += 1;
         }
         let redline_us = row.backends["redline"].median_us().unwrap();
-        for other in ["vulkan", "hipgraph", "hip"] {
+        for &other in active_backends.iter().filter(|&&name| name != "redline") {
             let other_us = row.backends[other].median_us().unwrap();
             pairwise
                 .entry(other.to_owned())
@@ -499,7 +552,9 @@ fn summarize(rows: &[RowResult]) -> Value {
     let family_json = family.into_iter().map(|(key, group)| {
         let wins = group.iter().filter(|row| {
             let rl = row.backends["redline"].median_us().unwrap();
-            BACKENDS.iter().all(|name| rl <= row.backends[*name].median_us().unwrap())
+            active_backends
+                .iter()
+                .all(|name| rl <= row.backends[*name].median_us().unwrap())
         }).count();
         (key, json!({"redline_wins": wins, "bench_n": group.len(), "win_percent": percent(wins, group.len())}))
     }).collect::<serde_json::Map<_, _>>();
@@ -542,7 +597,7 @@ fn write_artifact(path: &Path, artifact: &Artifact) -> Result<()> {
 fn render_console_summary(artifact: &Artifact) -> String {
     let s = &artifact.summary;
     format!(
-        "Redline wins {}/{} ({:.2}%). Four-way placements: 1st {}, 2nd {}, 3rd {}, 4th {}.",
+        "Redline wins {}/{} ({:.2}%). Placements: 1st {}, 2nd {}, 3rd {}, 4th {}.",
         s["redline_wins"].as_u64().unwrap_or(0),
         s["matched_rows"].as_u64().unwrap_or(0),
         s["redline_win_percent"].as_f64().unwrap_or(0.0),
@@ -555,6 +610,12 @@ fn render_console_summary(artifact: &Artifact) -> String {
 
 fn render_report(artifact: &Artifact) -> String {
     let s = &artifact.summary;
+    let active_backends = artifact.config["backends"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
     let wave_policy = artifact.config["wave_policy"].as_str().unwrap_or("unknown");
     let scheduler_profile = artifact.config["scheduler_profile"]
         .as_str()
@@ -566,18 +627,18 @@ fn render_report(artifact: &Artifact) -> String {
         .as_bool()
         .unwrap_or(false);
     let mut out = String::new();
-    out.push_str("# Hipfire/Redline ROCm issue 6409 benchmark\n\n");
+    out.push_str("# Hipfire/Redline ROCm issue 6409 backend comparison\n\n");
     out.push_str(&format!(
         "Correctness-gated result: **Redline wins {}/{} rows ({:.2}%)**.\n\n",
         s["redline_wins"].as_u64().unwrap_or(0),
         s["matched_rows"].as_u64().unwrap_or(0),
         s["redline_win_percent"].as_f64().unwrap_or(0.0),
     ));
-    out.push_str("## Four-way placement table\n\n");
+    out.push_str("## Placement table\n\n");
     out.push_str(
         "| Backend | 1st | 2nd | 3rd | 4th | Win % | N |\n|---|---:|---:|---:|---:|---:|---:|\n",
     );
-    for backend in BACKENDS {
+    for &backend in &active_backends {
         let p = &s["placements"][backend];
         out.push_str(&format!(
             "| {} | {} | {} | {} | {} | {:.2} | {} |\n",
@@ -598,8 +659,8 @@ fn render_report(artifact: &Artifact) -> String {
         if !artifact.rows.iter().any(|row| row.mode == mode) {
             continue;
         }
-        for backend in BACKENDS {
-            let counts = placement_counts(&artifact.rows, mode, backend);
+        for &backend in &active_backends {
+            let counts = placement_counts(&artifact.rows, mode, backend, &active_backends);
             out.push_str(&format!(
                 "| {} | {} | {} | {} | {} | {} | {} |\n",
                 mode.as_str(),
@@ -639,7 +700,7 @@ fn render_report(artifact: &Artifact) -> String {
     }
     out.push_str("\n## Pairwise Redline results\n\n");
     out.push_str("| Comparison | Wins | Losses | Ties | Win % | Median ratio | N |\n|---|---:|---:|---:|---:|---:|---:|\n");
-    for other in ["vulkan", "hipgraph", "hip"] {
+    for &other in active_backends.iter().filter(|&&name| name != "redline") {
         let key = format!("redline_over_{other}");
         let p = &s["pairwise"][&key];
         out.push_str(&format!(
@@ -691,35 +752,52 @@ fn render_report(artifact: &Artifact) -> String {
             ));
         }
     }
-    let rl_hip = &s["pairwise"]["redline_over_hip"];
-    let rl_graph = &s["pairwise"]["redline_over_hipgraph"];
     let rl_vk = &s["pairwise"]["redline_over_vulkan"];
     out.push_str("\n## Harness verdict\n\n");
-    out.push_str(&format!(
-        "This is **not a Hipfire harness failure**: Redline beats direct HIP in {}/{} rows and HipGraph in {}/{} while all three select identical per-row hipcc code objects. This run uses the `{}` matrix, `{}` wave policy, and `{}` scheduler profile.{} Remaining Vulkan-only wins therefore isolate compiler/lowering, kernel scheduling, or unavoidable completion/timestamp costs rather than a missing Redline dispatch path. Redline beats Vulkan pairwise in {}/{} rows, so neither the categorical ‘HIP is inherently slower’ theory nor the categorical ‘it was all hipEngine’ theory survives this control.\n",
-        rl_hip["wins"].as_u64().unwrap_or(0), rl_hip["bench_n"].as_u64().unwrap_or(0),
-        rl_graph["wins"].as_u64().unwrap_or(0), rl_graph["bench_n"].as_u64().unwrap_or(0),
-        matrix_profile,
-        wave_policy,
-        scheduler_profile,
-        if includes_aggressive { " The optional aggressive single-kernel extension removes dependency fences from Redline's timed tape." } else { "" },
-        rl_vk["wins"].as_u64().unwrap_or(0), rl_vk["bench_n"].as_u64().unwrap_or(0),
-    ));
+    if active_backends.contains(&"hip") && active_backends.contains(&"hipgraph") {
+        let rl_hip = &s["pairwise"]["redline_over_hip"];
+        let rl_graph = &s["pairwise"]["redline_over_hipgraph"];
+        out.push_str(&format!(
+            "This is **not a Hipfire harness failure**: Redline beats direct HIP in {}/{} rows and HipGraph in {}/{} while all three select identical per-row hipcc code objects. This run uses the `{}` matrix, `{}` wave policy, and `{}` scheduler profile.{} Remaining Vulkan-only wins therefore isolate compiler/lowering, kernel scheduling, or unavoidable completion/timestamp costs rather than a missing Redline dispatch path. Redline beats Vulkan pairwise in {}/{} rows, so neither the categorical ‘HIP is inherently slower’ theory nor the categorical ‘it was all hipEngine’ theory survives this control.\n",
+            rl_hip["wins"].as_u64().unwrap_or(0), rl_hip["bench_n"].as_u64().unwrap_or(0),
+            rl_graph["wins"].as_u64().unwrap_or(0), rl_graph["bench_n"].as_u64().unwrap_or(0),
+            matrix_profile,
+            wave_policy,
+            scheduler_profile,
+            if includes_aggressive { " The optional aggressive single-kernel extension removes dependency fences from Redline's timed tape." } else { "" },
+            rl_vk["wins"].as_u64().unwrap_or(0), rl_vk["bench_n"].as_u64().unwrap_or(0),
+        ));
+    } else {
+        out.push_str(&format!(
+            "This tuning smoke intentionally measures only `{}`. It uses the `{}` matrix, `{}` wave policy, and `{}` scheduler profile.{} Every ranked row passed both CPU oracles. Redline beats Vulkan in {}/{} rows; final promotion still requires a full four-backend certification run.\n",
+            active_backends.join("` versus `"),
+            matrix_profile,
+            wave_policy,
+            scheduler_profile,
+            if includes_aggressive { " The optional aggressive single-kernel extension removes dependency fences from Redline's timed tape." } else { "" },
+            rl_vk["wins"].as_u64().unwrap_or(0), rl_vk["bench_n"].as_u64().unwrap_or(0),
+        ));
+    }
     out.push_str("\n## Interpretation guardrails\n\n");
     out.push_str(&format!("HIP, HipGraph, and Redline load the identical selected hipcc code object for each row; their differences isolate launch/submission and dependency handling. Vulkan uses matched GLSL compiled by the Mesa stack, so Vulkan-only wins can still include compiler scheduling and ISA differences. The `{matrix_profile}` profile matches HipEngine's row coverage while intentionally retaining Hipfire/Radiowave's tuned wave, workgroup, and source-variant choices. This artifact records the `{wave_policy}` wave policy and `{scheduler_profile}` scheduler profile as controlled HIP compilation/launch factors. Every completion timestamp necessarily proves the measured work finished. All placement counts exclude any row where one of the four outputs failed the CPU oracle.\n"));
     out
 }
 
-fn placement_counts(rows: &[RowResult], mode: TimingMode, backend: &str) -> [usize; 4] {
+fn placement_counts(
+    rows: &[RowResult],
+    mode: TimingMode,
+    backend: &str,
+    active_backends: &[&str],
+) -> [usize; 4] {
     let mut counts = [0usize; 4];
     for row in rows.iter().filter(|row| row.mode == mode) {
-        if !BACKENDS
+        if !active_backends
             .iter()
             .all(|name| row.backends.get(*name).is_some_and(BackendResult::accepted))
         {
             continue;
         }
-        let mut ranked = BACKENDS
+        let mut ranked = active_backends
             .iter()
             .map(|&name| (name, row.backends[name].median_us().unwrap()))
             .collect::<Vec<_>>();
@@ -740,11 +818,24 @@ fn parse_args() -> Result<Config> {
     let mut list = false;
     let mut wave_policy = WavePolicy::RadiowaveTuned;
     let mut rmw_boundary = RmwBoundary::RadiowaveVmem;
+    let mut redline_queue_count = 4usize;
     let mut scheduler_profile = SchedulerProfile::Default;
+    let mut scheduler_profile_explicit = false;
     let mut interleave_aggressive_b32 = false;
     let mut mixed_paired_hash = false;
     let mut matrix_profile = MatrixProfile::HipEngineF2c;
     let mut include_aggressive = false;
+    let target_architecture =
+        env::var("HIPFIRE_BENCH_ARCH").unwrap_or_else(|_| "gfx1201".to_owned());
+    let mut recipe_catalog_path = env::var_os("RADIOWAVE_RECIPE_CATALOG").map(PathBuf::from);
+    let mut recipe_allowlist = BTreeSet::new();
+    let mut active_backends = BACKENDS.to_vec();
+    let mut recipe_mode = match env::var("RADIOWAVE_RECIPE_MODE") {
+        Ok(value) => parse_selection_mode(&value).with_context(|| {
+            format!("unknown RADIOWAVE_RECIPE_MODE {value}; expected certified or candidates")
+        })?,
+        Err(_) => SelectionMode::Certified,
+    };
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -773,6 +864,15 @@ fn parse_args() -> Result<Config> {
                     )
                 })?;
             }
+            "--redline-queues" => {
+                redline_queue_count = args
+                    .next()
+                    .context("--redline-queues requires a value")?
+                    .parse()?;
+                if !matches!(redline_queue_count, 1 | 2 | 4) {
+                    bail!("--redline-queues must be 1, 2, or 4");
+                }
+            }
             "--scheduler-profile" => {
                 let value = args
                     .next()
@@ -782,9 +882,31 @@ fn parse_args() -> Result<Config> {
                         "unknown scheduler profile {value}; expected default, max-ilp, iterative-ilp, memory-clause, or pipeline-ilp"
                     )
                 })?;
+                scheduler_profile_explicit = true;
             }
             "--interleave-aggressive-b32" => interleave_aggressive_b32 = true,
             "--mixed-paired-hash" => mixed_paired_hash = true,
+            "--recipe-catalog" => {
+                recipe_catalog_path = Some(PathBuf::from(
+                    args.next().context("--recipe-catalog requires a path")?,
+                ));
+            }
+            "--recipe-mode" => {
+                let value = args.next().context("--recipe-mode requires a value")?;
+                recipe_mode = parse_selection_mode(&value).with_context(|| {
+                    format!(
+                        "unknown Radiowave recipe mode {value}; expected certified or candidates"
+                    )
+                })?;
+            }
+            "--recipe-allow" => {
+                recipe_allowlist
+                    .insert(args.next().context("--recipe-allow requires a recipe ID")?);
+            }
+            "--backends" => {
+                let value = args.next().context("--backends requires a value")?;
+                active_backends = parse_backends(&value)?;
+            }
             "--matrix" => {
                 let value = args.next().context("--matrix requires a value")?;
                 matrix_profile = MatrixProfile::parse(&value).with_context(|| {
@@ -795,7 +917,7 @@ fn parse_args() -> Result<Config> {
             "--list" => list = true,
             "--help" | "-h" => {
                 println!(
-                    "usage: hipfire-6409-bench [--out PATH] [--warmups N] [--samples N] [--filter TEXT] [--max-rows N] [--matrix hipengine|legacy] [--include-aggressive] [--wave-policy all32|targeted64|radiowave|blanket64] [--scheduler-profile default|max-ilp|iterative-ilp|memory-clause|pipeline-ilp] [--interleave-aggressive-b32] [--mixed-paired-hash] [--redline-rmw radiowave-vmem|same-agent|radv-global] [--list]"
+                    "usage: hipfire-6409-bench [--out PATH] [--warmups N] [--samples N] [--filter TEXT] [--max-rows N] [--matrix hipengine|legacy] [--include-aggressive] [--backends all|redline,vulkan] [--wave-policy all32|targeted64|radiowave|blanket64] [--recipe-catalog PATH] [--recipe-mode certified|candidates] [--recipe-allow ID ...] [--scheduler-profile default|max-ilp|iterative-ilp|memory-clause|pipeline-ilp] [--interleave-aggressive-b32] [--mixed-paired-hash] [--redline-rmw radiowave-vmem|same-agent|radv-global] [--redline-queues 1|2|4] [--list]"
                 );
                 std::process::exit(0);
             }
@@ -804,6 +926,35 @@ fn parse_args() -> Result<Config> {
     }
     if samples == 0 {
         bail!("--samples must be nonzero");
+    }
+    let (mut recipe_catalog, recipe_catalog_source) = if let Some(path) = recipe_catalog_path {
+        let encoded = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read recipe catalog {}", path.display()))?;
+        let catalog = RecipeCatalog::from_json(&encoded)
+            .with_context(|| format!("failed to parse recipe catalog {}", path.display()))?;
+        catalog
+            .validate()
+            .with_context(|| format!("invalid recipe catalog {}", path.display()))?;
+        (catalog, path.display().to_string())
+    } else {
+        (
+            RecipeCatalog::builtin_hipfire_6409(),
+            "builtin:hipfire_6409".to_owned(),
+        )
+    };
+    if !recipe_allowlist.is_empty() {
+        for recipe_id in &recipe_allowlist {
+            if !recipe_catalog
+                .recipes
+                .iter()
+                .any(|recipe| &recipe.id == recipe_id)
+            {
+                bail!("--recipe-allow names unknown recipe {recipe_id}");
+            }
+        }
+        recipe_catalog
+            .recipes
+            .retain(|recipe| recipe_allowlist.contains(&recipe.id));
     }
     Ok(Config {
         output,
@@ -814,12 +965,61 @@ fn parse_args() -> Result<Config> {
         list,
         wave_policy,
         rmw_boundary,
+        redline_queue_count,
         scheduler_profile,
+        scheduler_profile_explicit,
         interleave_aggressive_b32,
         mixed_paired_hash,
         matrix_profile,
         include_aggressive,
+        target_architecture,
+        recipe_catalog,
+        recipe_catalog_source,
+        recipe_mode,
+        recipe_allowlist,
+        active_backends,
     })
+}
+
+fn parse_backends(value: &str) -> Result<Vec<&'static str>> {
+    if value == "all" {
+        return Ok(BACKENDS.to_vec());
+    }
+    let mut selected = Vec::new();
+    for name in value.split(',') {
+        let backend = BACKENDS
+            .iter()
+            .copied()
+            .find(|candidate| *candidate == name)
+            .with_context(|| {
+                format!(
+                    "unknown backend {name}; expected a comma-separated subset of {}",
+                    BACKENDS.join(",")
+                )
+            })?;
+        if !selected.contains(&backend) {
+            selected.push(backend);
+        }
+    }
+    if selected.len() < 2 || !selected.contains(&"redline") || !selected.contains(&"vulkan") {
+        bail!("--backends tuning subsets require both redline and vulkan");
+    }
+    Ok(selected)
+}
+
+fn parse_selection_mode(value: &str) -> Option<SelectionMode> {
+    match value {
+        "certified" => Some(SelectionMode::Certified),
+        "candidates" | "candidate" => Some(SelectionMode::Candidates),
+        _ => None,
+    }
+}
+
+fn selection_mode_name(mode: SelectionMode) -> &'static str {
+    match mode {
+        SelectionMode::Certified => "certified",
+        SelectionMode::Candidates => "candidates",
+    }
 }
 
 fn command_output(program: &str, args: &[&str]) -> String {
@@ -839,4 +1039,20 @@ fn command_output(program: &str, args: &[&str]) -> String {
 
 fn normalize_pci(value: &str) -> String {
     value.trim_start_matches("0000:").to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tuning_backend_pair_is_explicit_and_ordered() {
+        assert_eq!(
+            parse_backends("redline,vulkan").unwrap(),
+            vec!["redline", "vulkan"]
+        );
+        assert!(parse_backends("vulkan,hip").is_err());
+        assert!(parse_backends("redline,hip").is_err());
+        assert!(parse_backends("redline,unknown").is_err());
+    }
 }

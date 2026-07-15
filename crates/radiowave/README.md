@@ -1,14 +1,23 @@
 # Radiowave
 
-Radiowave is Redline's policy-driven HIP compiler boundary. Applications give
-Radiowave HIP source rather than invoking hipcc directly. Radiowave injects
-reviewed lowering helpers, calls the installed ROCm compiler, inspects the
-resulting AMDGPU code object, and writes a reproducible JSON manifest.
+Radiowave is Redline's architecture-neutral, policy-driven HIP compiler
+boundary. Applications give Radiowave HIP source rather than invoking hipcc
+directly. Radiowave injects reviewed lowering helpers, calls the installed ROCm
+compiler for the requested target, inspects the resulting AMDGPU code object,
+and writes a reproducible JSON manifest.
 
-The first promoted rule is the gfx11/gfx12 buffer-resource load/store layer
-derived from the ROCm issue 6409 benchmark. It lets HIP source request the
-same 32-bit-offset buffer instruction class that Vulkan SSBOs naturally expose
-to RADV/ACO.
+The compiler and recipe schema do not special-case a GPU family. A recipe
+describes a semantic source or launch transformation; separate evidence records
+certify it for a concrete architecture. A proven gfx1201 recipe is therefore a
+candidate on gfx942, gfx11, or a future target, but it is not selected there
+until that target produces its own correctness-passing performance WIN.
+
+The first promoted lowering family is the buffer-resource load/store layer
+derived from the ROCm issue 6409 benchmark. It lets reviewed HIP source request
+the same 32-bit-offset buffer instruction class that Vulkan SSBOs naturally
+expose to RADV/ACO. A live HIP probe now validates its B32 load/store contract
+on gfx1010, gfx1030, gfx1100, and gfx1151 in addition to the gfx1201 benchmark.
+Those portability checks are correctness evidence, not performance promotion.
 
 ```bash
 cargo run -p radiowave -- compile \
@@ -28,13 +37,62 @@ auto four_values = radiowave::buffer_load_u32x4(resource, aligned_word_offset);
 radiowave::buffer_store_u32(resource, word_offset, value);
 ```
 
+These helpers default to AMDGPU cache policy zero: the ordinary temporal path
+that retains L0/L1/L2 reuse. Radiowave does not set per-load coherence or cache
+bypass bits by default; Redline owns invalidation at the dependency boundary.
+Every library or CLI compile also writes an inspected
+`*.radiowave.json` manifest beside the code object unless an explicit manifest
+path is supplied, so Redline can prove when the lean VMEM-only boundary is
+safe. Disabling inspection remains an explicit diagnostic mode and cannot
+produce a cache certification accepted by Redline.
+
 For experiments which need adjacent scalar VMEM operations to remain distinct,
 `buffer_load_bytes_u32` accepts a byte offset and `opaque_vgpr_u32x4` prevents
 LLVM from folding four reviewed offsets back into one B128 load. These helpers
 are opt-in: inspection proves the requested instruction shape, while benchmark
 correctness and timing decide whether it may be promoted.
 
-The promoted gfx1201 benchmark rules now include scalar B32 resource access,
+## Architecture-neutral recipe catalog
+
+The built-in catalog lowers the accepted Hipfire microbenchmark decisions into
+typed actions: wave size, workgroup size, scheduler profile, compiler defines,
+named source variant, B32/B128 buffer access, output RMW, unroll/chunk size, and
+paired integer scheduling. Kernel selectors and semantic tags say when an
+action is relevant; they do not grant cross-architecture trust.
+
+```bash
+# Show the built-in reference library.
+radiowave recipes builtin --output radiowave-recipes.json
+
+# Consume only transformations certified on this exact target.
+radiowave recipes select \
+  --arch gfx1201 --kernel memory_interleave4 --family memory-waitcnt \
+  --tag timing:independent_throughput
+
+# Ask for candidates to benchmark on a target with no prior evidence.
+radiowave recipes select \
+  --arch gfx942 --kernel memory_interleave4 --family memory-waitcnt \
+  --tag timing:independent_throughput --candidates
+
+# Promote only labeled, correctness-gated WIN rows from autoresearch.
+radiowave recipes ingest \
+  --catalog radiowave-recipes.json --ledger wins.jsonl \
+  --output radiowave-recipes.json
+```
+
+An ingestible WIN row names `radiowave_recipe` or `radiowave_recipes` and
+contains `arch`/`gpu_arch`, `verdict: "WIN"`, and a measurement or variant hash.
+All other rows are ignored. Hipfire exposes this bridge as `ar radiowave`; it
+delegates validation and promotion to this CLI so the loop does not acquire a
+second recipe implementation.
+
+The catalog reports source lowerings; it does not rewrite an arbitrary C++ AST
+behind the caller's back. Today the Hipfire harness maps those requests to its
+correctness-gated named kernel variants. A future source transformer can
+implement the same typed actions without changing the evidence or selection
+format.
+
+The promoted gfx1201 benchmark rules include scalar B32 resource access,
 aligned B128 tile loads, and correctness-gated variant selection for wave size,
 unroll factor, and workgroup shape. Radiowave does not replace LLVM: it makes
 the source and launch-policy decisions explicit, compiles them with upstream
@@ -53,11 +111,59 @@ not arbitrary hidden compiler arguments:
 | `memory-clause` | `gcn-max-memory-clause`, maximum clause length 4 |
 | `pipeline-ilp` | max-ILP plus relaxed occupancy, exact igrouplp solving, and the machine pipeliner |
 
-Each profile is compiled into a separate code object. A caller selects the
-profile explicitly, and HIP, HipGraph, and Redline then load that identical
-object. Radiowave does not promote a profile merely because its disassembly is
-shorter: the candidate must also pass the CPU oracle and a counterbalanced GPU
-timing comparison.
+Each profile is compiled into a separate code object. A certified recipe may
+select a profile per kernel; an explicit harness `--scheduler-profile` remains
+a whole-run override. HIP, HipGraph, and Redline then load the identical object
+recorded for each row. Radiowave does not promote a profile merely because its
+disassembly is shorter: the candidate must also pass the CPU oracle and a
+counterbalanced GPU timing comparison.
+
+## ACO and LLPC compiler oracles
+
+Radiowave can normalize a HIP code-object manifest, one isolated RADV/ACO
+shader dump, and amdllpc assembly into schema-versioned reports. The comparison
+is diagnostic: it identifies missing memory clauses, extra waits, instruction
+count, and register-pressure differences without treating a shorter shader as
+a benchmark win.
+
+Resolve Vulkan specialization constants before generating both Vulkan reports.
+For example, use `spirv-opt --set-spec-const-default-value` followed by
+`--freeze-spec-const`, then pass that same SPIR-V file as `--input-artifact` to
+both ACO and LLPC. Radiowave hashes the artifact and calls the comparison
+`exact` only when its target, workgroup, wavefront, and input hash all match.
+HIP source is recorded as `semantic` evidence because its ABI and input IR are
+different even when the kernel implements the same algorithm.
+
+```bash
+radiowave oracle aco \
+  --input shader.aco.dump --input-artifact shader.wg64.spv \
+  --kernel shader --arch gfx1201 --wavefront 64 \
+  --output shader.aco.json
+
+radiowave oracle llpc \
+  --input shader.llpc.s --input-artifact shader.wg64.spv \
+  --kernel shader --arch gfx1201 \
+  --output shader.llpc.json
+
+radiowave oracle hip \
+  --manifest kernel.radiowave.json --kernel kernel --workgroup 64 \
+  --output kernel.hip.json
+
+radiowave oracle compare \
+  --baseline shader.aco.json \
+  --candidate shader.llpc.json --candidate kernel.hip.json
+```
+
+An ACO dump must contain exactly one shader statistics block. This fail-closed
+rule avoids silently comparing the wrong pipeline from an application-wide
+`RADV_DEBUG=shaders,shaderstats` capture. ACO's allocated-register statistics
+and HIP/LLPC code-object metadata use different count bases, so cross-basis
+register deltas are emitted as `null`; the raw values and ACO pre-scheduler
+statistics remain available in each report.
+
+Instruction accounting stops at `s_endpgm`. Alignment NOPs after program
+termination are not executable shader work and are excluded from manifests and
+oracle reports.
 
 Each schema-3 compile manifest records source, injected-header, and output
 hashes; the complete compiler command and selected scheduler profile; ROCm
@@ -65,10 +171,11 @@ version; kernel VGPR/SGPR/private-memory metadata; counts of
 buffer/global/flat/scalar memory instructions; static instruction, wait,
 `s_delay_alu`, and `s_clause` counts; the longest consecutive VMEM run; and a
 fail-closed mutable-read cache classification. Scalar loads from the live
-kernarg pointer are classified as immutable prologue reads. A kernel is
-`vmem_only` only when every other resource read is VMEM; scalar-buffer loads,
-loads through an overwritten kernarg SGPR pair, and unknown scalar-memory
-forms classify as `scalar_or_unknown`.
+kernarg pointer, or from a proven constant-offset SGPR pair derived from it,
+are classified as immutable prologue reads. Either pair stops being trusted as
+soon as LLVM overwrites one of its registers. A kernel is `vmem_only` only when
+every other resource read is VMEM; scalar-buffer loads and unknown
+scalar-memory forms classify as `scalar_or_unknown`.
 
 Redline verifies the embedded manifest schema, wavefront, and code-object
 SHA-256 before using that classification. A `vmem_only` consumer can use the
@@ -82,7 +189,14 @@ validator; neither binding independently interprets or trusts manifest JSON.
 
 ## Current safety boundary
 
-- The injected descriptor configuration is currently pinned to gfx11/gfx12.
+- Radiowave accepts any architecture understood by the installed hipcc; callers
+  must pass `--arch` (or `RADIOWAVE_ARCH`) rather than inheriting a gfx1201
+  default.
+- The injected buffer descriptor configuration is correctness-checked across
+  gfx1010, gfx1030, gfx1100, gfx1151, and gfx1201. Only gfx1201 has performance
+  promotion; every other target remains candidate-only until it wins its own
+  benchmark. The [hipx portability artifact](tests/artifacts/hipx-portability-2026-07-14.json)
+  records the live outputs and inspected code-object hashes.
 - Buffer byte offsets are 32-bit. Allocations larger than 4 GiB must rebase the
   descriptor instead of allowing an offset to wrap.
 - Radiowave does not silently rewrite arbitrary pointer accesses yet. Kernels
@@ -95,6 +209,6 @@ validator; neither binding independently interprets or trusts manifest JSON.
 - Inspection is evidence, not binary rewriting. Retuning happens by compiling
   another source/IR variant and correctness-gating it.
 
-The next stages are typed buffer views, bounded source transformations,
-cache-policy variants, and reusable benchmark-fed selection manifests.
-LLVM/hipcc remains the backend; Radiowave owns the policy.
+The next stages are typed buffer views, bounded source transformations, and
+cache-policy variants. LLVM/hipcc remains the backend; Radiowave owns the
+architecture-neutral policy and architecture-specific proof.

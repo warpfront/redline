@@ -9,9 +9,11 @@ use radiowave::{
     CodeObjectCertification, CodeObjectInspection, MutableReadCache, SchedulerProfile, Wavefront,
 };
 use redline_dispatch::aql::{
-    load_symbols, Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargBuffer,
-    KernargPool, LaunchGeometry, Runtime, SingleQueuePm4Ib,
+    load_symbols, Executable, Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, GpuDevice,
+    GpuMultiQueueTiming, GpuSelector, KernargBuffer, KernargPool, Kernel, LaunchGeometry,
+    MultiQueuePm4Ib, Runtime, SingleQueuePm4Ib,
 };
+use std::ffi::c_void;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,9 +61,100 @@ pub struct RedlineBackend {
     device: GpuDevice,
     profiles: Vec<ProfileExecutables>,
     pool: KernargPool,
+    pm4_family: Pm4Family,
+    independent_queue_count: usize,
     pub name: String,
     pub pci: String,
     pub rmw_boundary: RmwBoundary,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Pm4Family {
+    Gfx10,
+    Gfx11,
+    Gfx12,
+}
+
+impl Pm4Family {
+    fn from_device(name: &str) -> Result<Self> {
+        if name.starts_with("gfx10") {
+            Ok(Self::Gfx10)
+        } else if name.starts_with("gfx11") {
+            Ok(Self::Gfx11)
+        } else if name.starts_with("gfx12") {
+            Ok(Self::Gfx12)
+        } else {
+            anyhow::bail!("Redline PM4 benchmark does not support device architecture {name}")
+        }
+    }
+}
+
+enum RdnaPm4Commands {
+    Legacy(Gfx10Pm4CommandBuffer),
+    Gfx12(Gfx12Pm4CommandBuffer),
+}
+
+enum ProfiledPm4Replay {
+    Single(SingleQueuePm4Ib),
+    Multi(MultiQueuePm4Ib),
+}
+
+impl ProfiledPm4Replay {
+    unsafe fn replay_and_wait_profiled(&mut self) -> Result<GpuMultiQueueTiming> {
+        match self {
+            Self::Single(ib) => {
+                // SAFETY: forwarded from this method's caller.
+                Ok(unsafe { ib.replay_and_wait_profiled()? })
+            }
+            Self::Multi(ib) => {
+                // SAFETY: forwarded from this method's caller.
+                Ok(unsafe { ib.replay_and_wait_profiled()? })
+            }
+        }
+    }
+}
+
+impl RdnaPm4Commands {
+    fn stateful(family: Pm4Family) -> Self {
+        match family {
+            Pm4Family::Gfx10 | Pm4Family::Gfx11 => {
+                Self::Legacy(Gfx10Pm4CommandBuffer::new_stateful())
+            }
+            Pm4Family::Gfx12 => Self::Gfx12(Gfx12Pm4CommandBuffer::new_stateful()),
+        }
+    }
+
+    fn ownership(family: Pm4Family) -> Self {
+        match family {
+            Pm4Family::Gfx10 | Pm4Family::Gfx11 => {
+                let mut commands = Gfx10Pm4CommandBuffer::new();
+                commands.acquire_system();
+                Self::Legacy(commands)
+            }
+            Pm4Family::Gfx12 => {
+                let mut commands = Gfx12Pm4CommandBuffer::new();
+                commands.acquire_system_gfx12();
+                Self::Gfx12(commands)
+            }
+        }
+    }
+
+    fn dispatch(
+        &mut self,
+        kernel: &Kernel,
+        geometry: LaunchGeometry,
+        kernarg_address: *mut c_void,
+    ) -> Result<()> {
+        match self {
+            Self::Legacy(commands) => {
+                commands.dispatch(kernel, geometry, 0, kernarg_address)?;
+            }
+            Self::Gfx12(commands) => {
+                commands.dispatch(kernel, geometry, 0, kernarg_address)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 struct ProfileExecutables {
@@ -73,10 +166,15 @@ struct ProfileExecutables {
 }
 
 impl RedlineBackend {
-    pub fn new(rmw_boundary: RmwBoundary) -> Result<Self> {
+    pub fn new(rmw_boundary: RmwBoundary, independent_queue_count: usize) -> Result<Self> {
+        anyhow::ensure!(
+            independent_queue_count > 0,
+            "Redline queue count must be nonzero"
+        );
         let runtime = Runtime::initialize(load_symbols()?).context("initialize public ROCr")?;
         let device = runtime.select_gpu(GpuSelector::Ordinal(0))?;
         let name = device.name().to_owned();
+        let pm4_family = Pm4Family::from_device(&name)?;
         let pci = device.pci_bus_id().to_string();
         let mut profiles = Vec::with_capacity(SchedulerProfile::ALL.len());
         for scheduler_profile in SchedulerProfile::ALL {
@@ -106,6 +204,8 @@ impl RedlineBackend {
             device,
             profiles,
             pool,
+            pm4_family,
+            independent_queue_count,
             name,
             pci,
             rmw_boundary,
@@ -138,7 +238,10 @@ impl RedlineBackend {
             64 => &profile.exec_wave64,
             other => anyhow::bail!("unsupported Redline wave size {other}"),
         };
-        let mut commands = Gfx12Pm4CommandBuffer::new_stateful();
+        let lane_count = self.queue_count_for(mode, iterations);
+        let mut commands = (0..lane_count)
+            .map(|_| RdnaPm4Commands::stateful(self.pm4_family))
+            .collect::<Vec<_>>();
         let mut kernargs: Vec<KernargBuffer> = Vec::new();
         // Serial and one-shot tapes repeat identical arguments. Keep one
         // immutable kernarg block per kernel so its scalar prologue stays hot
@@ -176,71 +279,72 @@ impl RedlineBackend {
         } else {
             None
         };
-        for operation in 0..iterations {
-            let offset = spec.stage_output_offset(mode, operation, false);
-            let kernel = exec.kernel(&format!("{}.kd", spec.kernel))?;
-            let karg_address = if let Some(address) = primary_reused_address {
-                address
-            } else {
-                let mut karg = self.pool.allocate_for(kernel.metadata())?;
-                fill_kernarg(&mut karg, &buffers, spec, offset, spec.grid_groups, false)?;
-                let address = karg.address();
-                kernargs.push(karg);
-                address
-            };
-            let geometry = LaunchGeometry::new(
-                [spec.grid_groups * spec.block, 1, 1],
-                [spec.block as u16, 1, 1],
-            )?;
-            commands.dispatch(&kernel, geometry, 0, karg_address)?;
-
-            if let Some(second) = spec.second_kernel {
-                self.dependency_boundary(
-                    &mut commands,
-                    second,
-                    spec.wave_size,
-                    spec.scheduler_profile,
-                );
-                let kernel = exec.kernel(&format!("{second}.kd"))?;
-                let karg_address = if let Some(address) = secondary_reused_address {
+        for (lane, lane_commands) in commands.iter_mut().enumerate() {
+            for operation in lane_operations(iterations, lane_count, lane) {
+                let offset = spec.stage_output_offset(mode, operation, false);
+                let kernel = exec.kernel(&format!("{}.kd", spec.kernel))?;
+                let karg_address = if let Some(address) = primary_reused_address {
                     address
                 } else {
                     let mut karg = self.pool.allocate_for(kernel.metadata())?;
-                    fill_kernarg(
-                        &mut karg,
-                        &buffers,
-                        spec,
-                        spec.stage_output_offset(mode, operation, true),
-                        spec.second_grid_groups,
-                        true,
-                    )?;
+                    fill_kernarg(&mut karg, &buffers, spec, offset, spec.grid_groups, false)?;
                     let address = karg.address();
                     kernargs.push(karg);
                     address
                 };
                 let geometry = LaunchGeometry::new(
-                    [spec.second_grid_groups * spec.stage_block(true), 1, 1],
-                    [spec.stage_block(true) as u16, 1, 1],
+                    [spec.grid_groups * spec.block, 1, 1],
+                    [spec.block as u16, 1, 1],
                 )?;
-                commands.dispatch(&kernel, geometry, 0, karg_address)?;
-            }
-            if mode == TimingMode::SerialLatency && operation + 1 < iterations {
-                self.dependency_boundary(
-                    &mut commands,
-                    spec.kernel,
-                    spec.wave_size,
-                    spec.scheduler_profile,
-                );
+                lane_commands.dispatch(&kernel, geometry, karg_address)?;
+
+                if let Some(second) = spec.second_kernel {
+                    self.dependency_boundary(
+                        lane_commands,
+                        second,
+                        spec.wave_size,
+                        spec.scheduler_profile,
+                    );
+                    let kernel = exec.kernel(&format!("{second}.kd"))?;
+                    let karg_address = if let Some(address) = secondary_reused_address {
+                        address
+                    } else {
+                        let mut karg = self.pool.allocate_for(kernel.metadata())?;
+                        fill_kernarg(
+                            &mut karg,
+                            &buffers,
+                            spec,
+                            spec.stage_output_offset(mode, operation, true),
+                            spec.second_grid_groups,
+                            true,
+                        )?;
+                        let address = karg.address();
+                        kernargs.push(karg);
+                        address
+                    };
+                    let geometry = LaunchGeometry::new(
+                        [spec.second_grid_groups * spec.stage_block(true), 1, 1],
+                        [spec.stage_block(true) as u16, 1, 1],
+                    )?;
+                    lane_commands.dispatch(&kernel, geometry, karg_address)?;
+                }
+                if mode == TimingMode::SerialLatency && operation + 1 < iterations {
+                    self.dependency_boundary(
+                        lane_commands,
+                        spec.kernel,
+                        spec.wave_size,
+                        spec.scheduler_profile,
+                    );
+                }
             }
         }
         // HIP initializes the resource before every replay. Transfer ownership
         // with a separate, completed acquire tape so the timed retained tape
         // contains only dispatches and their intra-tape dependency boundaries.
         // This is the same safe handoff previously used by the aggressive path.
-        let mut acquire = Gfx12Pm4CommandBuffer::new();
-        acquire.acquire_system_gfx12();
-        let mut ownership = SingleQueuePm4Ib::create(&self.device, &self.pool, &acquire)?;
-        let mut ib = SingleQueuePm4Ib::create_profiled(&self.device, &self.pool, &commands)?;
+        let acquire = RdnaPm4Commands::ownership(self.pm4_family);
+        let mut ownership = self.create_ib(&acquire, false)?;
+        let mut ib = self.create_profiled_ib(&commands)?;
         for _ in 0..warmups {
             hip.reset(&buffers.out)?;
             unsafe { ownership.replay_and_wait()? };
@@ -264,6 +368,10 @@ impl RedlineBackend {
         })
     }
 
+    pub fn queue_count_for(&self, mode: TimingMode, iterations: usize) -> usize {
+        active_queue_count(mode, self.independent_queue_count, iterations)
+    }
+
     pub fn dependency_policy_name(
         &self,
         kernel: &str,
@@ -284,27 +392,112 @@ impl RedlineBackend {
 
     fn dependency_boundary(
         &self,
-        commands: &mut Gfx12Pm4CommandBuffer,
+        commands: &mut RdnaPm4Commands,
         consumer: &str,
         wave_size: u32,
         scheduler_profile: SchedulerProfile,
     ) {
-        match self.rmw_boundary {
-            RmwBoundary::RadvGlobal => {
-                commands.wait_compute_idle();
-                commands
-                    .acquire_rmw_gfx12(redline_dispatch::aql::Gfx12RmwAcquirePolicy::RadvGlobal);
-            }
-            RmwBoundary::SameAgent => commands.dependency_rmw_same_agent_gfx12(),
-            RmwBoundary::RadiowaveVmem => {
-                match self.mutable_read_cache(consumer, wave_size, scheduler_profile) {
+        let cache = self.mutable_read_cache(consumer, wave_size, scheduler_profile);
+        match commands {
+            RdnaPm4Commands::Legacy(commands) => match self.rmw_boundary {
+                RmwBoundary::RadvGlobal => commands.dependency_rmw_global(),
+                RmwBoundary::SameAgent => commands.dependency_rmw_same_agent(),
+                RmwBoundary::RadiowaveVmem => match cache {
+                    MutableReadCache::VmemOnly => commands.dependency_rmw_vmem(),
+                    MutableReadCache::ScalarOrUnknown => commands.dependency_rmw_same_agent(),
+                },
+            },
+            RdnaPm4Commands::Gfx12(commands) => match self.rmw_boundary {
+                RmwBoundary::RadvGlobal => {
+                    commands.wait_compute_idle();
+                    commands.acquire_rmw_gfx12(
+                        redline_dispatch::aql::Gfx12RmwAcquirePolicy::RadvGlobal,
+                    );
+                }
+                RmwBoundary::SameAgent => commands.dependency_rmw_same_agent_gfx12(),
+                RmwBoundary::RadiowaveVmem => match cache {
                     MutableReadCache::VmemOnly => {
                         commands.dependency_rmw_hip_llvm_vmem_gfx12();
                     }
                     MutableReadCache::ScalarOrUnknown => {
                         commands.dependency_rmw_same_agent_gfx12();
                     }
-                }
+                },
+            },
+        }
+    }
+
+    fn create_ib(&self, commands: &RdnaPm4Commands, profiled: bool) -> Result<SingleQueuePm4Ib> {
+        match (self.pm4_family, commands, profiled) {
+            (Pm4Family::Gfx10, RdnaPm4Commands::Legacy(commands), false) => Ok(
+                SingleQueuePm4Ib::create_gfx10(&self.device, &self.pool, commands)?,
+            ),
+            (Pm4Family::Gfx10, RdnaPm4Commands::Legacy(commands), true) => Ok(
+                SingleQueuePm4Ib::create_profiled_gfx10(&self.device, &self.pool, commands)?,
+            ),
+            (Pm4Family::Gfx11, RdnaPm4Commands::Legacy(commands), false) => Ok(
+                SingleQueuePm4Ib::create_gfx11(&self.device, &self.pool, commands)?,
+            ),
+            (Pm4Family::Gfx11, RdnaPm4Commands::Legacy(commands), true) => Ok(
+                SingleQueuePm4Ib::create_profiled_gfx11(&self.device, &self.pool, commands)?,
+            ),
+            (Pm4Family::Gfx12, RdnaPm4Commands::Gfx12(commands), false) => Ok(
+                SingleQueuePm4Ib::create(&self.device, &self.pool, commands)?,
+            ),
+            (Pm4Family::Gfx12, RdnaPm4Commands::Gfx12(commands), true) => Ok(
+                SingleQueuePm4Ib::create_profiled(&self.device, &self.pool, commands)?,
+            ),
+            _ => anyhow::bail!("PM4 command family does not match selected device"),
+        }
+    }
+
+    fn create_profiled_ib(&self, commands: &[RdnaPm4Commands]) -> Result<ProfiledPm4Replay> {
+        anyhow::ensure!(
+            !commands.is_empty(),
+            "profiled PM4 replay requires one lane"
+        );
+        if commands.len() == 1 {
+            return Ok(ProfiledPm4Replay::Single(
+                self.create_ib(&commands[0], true)?,
+            ));
+        }
+        match self.pm4_family {
+            Pm4Family::Gfx10 | Pm4Family::Gfx11 => {
+                let encoded = commands
+                    .iter()
+                    .map(|commands| match commands {
+                        RdnaPm4Commands::Legacy(commands) => Ok(commands.clone()),
+                        RdnaPm4Commands::Gfx12(_) => {
+                            anyhow::bail!("PM4 command family does not match selected device")
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let ib = match self.pm4_family {
+                    Pm4Family::Gfx10 => {
+                        MultiQueuePm4Ib::create_profiled_gfx10(&self.device, &self.pool, &encoded)?
+                    }
+                    Pm4Family::Gfx11 => {
+                        MultiQueuePm4Ib::create_profiled_gfx11(&self.device, &self.pool, &encoded)?
+                    }
+                    Pm4Family::Gfx12 => unreachable!(),
+                };
+                Ok(ProfiledPm4Replay::Multi(ib))
+            }
+            Pm4Family::Gfx12 => {
+                let encoded = commands
+                    .iter()
+                    .map(|commands| match commands {
+                        RdnaPm4Commands::Gfx12(commands) => Ok(commands.clone()),
+                        RdnaPm4Commands::Legacy(_) => {
+                            anyhow::bail!("PM4 command family does not match selected device")
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ProfiledPm4Replay::Multi(MultiQueuePm4Ib::create_profiled(
+                    &self.device,
+                    &self.pool,
+                    &encoded,
+                )?))
             }
         }
     }
@@ -333,6 +526,22 @@ impl RedlineBackend {
                 report.mutable_read_cache
             })
     }
+}
+
+fn active_queue_count(mode: TimingMode, requested: usize, iterations: usize) -> usize {
+    if mode == TimingMode::IndependentThroughput {
+        requested.min(iterations.max(1))
+    } else {
+        1
+    }
+}
+
+fn lane_operations(
+    iterations: usize,
+    lane_count: usize,
+    lane: usize,
+) -> impl Iterator<Item = usize> {
+    (lane..iterations).step_by(lane_count)
 }
 
 fn inspection_from_manifest(
@@ -406,6 +615,35 @@ fn fill_kernarg(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn independent_operations_are_striped_exactly_once() {
+        for lane_count in [1, 2, 4] {
+            let lanes = (0..lane_count)
+                .map(|lane| lane_operations(17, lane_count, lane).collect::<Vec<_>>())
+                .collect::<Vec<_>>();
+            let mut flattened = lanes.into_iter().flatten().collect::<Vec<_>>();
+            flattened.sort_unstable();
+            assert_eq!(flattened, (0..17).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn only_independent_mode_activates_multiple_queues() {
+        assert_eq!(
+            active_queue_count(TimingMode::IndependentThroughput, 4, 100),
+            4
+        );
+        assert_eq!(
+            active_queue_count(TimingMode::IndependentThroughput, 4, 2),
+            2
+        );
+        assert_eq!(active_queue_count(TimingMode::SerialLatency, 4, 100), 1);
+        assert_eq!(
+            active_queue_count(TimingMode::SingleKernelAggressive, 4, 1),
+            1
+        );
+    }
 
     #[test]
     fn embedded_manifest_certifies_all_explicit_vmem_consumers() {

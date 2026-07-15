@@ -5,9 +5,12 @@
 //! It injects reviewed source-level lowering rules, invokes hipcc, inspects the
 //! emitted code object, and records enough evidence to reproduce the build.
 
+pub mod oracle;
+pub mod recipes;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -26,10 +29,6 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("source file does not exist: {0}")]
     MissingSource(PathBuf),
-    #[error(
-        "Radiowave's buffer-resource policy does not support architecture {0}; expected gfx11* or gfx12*"
-    )]
-    UnsupportedArchitecture(String),
     #[error("{tool} exited with {status}\nstdout:\n{stdout}\nstderr:\n{stderr}")]
     ToolFailed {
         tool: String,
@@ -41,6 +40,8 @@ pub enum Error {
     MissingBundleTarget { arch: String, input: PathBuf },
     #[error("Radiowave code-object certification failed: {0}")]
     InvalidCertification(String),
+    #[error("invalid Radiowave oracle input: {0}")]
+    InvalidOracle(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -367,9 +368,6 @@ pub struct Compiler;
 
 impl Compiler {
     pub fn compile(&self, request: &CompileRequest) -> Result<CompileArtifact> {
-        if !supports_buffer_policy(&request.arch) {
-            return Err(Error::UnsupportedArchitecture(request.arch.clone()));
-        }
         let cwd = request
             .working_directory
             .clone()
@@ -396,47 +394,50 @@ impl Compiler {
             None
         };
 
-        let manifest_path = request
-            .manifest
-            .as_ref()
-            .map(|path| absolute_from(&cwd, path));
-        if let Some(path) = &manifest_path {
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let mut rendered_command = Vec::with_capacity(args.len() + 1);
-            rendered_command.push(request.hipcc.to_string_lossy().into_owned());
-            rendered_command.extend(args.iter().map(|arg| arg.to_string_lossy().into_owned()));
-            let manifest = CompileManifest {
-                schema_version: 3,
-                compiler: "radiowave".to_owned(),
-                generated_unix_seconds: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                source: source.clone(),
-                output: output.clone(),
-                arch: request.arch.clone(),
-                wavefront: request.wavefront,
-                scheduler_profile: request.scheduler_profile,
-                hipcc: request.hipcc.clone(),
-                hipcc_version: tool_version(&request.hipcc),
-                command: rendered_command,
-                source_sha256: sha256_file(&source)?,
-                support_header_sha256: sha256_bytes(HIP_SUPPORT_HEADER.as_bytes()),
-                output_sha256: output_sha256.clone(),
-                inspection: inspection.clone(),
-            };
-            fs::write(path, serde_json::to_vec_pretty(&manifest)?)?;
+        let manifest_path = compile_manifest_path(request, &cwd, &output);
+        if let Some(parent) = manifest_path.parent() {
+            fs::create_dir_all(parent)?;
         }
+        let mut rendered_command = Vec::with_capacity(args.len() + 1);
+        rendered_command.push(request.hipcc.to_string_lossy().into_owned());
+        rendered_command.extend(args.iter().map(|arg| arg.to_string_lossy().into_owned()));
+        let manifest = CompileManifest {
+            schema_version: 3,
+            compiler: "radiowave".to_owned(),
+            generated_unix_seconds: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            source: source.clone(),
+            output: output.clone(),
+            arch: request.arch.clone(),
+            wavefront: request.wavefront,
+            scheduler_profile: request.scheduler_profile,
+            hipcc: request.hipcc.clone(),
+            hipcc_version: tool_version(&request.hipcc),
+            command: rendered_command,
+            source_sha256: sha256_file(&source)?,
+            support_header_sha256: sha256_bytes(HIP_SUPPORT_HEADER.as_bytes()),
+            output_sha256: output_sha256.clone(),
+            inspection: inspection.clone(),
+        };
+        fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
 
         Ok(CompileArtifact {
             output,
             output_sha256,
-            manifest: manifest_path,
+            manifest: Some(manifest_path),
             inspection,
         })
     }
+}
+
+fn compile_manifest_path(request: &CompileRequest, cwd: &Path, output: &Path) -> PathBuf {
+    request
+        .manifest
+        .as_ref()
+        .map(|path| absolute_from(cwd, path))
+        .unwrap_or_else(|| output.with_extension("radiowave.json"))
 }
 
 #[derive(Clone, Debug)]
@@ -528,10 +529,6 @@ impl Inspector {
 
 pub fn support_header_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("include/radiowave/hip.h")
-}
-
-pub fn supports_buffer_policy(arch: &str) -> bool {
-    arch.starts_with("gfx11") || arch.starts_with("gfx12")
 }
 
 fn compile_args(
@@ -690,7 +687,10 @@ struct DisassemblyKernel {
     instructions: InstructionStats,
     mutable_read_cache: MutableReadCache,
     kernarg_pointer_live: bool,
+    kernarg_derived_pairs: BTreeSet<u32>,
+    pending_kernarg_low: BTreeSet<u32>,
     consecutive_vmem_instructions: u32,
+    finished: bool,
 }
 
 impl Default for DisassemblyKernel {
@@ -699,7 +699,10 @@ impl Default for DisassemblyKernel {
             instructions: InstructionStats::default(),
             mutable_read_cache: MutableReadCache::VmemOnly,
             kernarg_pointer_live: true,
+            kernarg_derived_pairs: BTreeSet::new(),
+            pending_kernarg_low: BTreeSet::new(),
             consecutive_vmem_instructions: 0,
+            finished: false,
         }
     }
 }
@@ -719,6 +722,9 @@ fn parse_disassembly(disassembly: &str) -> BTreeMap<String, DisassemblyKernel> {
         let Some(symbol) = &current else {
             continue;
         };
+        if kernels.get(symbol).is_some_and(|kernel| kernel.finished) {
+            continue;
+        }
         let instruction = line.split("//").next().unwrap_or_default().trim();
         let mnemonic = instruction.split_whitespace().next().unwrap_or_default();
         if mnemonic.is_empty() {
@@ -769,7 +775,11 @@ fn parse_disassembly(disassembly: &str) -> BTreeMap<String, DisassemblyKernel> {
         } else if mnemonic.starts_with("s_load") {
             stats.scalar_loads += 1;
             let base = operands.split(',').nth(1).map(str::trim);
-            if entry.kernarg_pointer_live && base == Some("s[0:1]") {
+            let immutable_kernarg_read = (entry.kernarg_pointer_live && base == Some("s[0:1]"))
+                || base
+                    .and_then(scalar_pair_start)
+                    .is_some_and(|pair| entry.kernarg_derived_pairs.contains(&pair));
+            if immutable_kernarg_read {
                 stats.kernarg_scalar_loads += 1;
             } else {
                 stats.unknown_scalar_loads += 1;
@@ -795,11 +805,92 @@ fn parse_disassembly(disassembly: &str) -> BTreeMap<String, DisassemblyKernel> {
             .next()
             .map(str::trim)
             .unwrap_or_default();
+        update_kernarg_derived_pairs(entry, mnemonic, operands);
         if mnemonic.starts_with("s_") && touches_kernarg_pointer(destination) {
             entry.kernarg_pointer_live = false;
         }
+        if mnemonic == "s_endpgm" {
+            entry.finished = true;
+        }
     }
     kernels
+}
+
+fn update_kernarg_derived_pairs(kernel: &mut DisassemblyKernel, mnemonic: &str, operands: &str) {
+    let fields = operands.split(',').map(str::trim).collect::<Vec<_>>();
+    let destination = fields.first().copied().unwrap_or_default();
+    let low_derivation = if mnemonic == "s_add_u32"
+        && kernel.kernarg_pointer_live
+        && fields.get(1).copied() == Some("s0")
+        && fields.get(2).is_some_and(|value| is_integer_literal(value))
+    {
+        scalar_register(destination)
+    } else {
+        None
+    };
+    let completed_low = if mnemonic == "s_addc_u32"
+        && kernel.kernarg_pointer_live
+        && fields.get(1).copied() == Some("s1")
+        && fields.get(2).is_some_and(|value| is_integer_literal(value))
+    {
+        scalar_register(destination)
+            .and_then(|high| high.checked_sub(1))
+            .filter(|low| kernel.pending_kernarg_low.contains(low))
+    } else {
+        None
+    };
+
+    if let Some((first, last)) = scalar_register_range(destination) {
+        kernel
+            .kernarg_derived_pairs
+            .retain(|low| *low + 1 < first || *low > last);
+        kernel
+            .pending_kernarg_low
+            .retain(|low| *low + 1 < first || *low > last);
+    }
+    if let Some(low) = low_derivation {
+        kernel.pending_kernarg_low.insert(low);
+    }
+    if let Some(low) = completed_low {
+        kernel.pending_kernarg_low.remove(&low);
+        kernel.kernarg_derived_pairs.insert(low);
+    }
+}
+
+fn scalar_register(operand: &str) -> Option<u32> {
+    operand.strip_prefix('s')?.parse().ok()
+}
+
+fn scalar_pair_start(operand: &str) -> Option<u32> {
+    let (first, last) = scalar_register_range(operand)?;
+    (last == first + 1).then_some(first)
+}
+
+fn scalar_register_range(operand: &str) -> Option<(u32, u32)> {
+    if let Some(single) = scalar_register(operand) {
+        return Some((single, single));
+    }
+    let range = operand.strip_prefix("s[")?.strip_suffix(']')?;
+    let (first, last) = range.split_once(':')?;
+    Some((first.parse().ok()?, last.parse().ok()?))
+}
+
+fn is_integer_literal(value: &str) -> bool {
+    value.parse::<i64>().is_ok()
+        || value
+            .strip_prefix("0x")
+            .is_some_and(|digits| i64::from_str_radix(digits, 16).is_ok())
+}
+
+/// Count live AMDGPU instructions in one assembly listing. The listing may
+/// contain basic-block labels and directives, but it must contain only one
+/// executable body. Instructions after the first `s_endpgm` are alignment
+/// padding and are intentionally ignored.
+pub fn inspect_amdgpu_instructions(assembly: &str) -> InstructionStats {
+    let wrapped = format!("0000000000000000 <radiowave_oracle>:\n{assembly}");
+    parse_disassembly(&wrapped)
+        .remove("radiowave_oracle")
+        .map_or_else(InstructionStats::default, |kernel| kernel.instructions)
 }
 
 fn is_machine_instruction(mnemonic: &str) -> bool {
@@ -941,6 +1032,22 @@ mod tests {
     }
 
     #[test]
+    fn ignores_alignment_padding_after_endpgm() {
+        let disassembly = r#"
+0000000000001000 <live_body>:
+    v_add_f32_e32 v0, v1, v2
+    s_endpgm
+    s_nop 0
+    s_nop 0
+0000000000001100 <next_kernel>:
+    s_endpgm
+"#;
+        let stats = parse_disassembly(disassembly);
+        assert_eq!(stats["live_body"].instructions.static_instructions, 2);
+        assert_eq!(stats["next_kernel"].instructions.static_instructions, 1);
+    }
+
+    #[test]
     fn mutable_or_unknown_scalar_loads_fail_closed() {
         let disassembly = r#"
 0000000000001000 <scalar_pointer>:
@@ -958,6 +1065,54 @@ mod tests {
             assert_eq!(stats[kernel].instructions.unknown_scalar_loads, 1);
         }
         assert_eq!(stats["scalar_buffer"].instructions.scalar_buffer_loads, 1);
+    }
+
+    #[test]
+    fn constant_offset_kernarg_pairs_remain_immutable() {
+        let disassembly = r#"
+0000000000001000 <derived_kernarg>:
+    s_add_u32 s12, s0, 40
+    s_addc_u32 s13, s1, 0
+    s_load_b32 s2, s[12:13], 0xc
+    s_load_b32 s3, s[12:13], null
+    s_endpgm
+"#;
+        let stats = parse_disassembly(disassembly);
+        assert_eq!(
+            stats["derived_kernarg"].instructions.kernarg_scalar_loads,
+            2
+        );
+        assert_eq!(
+            stats["derived_kernarg"].instructions.unknown_scalar_loads,
+            0
+        );
+        assert_eq!(
+            stats["derived_kernarg"].mutable_read_cache,
+            MutableReadCache::VmemOnly
+        );
+    }
+
+    #[test]
+    fn overwritten_derived_kernarg_pair_fails_closed() {
+        let disassembly = r#"
+0000000000001000 <overwritten_derived>:
+    s_add_u32 s12, s0, 40
+    s_addc_u32 s13, s1, 0
+    s_mov_b32 s12, s4
+    s_load_b32 s2, s[12:13], 0xc
+    s_endpgm
+"#;
+        let stats = parse_disassembly(disassembly);
+        assert_eq!(
+            stats["overwritten_derived"]
+                .instructions
+                .unknown_scalar_loads,
+            1
+        );
+        assert_eq!(
+            stats["overwritten_derived"].mutable_read_cache,
+            MutableReadCache::ScalarOrUnknown
+        );
     }
 
     #[test]
@@ -983,6 +1138,31 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Wavefront::Wave64).unwrap(),
             "\"wave64\""
+        );
+    }
+
+    #[test]
+    fn compile_target_is_forwarded_without_a_gpu_family_allowlist() {
+        let request = CompileRequest::new("kernel.hip", "kernel.hsaco", "future-amdgpu");
+        let args = compile_args(
+            &request,
+            Path::new("/tmp/kernel.hip"),
+            Path::new("/tmp/kernel.hsaco"),
+            Path::new("/tmp/radiowave.h"),
+        );
+        assert!(args.iter().any(|arg| arg == "--offload-arch=future-amdgpu"));
+    }
+
+    #[test]
+    fn compile_manifest_defaults_next_to_the_code_object() {
+        let request = CompileRequest::new("kernel.hip", "artifacts/kernel.hsaco", "gfx1100");
+        assert_eq!(
+            compile_manifest_path(
+                &request,
+                Path::new("/tmp/project"),
+                Path::new("/tmp/project/artifacts/kernel.hsaco")
+            ),
+            Path::new("/tmp/project/artifacts/kernel.radiowave.json")
         );
     }
 
@@ -1056,12 +1236,5 @@ mod tests {
                 .unwrap();
         manifest["schema_version"] = 2.into();
         assert!(CodeObjectCertification::from_json(code, &manifest.to_string()).is_err());
-    }
-
-    #[test]
-    fn buffer_policy_is_fail_closed_by_architecture() {
-        assert!(supports_buffer_policy("gfx1151"));
-        assert!(supports_buffer_policy("gfx1201"));
-        assert!(!supports_buffer_policy("gfx942"));
     }
 }

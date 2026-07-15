@@ -2,8 +2,12 @@
 // SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
 
 use half::f16;
-use radiowave::SchedulerProfile;
+use radiowave::recipes::{
+    RecipeCatalog, RecipeResult, RecipeSelection, SelectionMode, SourceLowering, WorkloadDescriptor,
+};
+use radiowave::{SchedulerProfile, Wavefront};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -115,6 +119,8 @@ pub struct RowSpec {
     pub output_per_op: usize,
     pub iterations: usize,
     pub kind: OutputKind,
+    pub radiowave_recipes: BTreeSet<String>,
+    pub radiowave_lowerings: BTreeSet<SourceLowering>,
 }
 
 impl RowSpec {
@@ -232,13 +238,59 @@ fn row(
         output_per_op,
         iterations,
         kind,
+        radiowave_recipes: BTreeSet::new(),
+        radiowave_lowerings: BTreeSet::new(),
     }
 }
 
-pub fn matrix(profile: MatrixProfile, wave_policy: WavePolicy) -> Vec<RowSpec> {
+pub fn matrix(
+    profile: MatrixProfile,
+    wave_policy: WavePolicy,
+    target_architecture: &str,
+) -> Vec<RowSpec> {
+    matrix_with_catalog(
+        profile,
+        wave_policy,
+        target_architecture,
+        &RecipeCatalog::builtin_hipfire_6409(),
+    )
+}
+
+pub fn matrix_with_catalog(
+    profile: MatrixProfile,
+    wave_policy: WavePolicy,
+    target_architecture: &str,
+    recipe_catalog: &RecipeCatalog,
+) -> Vec<RowSpec> {
+    matrix_with_catalog_and_mode(
+        profile,
+        wave_policy,
+        target_architecture,
+        recipe_catalog,
+        SelectionMode::Certified,
+    )
+}
+
+pub fn matrix_with_catalog_and_mode(
+    profile: MatrixProfile,
+    wave_policy: WavePolicy,
+    target_architecture: &str,
+    recipe_catalog: &RecipeCatalog,
+    recipe_mode: SelectionMode,
+) -> Vec<RowSpec> {
     match profile {
-        MatrixProfile::HipEngineF2c => hipengine_f2c_matrix(wave_policy),
-        MatrixProfile::LegacyHipfire => legacy_hipfire_matrix(wave_policy),
+        MatrixProfile::HipEngineF2c => hipengine_f2c_matrix(
+            wave_policy,
+            target_architecture,
+            recipe_catalog,
+            recipe_mode,
+        ),
+        MatrixProfile::LegacyHipfire => legacy_hipfire_matrix(
+            wave_policy,
+            target_architecture,
+            recipe_catalog,
+            recipe_mode,
+        ),
     }
 }
 
@@ -248,7 +300,12 @@ pub fn matrix(profile: MatrixProfile, wave_policy: WavePolicy) -> Vec<RowSpec> {
 /// These remain Hipfire-native kernels and retain this harness's RMW correctness
 /// contract.  The purpose of this table is denominator and shape parity: no
 /// HipEngine configuration is silently omitted from the Rust control harness.
-fn hipengine_f2c_matrix(wave_policy: WavePolicy) -> Vec<RowSpec> {
+fn hipengine_f2c_matrix(
+    wave_policy: WavePolicy,
+    target_architecture: &str,
+    recipe_catalog: &RecipeCatalog,
+    recipe_mode: SelectionMode,
+) -> Vec<RowSpec> {
     let mut rows = Vec::new();
 
     for count in [1usize, 50, 200, 941] {
@@ -476,7 +533,9 @@ fn hipengine_f2c_matrix(wave_policy: WavePolicy) -> Vec<RowSpec> {
         let scratch_words = 4 * (2048 / 32) * 9;
         let mut spec = row(
             "q4-selected-dual",
-            format!("operation=selected_dual_dp4a_quantize_plus_dot,x_rows=4,rows=32,experts=256,in=2048,out=512,wg={wg}"),
+            format!(
+                "operation=selected_dual_dp4a_quantize_plus_dot,x_rows=4,rows=32,experts=256,in=2048,out=512,wg={wg}"
+            ),
             "q8_1_quantize_q4",
             2048,
             4,
@@ -581,7 +640,9 @@ fn hipengine_f2c_matrix(wave_policy: WavePolicy) -> Vec<RowSpec> {
                 let scratch_words = row_count * (in_features / 32) * 9;
                 let mut combined = row(
                     "dense-q8",
-                    format!("operation=q8_0_dense_dp4a_quantize_plus_dot,in={in_features},out=2048,rows={row_count},row_tile={row_tile},wg=32"),
+                    format!(
+                        "operation=q8_0_dense_dp4a_quantize_plus_dot,in={in_features},out=2048,rows={row_count},row_tile={row_tile},wg=32"
+                    ),
                     "q8_1_quantize_dense",
                     in_features,
                     row_count,
@@ -602,12 +663,24 @@ fn hipengine_f2c_matrix(wave_policy: WavePolicy) -> Vec<RowSpec> {
         }
     }
 
-    apply_wave_policy(&mut rows, wave_policy, true);
+    apply_wave_policy(
+        &mut rows,
+        wave_policy,
+        true,
+        target_architecture,
+        recipe_catalog,
+        recipe_mode,
+    );
     debug_assert_eq!(rows.len(), 120);
     rows
 }
 
-fn legacy_hipfire_matrix(wave_policy: WavePolicy) -> Vec<RowSpec> {
+fn legacy_hipfire_matrix(
+    wave_policy: WavePolicy,
+    target_architecture: &str,
+    recipe_catalog: &RecipeCatalog,
+    recipe_mode: SelectionMode,
+) -> Vec<RowSpec> {
     let mut rows = Vec::new();
 
     for count in [1usize, 50, 200, 941] {
@@ -824,30 +897,163 @@ fn legacy_hipfire_matrix(wave_policy: WavePolicy) -> Vec<RowSpec> {
             OutputKind::U32,
         ));
     }
-    apply_wave_policy(&mut rows, wave_policy, false);
+    apply_wave_policy(
+        &mut rows,
+        wave_policy,
+        false,
+        target_architecture,
+        recipe_catalog,
+        recipe_mode,
+    );
     rows
 }
 
-fn apply_wave_policy(rows: &mut [RowSpec], wave_policy: WavePolicy, preserve_block: bool) {
+fn apply_wave_policy(
+    rows: &mut [RowSpec],
+    wave_policy: WavePolicy,
+    preserve_block: bool,
+    target_architecture: &str,
+    recipe_catalog: &RecipeCatalog,
+    recipe_mode: SelectionMode,
+) {
     for spec in rows {
-        let parity_requires_wave32 = preserve_block
-            && matches!(
-                spec.kernel,
-                "dense_q8" | "dense_q8_single" | "q8_1_quantize_dense"
-            );
-        if uses_wave64(wave_policy, spec.kernel) && !parity_requires_wave32 {
-            spec.wave_size = 64;
-            if !preserve_block && matches!(spec.kernel, "q4_selected_dual" | "q6_x8" | "dense_q8") {
-                spec.block = 64;
+        if wave_policy == WavePolicy::RadiowaveTuned {
+            let mut workload = WorkloadDescriptor::new(spec.kernel, spec.family);
+            if !preserve_block {
+                workload = workload.tag("shape:retunable_workgroup");
+            }
+            if preserve_block
+                && matches!(
+                    spec.kernel,
+                    "dense_q8" | "dense_q8_single" | "q8_1_quantize_dense"
+                )
+            {
+                workload = workload.tag("shape:preserve_wave32");
+            }
+            let selection = recipe_catalog
+                .select(target_architecture, workload, recipe_mode)
+                .expect("built-in Radiowave recipe catalog must be conflict-free");
+            if selection.plan.wavefront == Some(Wavefront::Wave64) {
+                spec.wave_size = 64;
+            }
+            if let Some(workgroup_size) = selection.plan.workgroup_size {
+                spec.block = workgroup_size;
+            }
+            record_radiowave_selection(spec, &selection);
+        } else {
+            let parity_requires_wave32 = preserve_block
+                && matches!(
+                    spec.kernel,
+                    "dense_q8" | "dense_q8_single" | "q8_1_quantize_dense"
+                );
+            if uses_wave64(wave_policy, spec.kernel) && !parity_requires_wave32 {
+                spec.wave_size = 64;
+                if !preserve_block
+                    && matches!(spec.kernel, "q4_selected_dual" | "q6_x8" | "dense_q8")
+                {
+                    spec.block = 64;
+                }
             }
         }
-        if wave_policy == WavePolicy::RadiowaveTuned && spec.kernel == "dispatch_tiny" {
-            // This workload has one live lane per workgroup.  A 32-thread HIP
-            // workgroup preserves the dispatch count and oracle while avoiding
-            // deliberately idle lanes. The Vulkan pipeline still records the
-            // row's native specialization separately.
-            spec.block = 32;
+    }
+}
+
+pub fn apply_radiowave_runtime_policy(
+    spec: &mut RowSpec,
+    mode: TimingMode,
+    target_architecture: &str,
+    interleave_aggressive_b32: bool,
+    mixed_paired_hash: bool,
+) -> RecipeResult<()> {
+    apply_radiowave_runtime_policy_with_catalog(
+        spec,
+        mode,
+        target_architecture,
+        interleave_aggressive_b32,
+        mixed_paired_hash,
+        &RecipeCatalog::builtin_hipfire_6409(),
+    )
+}
+
+pub fn apply_radiowave_runtime_policy_with_catalog(
+    spec: &mut RowSpec,
+    mode: TimingMode,
+    target_architecture: &str,
+    interleave_aggressive_b32: bool,
+    mixed_paired_hash: bool,
+    recipe_catalog: &RecipeCatalog,
+) -> RecipeResult<()> {
+    apply_radiowave_runtime_policy_with_catalog_and_mode(
+        spec,
+        mode,
+        target_architecture,
+        interleave_aggressive_b32,
+        mixed_paired_hash,
+        recipe_catalog,
+        SelectionMode::Certified,
+    )
+}
+
+pub fn apply_radiowave_runtime_policy_with_catalog_and_mode(
+    spec: &mut RowSpec,
+    mode: TimingMode,
+    target_architecture: &str,
+    interleave_aggressive_b32: bool,
+    mixed_paired_hash: bool,
+    recipe_catalog: &RecipeCatalog,
+    recipe_mode: SelectionMode,
+) -> RecipeResult<()> {
+    let mut workload = WorkloadDescriptor::new(spec.kernel, spec.family).tag("phase:runtime");
+    workload = workload.tag(match mode {
+        TimingMode::SerialLatency => "timing:serial_latency",
+        TimingMode::IndependentThroughput => "timing:independent_throughput",
+        TimingMode::SingleKernelAggressive => "timing:single_kernel_aggressive",
+    });
+    if interleave_aggressive_b32 {
+        workload = workload.tag("experiment:interleave_b32");
+    }
+    if mixed_paired_hash {
+        workload = workload.tag("experiment:mixed_paired_hash");
+    }
+    let selection_mode = if interleave_aggressive_b32 || mixed_paired_hash {
+        SelectionMode::Candidates
+    } else {
+        recipe_mode
+    };
+    let selection = recipe_catalog.select(target_architecture, workload, selection_mode)?;
+    if let Some(variant) = selection.plan.kernel_variant.as_deref() {
+        spec.kernel = builtin_kernel_variant(variant);
+    }
+    if let Some(workgroup_size) = selection.plan.workgroup_size {
+        spec.block = workgroup_size;
+        if spec.family == "memory-waitcnt" && mode == TimingMode::SingleKernelAggressive {
+            spec.grid_groups = spec.n0.div_ceil(spec.block);
         }
+    }
+    if let Some(scheduler_profile) = selection.plan.scheduler_profile {
+        spec.scheduler_profile = scheduler_profile;
+    }
+    record_radiowave_selection(spec, &selection);
+    Ok(())
+}
+
+fn record_radiowave_selection(spec: &mut RowSpec, selection: &RecipeSelection) {
+    spec.radiowave_recipes
+        .extend(selection.applied_recipes.iter().cloned());
+    spec.radiowave_lowerings
+        .extend(selection.plan.lowerings.iter().cloned());
+}
+
+fn builtin_kernel_variant(name: &str) -> &'static str {
+    match name {
+        "geometry_fma_buffer" => "geometry_fma_buffer",
+        "reduction_wave_buffer" => "reduction_wave_buffer",
+        "memory_interleave4_buffer" => "memory_interleave4_buffer",
+        "memory_interleave4_block64" => "memory_interleave4_block64",
+        "memory_interleave4_block64_b32" => "memory_interleave4_block64_b32",
+        "vopd_dequant_chunk16" => "vopd_dequant_chunk16",
+        "vopd_mixed_pair" => "vopd_mixed_pair",
+        _ => panic!("built-in Radiowave recipe selected unknown kernel variant {name}"),
     }
 }
 
@@ -856,11 +1062,6 @@ fn uses_wave64(policy: WavePolicy, kernel: &str) -> bool {
         kernel,
         "q4_selected_dual" | "q6_x8" | "dense_q8" | "dense_q8_single" | "vopd_dependent"
     );
-    let radiowave_tuned = targeted
-        || matches!(
-            kernel,
-            "memory_interleave4" | "vopd_independent" | "vopd_mixed" | "vopd_dequant"
-        );
     let blanket = matches!(
         kernel,
         "dispatch_tiny"
@@ -886,7 +1087,9 @@ fn uses_wave64(policy: WavePolicy, kernel: &str) -> bool {
     match policy {
         WavePolicy::AllWave32 => false,
         WavePolicy::TargetedWave64 => targeted,
-        WavePolicy::RadiowaveTuned => radiowave_tuned,
+        WavePolicy::RadiowaveTuned => {
+            unreachable!("Radiowave policy is selected through the recipe catalog")
+        }
         WavePolicy::BlanketWave64 => blanket,
     }
 }
@@ -1479,11 +1682,16 @@ pub fn validate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use radiowave::recipes::{EvidenceVerdict, RecipeEvidence};
     use std::collections::HashSet;
 
     #[test]
     fn legacy_matrix_retains_45_unique_shapes_and_133_supported_mode_rows() {
-        let rows = matrix(MatrixProfile::LegacyHipfire, WavePolicy::BlanketWave64);
+        let rows = matrix(
+            MatrixProfile::LegacyHipfire,
+            WavePolicy::BlanketWave64,
+            "gfx1201",
+        );
         assert_eq!(rows.len(), 45);
         let keys = TimingMode::ALL
             .into_iter()
@@ -1496,33 +1704,51 @@ mod tests {
         assert_eq!(keys.len(), 133);
         assert_eq!(rows.iter().filter(|row| row.wave_size == 64).count(), 36);
         assert_eq!(
-            matrix(MatrixProfile::LegacyHipfire, WavePolicy::TargetedWave64)
-                .iter()
-                .filter(|row| row.wave_size == 64)
-                .count(),
+            matrix(
+                MatrixProfile::LegacyHipfire,
+                WavePolicy::TargetedWave64,
+                "gfx1201",
+            )
+            .iter()
+            .filter(|row| row.wave_size == 64)
+            .count(),
             11
         );
         assert_eq!(
-            matrix(MatrixProfile::LegacyHipfire, WavePolicy::RadiowaveTuned)
-                .iter()
-                .filter(|row| row.wave_size == 64)
-                .count(),
+            matrix(
+                MatrixProfile::LegacyHipfire,
+                WavePolicy::RadiowaveTuned,
+                "gfx1201",
+            )
+            .iter()
+            .filter(|row| row.wave_size == 64)
+            .count(),
             16
         );
-        assert!(
-            matrix(MatrixProfile::LegacyHipfire, WavePolicy::RadiowaveTuned)
-                .iter()
-                .filter(|row| row.kernel == "dispatch_tiny")
-                .all(|row| row.block == 32)
-        );
-        assert!(matrix(MatrixProfile::LegacyHipfire, WavePolicy::AllWave32)
-            .iter()
-            .all(|row| row.wave_size == 32 && row.block != 64));
+        assert!(matrix(
+            MatrixProfile::LegacyHipfire,
+            WavePolicy::RadiowaveTuned,
+            "gfx1201",
+        )
+        .iter()
+        .filter(|row| row.kernel == "dispatch_tiny")
+        .all(|row| row.block == 32));
+        assert!(matrix(
+            MatrixProfile::LegacyHipfire,
+            WavePolicy::AllWave32,
+            "gfx1201"
+        )
+        .iter()
+        .all(|row| row.wave_size == 32 && row.block != 64));
     }
 
     #[test]
     fn hipengine_f2c_matrix_is_120_shapes_and_240_comparable_rows() {
-        let rows = matrix(MatrixProfile::HipEngineF2c, WavePolicy::RadiowaveTuned);
+        let rows = matrix(
+            MatrixProfile::HipEngineF2c,
+            WavePolicy::RadiowaveTuned,
+            "gfx1201",
+        );
         assert_eq!(rows.len(), 120);
         let keys = TimingMode::HIPENGINE_COMPARABLE
             .into_iter()
@@ -1555,11 +1781,174 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_oracles_cover_serial_rmw_and_independent_slices() {
-        let mut row = matrix(MatrixProfile::LegacyHipfire, WavePolicy::BlanketWave64)
+    fn radiowave_runtime_recipes_own_kernel_aliases_and_launch_geometry() {
+        let base = matrix(
+            MatrixProfile::LegacyHipfire,
+            WavePolicy::RadiowaveTuned,
+            "gfx1201",
+        )
+        .into_iter()
+        .find(|row| row.kernel == "memory_interleave4")
+        .unwrap();
+
+        let mut independent = base.clone();
+        apply_radiowave_runtime_policy(
+            &mut independent,
+            TimingMode::IndependentThroughput,
+            "gfx1201",
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(independent.kernel, "memory_interleave4_buffer");
+        assert!(independent
+            .radiowave_recipes
+            .contains("hipfire.memory.interleave.independent_buffer_output"));
+
+        let mut aggressive = base;
+        apply_radiowave_runtime_policy(
+            &mut aggressive,
+            TimingMode::SingleKernelAggressive,
+            "gfx1201",
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(aggressive.kernel, "memory_interleave4_block64");
+        assert_eq!(aggressive.block, 64);
+        assert_eq!(aggressive.grid_groups, aggressive.n0.div_ceil(64));
+        assert!(aggressive
+            .radiowave_lowerings
+            .contains(&SourceLowering::AlignedBufferB128));
+    }
+
+    #[test]
+    fn unseen_architecture_keeps_the_baseline_until_autoresearch_promotes_it() {
+        let rows = matrix(
+            MatrixProfile::LegacyHipfire,
+            WavePolicy::RadiowaveTuned,
+            "unmeasured-target",
+        );
+        assert!(rows.iter().all(|row| row.wave_size == 32));
+        assert!(rows
+            .iter()
+            .filter(|row| row.kernel == "dispatch_tiny")
+            .all(|row| row.block == 256));
+        assert!(rows.iter().all(|row| row.radiowave_recipes.is_empty()));
+    }
+
+    #[test]
+    fn candidate_mode_applies_unpromoted_radiowave_plan_explicitly() {
+        let catalog = RecipeCatalog::builtin_hipfire_6409();
+        let rows = matrix_with_catalog_and_mode(
+            MatrixProfile::HipEngineF2c,
+            WavePolicy::RadiowaveTuned,
+            "gfx1030",
+            &catalog,
+            SelectionMode::Candidates,
+        );
+        assert!(rows
+            .iter()
+            .filter(|row| row.kernel == "dispatch_tiny")
+            .all(|row| row.block == 32));
+        assert!(rows.iter().any(|row| row.wave_size == 64));
+        assert!(rows.iter().any(|row| !row.radiowave_recipes.is_empty()));
+
+        let mut interleave = rows
             .into_iter()
-            .find(|row| row.family == "dispatch-grid" && row.iterations == 50)
+            .find(|row| row.kernel == "memory_interleave4")
             .unwrap();
+        apply_radiowave_runtime_policy_with_catalog_and_mode(
+            &mut interleave,
+            TimingMode::IndependentThroughput,
+            "gfx1030",
+            false,
+            false,
+            &catalog,
+            SelectionMode::Candidates,
+        )
+        .unwrap();
+        assert_eq!(interleave.kernel, "memory_interleave4_buffer");
+        assert!(interleave
+            .radiowave_recipes
+            .contains("hipfire.memory.interleave.independent_buffer_output"));
+    }
+
+    #[test]
+    fn runtime_recipe_can_select_a_scheduler_profile_per_row() {
+        let mut catalog = RecipeCatalog::builtin_hipfire_6409();
+        catalog
+            .recipes
+            .iter_mut()
+            .find(|recipe| recipe.id == "hipfire.cache.geometry_fma_vmem")
+            .unwrap()
+            .action
+            .scheduler_profile = Some(SchedulerProfile::PipelineIlp);
+        let mut spec = matrix(
+            MatrixProfile::HipEngineF2c,
+            WavePolicy::AllWave32,
+            "gfx1100",
+        )
+        .into_iter()
+        .find(|row| row.family == "geometry")
+        .unwrap();
+        apply_radiowave_runtime_policy_with_catalog_and_mode(
+            &mut spec,
+            TimingMode::SerialLatency,
+            "gfx1100",
+            false,
+            false,
+            &catalog,
+            SelectionMode::Certified,
+        )
+        .unwrap();
+        assert_eq!(spec.scheduler_profile, SchedulerProfile::PipelineIlp);
+    }
+
+    #[test]
+    fn external_catalog_consumes_new_architecture_promotions() {
+        let mut catalog = RecipeCatalog::builtin_hipfire_6409();
+        catalog
+            .recipes
+            .iter_mut()
+            .find(|recipe| recipe.id == "hipfire.dispatch.live_lane_workgroup")
+            .unwrap()
+            .evidence
+            .push(RecipeEvidence {
+                architecture: "new-target".to_owned(),
+                verdict: EvidenceVerdict::Promoted,
+                correctness_pass: true,
+                artifact: "unit-test-win".to_owned(),
+                samples_per_row: Some(7),
+                throughput_delta_pct: Some(4.0),
+                duration_delta_pct: Some(-4.0),
+                note: String::new(),
+            });
+        let rows = matrix_with_catalog(
+            MatrixProfile::LegacyHipfire,
+            WavePolicy::RadiowaveTuned,
+            "new-target",
+            &catalog,
+        );
+        assert!(rows
+            .iter()
+            .filter(|row| row.kernel == "dispatch_tiny")
+            .all(|row| row.block == 32
+                && row
+                    .radiowave_recipes
+                    .contains("hipfire.dispatch.live_lane_workgroup")));
+    }
+
+    #[test]
+    fn dispatch_oracles_cover_serial_rmw_and_independent_slices() {
+        let mut row = matrix(
+            MatrixProfile::LegacyHipfire,
+            WavePolicy::BlanketWave64,
+            "gfx1201",
+        )
+        .into_iter()
+        .find(|row| row.family == "dispatch-grid" && row.iterations == 50)
+        .unwrap();
         let input = fixture(&mut row);
         assert_eq!(expected(&row, &input, TimingMode::SerialLatency), vec![50]);
         assert_eq!(

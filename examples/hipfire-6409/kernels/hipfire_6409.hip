@@ -60,15 +60,37 @@ __device__ __forceinline__ int wave_sum_i32(int v) {
 }
 
 __device__ __forceinline__ int dot_s8_s8(u32 a, u32 b, int c) {
+#ifdef HIPFIRE_BENCH_DOT8
     // gfx12 exposes the generalized signedness-controlled dot8 form rather
     // than the legacy dot1-insts-only sdot4 builtin.
     return __builtin_amdgcn_sudot4(
         true, static_cast<int>(a), true, static_cast<int>(b), c, false);
+#else
+    int sum = c;
+#pragma unroll
+    for (u32 lane = 0; lane < 4; ++lane) {
+        const int x = static_cast<int>(static_cast<int8_t>(a >> (lane * 8)));
+        const int y = static_cast<int>(static_cast<int8_t>(b >> (lane * 8)));
+        sum += x * y;
+    }
+    return sum;
+#endif
 }
 
 __device__ __forceinline__ int dot_u8_s8(u32 a, u32 b, int c) {
+#ifdef HIPFIRE_BENCH_DOT8
     return __builtin_amdgcn_sudot4(
         false, static_cast<int>(a), true, static_cast<int>(b), c, false);
+#else
+    int sum = c;
+#pragma unroll
+    for (u32 lane = 0; lane < 4; ++lane) {
+        const int x = static_cast<int>((a >> (lane * 8)) & 0xffu);
+        const int y = static_cast<int>(static_cast<int8_t>(b >> (lane * 8)));
+        sum += x * y;
+    }
+    return sum;
+#endif
 }
 
 __device__ __forceinline__ int scalar_q4(u32 a, u32 b) {
@@ -93,16 +115,29 @@ void dispatch_tiny(BENCH_ARGS) {
     if (threadIdx.x == 0 && gid < n0) output_add_u32(out, output_offset + gid, 1u);
 }
 
+template <bool BUFFER_INPUTS>
 __device__ __forceinline__ void geometry_wave_body(BENCH_ARGS) {
     __shared__ float wave_partials[BENCH_WAVE_COUNT];
     const u32 row = workgroup_x();
     const u32 tid = static_cast<u32>(threadIdx.x);
     if (row >= n1) return;
+    const auto a_resource = radiowave::buffer_resource(a);
+    const auto b_resource = radiowave::buffer_resource(b);
     float sum = 0.0f;
     for (u32 repeat = 0; repeat < aux; ++repeat) {
         for (u32 i = tid; i < n0; i += static_cast<u32>(blockDim.x)) {
             const u32 j = (i + repeat) % n0;
-            sum = fmaf(load_f32(a, j), load_f32(b, row * n0 + j), sum);
+            float av;
+            float bv;
+            if constexpr (BUFFER_INPUTS) {
+                av = __uint_as_float(radiowave::buffer_load_u32(a_resource, j));
+                bv = __uint_as_float(
+                    radiowave::buffer_load_u32(b_resource, row * n0 + j));
+            } else {
+                av = load_f32(a, j);
+                bv = load_f32(b, row * n0 + j);
+            }
+            sum = fmaf(av, bv, sum);
         }
     }
     sum = wave_sum_f32(sum);
@@ -122,10 +157,24 @@ __device__ __forceinline__ void geometry_wave_body(BENCH_ARGS) {
 }
 
 extern "C" __global__ __launch_bounds__(256, 16)
-void geometry_fma(BENCH_ARGS) { geometry_wave_body(a, b, out, n0, n1, output_offset, aux); }
+void geometry_fma(BENCH_ARGS) {
+    geometry_wave_body<false>(a, b, out, n0, n1, output_offset, aux);
+}
 
 extern "C" __global__ __launch_bounds__(256, 16)
-void reduction_wave(BENCH_ARGS) { geometry_wave_body(a, b, out, n0, n1, output_offset, aux); }
+void reduction_wave(BENCH_ARGS) {
+    geometry_wave_body<false>(a, b, out, n0, n1, output_offset, aux);
+}
+
+extern "C" __global__ __launch_bounds__(256, 16)
+void geometry_fma_buffer(BENCH_ARGS) {
+    geometry_wave_body<true>(a, b, out, n0, n1, output_offset, aux);
+}
+
+extern "C" __global__ __launch_bounds__(256, 16)
+void reduction_wave_buffer(BENCH_ARGS) {
+    geometry_wave_body<true>(a, b, out, n0, n1, output_offset, aux);
+}
 
 template <u32 ACCUM_COUNT, bool EXTRA_BARRIER>
 __device__ __forceinline__ void reduction_lds_body(BENCH_ARGS) {
@@ -361,6 +410,7 @@ __device__ __forceinline__ void dot_body(BENCH_ARGS) {
     constexpr u32 groups = 16;
     for (u32 iter = 0; iter < n1; ++iter) {
         const u32 base = ((iter * n0 + idx) * groups) & aux;
+#ifndef __gfx1010__
 #pragma unroll
         for (u32 chunk = 0; chunk < groups; chunk += 4u) {
             // Each dot tile is eight-word aligned in a power-of-two ring.
@@ -380,6 +430,22 @@ __device__ __forceinline__ void dot_body(BENCH_ARGS) {
                 if constexpr (MODE == 3) sum += scalar_q4(w, x);
             }
         }
+#else
+        // On gfx1010, keeping two B128 vectors live while expanding each
+        // four-byte dot creates enough scalarized temporaries for LLVM to
+        // spill. Stream B32 pairs instead: this preserves the exact operation
+        // while keeping the retained-PM4 path inside its zero-scratch ABI.
+        for (u32 chunk = 0; chunk < groups; ++chunk) {
+            const u32 w = radiowave::buffer_load_u32(a_resource, base + chunk);
+            const u32 x = radiowave::buffer_load_u32(b_resource, base + chunk);
+            if constexpr (MODE == 0) sum = dot_s8_s8(w, x, sum);
+            if constexpr (MODE == 1) sum = dot_u8_s8(w, x, sum);
+            if constexpr (MODE == 2) {
+                sum += dot_u8_s8(w, x, 0) - 32 * dot_u8_s8(0x01010101u, x, 0);
+            }
+            if constexpr (MODE == 3) sum += scalar_q4(w, x);
+        }
+#endif
     }
     const u32 out_idx = output_offset + idx;
     radiowave::buffer_store_u32(

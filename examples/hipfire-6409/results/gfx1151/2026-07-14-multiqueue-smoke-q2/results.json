@@ -1,0 +1,808 @@
+{
+  "schema_version": 2,
+  "kind": "hipfire-6409-backend-comparison",
+  "generated_unix_seconds": 1784073013,
+  "methodology": {
+    "code_identity": "For every row, HIP, HipGraph, and Redline load exactly the same Radiowave-produced hipcc code object selected by the recorded wave, recipe, and scheduler policies. Vulkan runs matched GLSL algorithms compiled for RADV.",
+    "correctness": "Every timed sequence is reset before timing and checked against a CPU oracle after its final sample. Only rows passing every selected backend are ranked.",
+    "matrix_parity": "The default hipengine profile reproduces the pinned HipEngine f2c row set: the same family, operation, shape/sweep axes, repetition count, and serial/independent modes, totaling 112 core configurations plus 8 dispatch controls per mode. Each row is deliberately fired through Hipfire's existing Radiowave-tuned launch policy, so wave size, workgroup geometry, source variant, ABI, and machine code are optimization variables rather than parity constraints.",
+    "radiowave_recipe_mode": "certified",
+    "redline_dependency": "Required RMW edges use CS_PARTIAL_FLUSH plus vector/L1 invalidation for Radiowave-certified VMEM consumers. Scalar or unknown consumers fail closed to scalar/vector/L1 invalidation. Every Redline sample completes its HIP-to-PM4 system ownership acquire before the timed retained tape. Independent single-stage and aggressive single-kernel tapes contain no dependency fence.",
+    "scheduler_profile": "radiowave-recipe-or-default",
+    "timers": {
+      "hip": "HIP device events",
+      "hipgraph": "HIP device events around graph replay",
+      "redline": "GPU-written PM4 COPY_DATA/RELEASE_MEM timestamps",
+      "vulkan": "Vulkan timestamp queries"
+    },
+    "timing_modes": {
+      "independent_throughput": "Disjoint output slices with no inter-operation dependency; HIP, Vulkan, and Redline use up to four queues/streams. Redline release-publishes one retained PM4 IB per active lane before ringing any doorbell and measures the earliest GPU start through the latest GPU end. Serial RMW rows remain single-queue.",
+      "serial_latency": "One true output RMW chain. Every operation is separated by the backend's required compute-write to compute-read/write dependency. Redline reuses immutable kernargs when every operation has identical arguments.",
+      "single_kernel_aggressive": "Exactly one dispatch and one output operation. Redline's timed retained IB contains no entry acquire or dependency fence; the HIP-to-PM4 ownership acquire is replayed and waited outside the GPU timestamp window. Two-stage rows are excluded."
+    },
+    "vulkan_memory": "Device-local buffers with staging transfers outside the timing window.",
+    "wave_policy": {
+      "all_wave32": "Every HIP-family row selects the wave32 code object.",
+      "blanket_wave64": "Every kernel family with any prior Vulkan-over-Redline row selects wave64.",
+      "radiowave_tuned": "The targeted kernels, interleave, and every VOPD variant select wave64; dispatch_tiny uses one 32-lane workgroup because only lane zero is live; interleave selects buffer output for independent throughput and B128 loads with a one-wave HIP workgroup for aggressive latency while Vulkan retains its native shader geometry.",
+      "selected": "radiowave_tuned",
+      "targeted_wave64": "Only q4_selected_dual, q6_x8, dense_q8, and vopd_dependent select wave64."
+    }
+  },
+  "environment": {
+    "hip_arch": "gfx1151",
+    "hipcc": "HIP version: 7.2.53211-671d39a71e\nAMD clang version 22.0.0git (https://github.com/RadeonOpenCompute/llvm-project roc-7.2.2 26084 f58b06dce1f9c15707c5f808fd002e18c2accf7e)\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /opt/rocm-7.2.2/lib/llvm/bin\nConfiguration file: /opt/rocm-7.2.2/lib/llvm/bin/clang++.cfg",
+    "hipfire_clone_dirty": true,
+    "hipfire_device": "HIP ordinal 0",
+    "hipfire_redline_commit": "fatal: not a git repository (or any parent up to mount point /)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).",
+    "hsaco_wave32_sha256_by_scheduler": {
+      "default": "f8ce1fe9e68be6426ea31e7fe4510e3393dd3d798b252159d8db3a188a3ecb5a"
+    },
+    "hsaco_wave64_sha256_by_scheduler": {
+      "default": "0b9f91866f39f794a96d4d1d1a70e82f8355b798cfe6c15071d9985bbb5acf2c"
+    },
+    "redline_device": "gfx1151",
+    "redline_independent_queues": 2,
+    "redline_pci": "0000:bf:00.0",
+    "repository_commit": "fatal: not a git repository (or any parent up to mount point /)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).",
+    "repository_dirty": true,
+    "vulkan_compute_queues": 4,
+    "vulkan_device": "Radeon 8060S Graphics (RADV STRIX_HALO)",
+    "vulkan_pci": "0000:bf:00.0",
+    "vulkan_summary": ""
+  },
+  "config": {
+    "backends": [
+      "redline",
+      "vulkan"
+    ],
+    "filter": "independent_throughput/dispatch-grid",
+    "include_aggressive_extension": false,
+    "interleave_aggressive_b32": false,
+    "logical_matrix_rows": 240,
+    "matrix_profile": "hipengine_f2c",
+    "max_rows": null,
+    "mixed_paired_hash": false,
+    "radiowave_recipe_allowlist": [],
+    "radiowave_recipe_catalog": "builtin:hipfire_6409",
+    "radiowave_recipe_mode": "certified",
+    "radiowave_recipe_schema": 1,
+    "radiowave_target_architecture": "gfx1151",
+    "redline_independent_queues": 2,
+    "redline_rmw_boundary": "radiowave_certified_vmem",
+    "samples": 5,
+    "scheduler_profile": "radiowave-recipe-or-default",
+    "scheduler_profile_override": null,
+    "selected_rows": 8,
+    "warmups": 2,
+    "wave_policy": "radiowave_tuned"
+  },
+  "rows": [
+    {
+      "key": "independent_throughput/dispatch-grid/sweep=count,count=1,grid=1;hip-wave=32",
+      "mode": "independent_throughput",
+      "family": "dispatch-grid",
+      "name": "sweep=count,count=1,grid=1",
+      "kernel": "dispatch_tiny",
+      "second_kernel": null,
+      "n0": 1,
+      "n1": 0,
+      "aux": 0,
+      "block": 32,
+      "second_block": 32,
+      "wave_size": 32,
+      "scheduler_profile": "default",
+      "grid_groups": 1,
+      "iterations": 1,
+      "logical_operations": 1,
+      "redline_queue_count": 1,
+      "redline_submission_policy": "aggressive_unfenced_timed_ib_external_ownership_acquire",
+      "redline_dependency_cache_policies": {},
+      "radiowave_recipes": [
+        "hipfire.dispatch.live_lane_workgroup"
+      ],
+      "radiowave_lowerings": [],
+      "backend_order": [
+        "redline",
+        "vulkan"
+      ],
+      "backends": {
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              1.6831980763450556,
+              1.6831980763450556,
+              1.6831980763450556,
+              1.6831980763450556,
+              1.7232742210199379
+            ],
+            "median_us": 1.6831980763450556,
+            "p05_us": 1.6831980763450556,
+            "p95_us": 1.7152589920849615,
+            "min_us": 1.6831980763450556,
+            "max_us": 1.7232742210199379
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              2.32441641998291,
+              2.4446448554992677,
+              2.4446448554992677,
+              2.4446448554992677,
+              2.4446448554992677
+            ],
+            "median_us": 2.4446448554992677,
+            "p05_us": 2.3484621070861817,
+            "p95_us": 2.4446448554992677,
+            "min_us": 2.32441641998291,
+            "max_us": 2.4446448554992677
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 1,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "independent_throughput/dispatch-grid/sweep=count,count=50,grid=1;hip-wave=32",
+      "mode": "independent_throughput",
+      "family": "dispatch-grid",
+      "name": "sweep=count,count=50,grid=1",
+      "kernel": "dispatch_tiny",
+      "second_kernel": null,
+      "n0": 1,
+      "n1": 0,
+      "aux": 0,
+      "block": 32,
+      "second_block": 32,
+      "wave_size": 32,
+      "scheduler_profile": "default",
+      "grid_groups": 1,
+      "iterations": 50,
+      "logical_operations": 50,
+      "redline_queue_count": 2,
+      "redline_submission_policy": "independent_lane_local_retained_pm4",
+      "redline_dependency_cache_policies": {},
+      "radiowave_recipes": [
+        "hipfire.dispatch.live_lane_workgroup"
+      ],
+      "radiowave_lowerings": [],
+      "backend_order": [
+        "vulkan",
+        "redline"
+      ],
+      "backends": {
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              0.09297665564572688,
+              0.09137360985873158,
+              0.09297665564572688,
+              0.09217513275222924,
+              0.09538122432621982
+            ],
+            "median_us": 0.09297665564572688,
+            "p05_us": 0.09153391443743111,
+            "p95_us": 0.09490031059012123,
+            "min_us": 0.09137360985873158,
+            "max_us": 0.09538122432621982
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 50,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              0.36629596687316895,
+              0.3398457110595703,
+              0.44885282592773434,
+              0.2516781916809082,
+              0.6768860919570924
+            ],
+            "median_us": 0.36629596687316895,
+            "p05_us": 0.26931169555664064,
+            "p95_us": 0.6312794387512207,
+            "min_us": 0.2516781916809082,
+            "max_us": 0.6768860919570924
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 50,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "independent_throughput/dispatch-grid/sweep=count,count=200,grid=1;hip-wave=32",
+      "mode": "independent_throughput",
+      "family": "dispatch-grid",
+      "name": "sweep=count,count=200,grid=1",
+      "kernel": "dispatch_tiny",
+      "second_kernel": null,
+      "n0": 1,
+      "n1": 0,
+      "aux": 0,
+      "block": 32,
+      "second_block": 32,
+      "wave_size": 32,
+      "scheduler_profile": "default",
+      "grid_groups": 1,
+      "iterations": 200,
+      "logical_operations": 200,
+      "redline_queue_count": 2,
+      "redline_submission_policy": "independent_lane_local_retained_pm4",
+      "redline_dependency_cache_policies": {},
+      "radiowave_recipes": [
+        "hipfire.dispatch.live_lane_workgroup"
+      ],
+      "radiowave_lowerings": [],
+      "backend_order": [
+        "redline",
+        "vulkan"
+      ],
+      "backends": {
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              0.0635206893096884,
+              0.06311992786293959,
+              0.06291954713956517,
+              0.06211802424606753,
+              0.062318404969441944
+            ],
+            "median_us": 0.06291954713956517,
+            "p05_us": 0.06215810039074241,
+            "p95_us": 0.06344053702033864,
+            "min_us": 0.06211802424606753,
+            "max_us": 0.0635206893096884
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 200,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              0.13245165979385376,
+              0.1128143486595154,
+              0.13726079721450804,
+              0.10960825704574585,
+              0.14186955390930175
+            ],
+            "median_us": 0.13245165979385376,
+            "p05_us": 0.11024947536849976,
+            "p95_us": 0.140947802570343,
+            "min_us": 0.10960825704574585,
+            "max_us": 0.14186955390930175
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 200,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "independent_throughput/dispatch-grid/sweep=count,count=941,grid=1;hip-wave=32",
+      "mode": "independent_throughput",
+      "family": "dispatch-grid",
+      "name": "sweep=count,count=941,grid=1",
+      "kernel": "dispatch_tiny",
+      "second_kernel": null,
+      "n0": 1,
+      "n1": 0,
+      "aux": 0,
+      "block": 32,
+      "second_block": 32,
+      "wave_size": 32,
+      "scheduler_profile": "default",
+      "grid_groups": 1,
+      "iterations": 941,
+      "logical_operations": 941,
+      "redline_queue_count": 2,
+      "redline_submission_policy": "independent_lane_local_retained_pm4",
+      "redline_dependency_cache_policies": {},
+      "radiowave_recipes": [
+        "hipfire.dispatch.live_lane_workgroup"
+      ],
+      "radiowave_lowerings": [],
+      "backend_order": [
+        "vulkan",
+        "redline"
+      ],
+      "backends": {
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              0.05540814476304128,
+              0.056217333656583005,
+              0.0553655558739075,
+              0.05493966698256975,
+              0.0551952003173724
+            ],
+            "median_us": 0.0553655558739075,
+            "p05_us": 0.05499077364953028,
+            "p95_us": 0.05605549587787466,
+            "min_us": 0.05493966698256975,
+            "max_us": 0.056217333656583005
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 941,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              0.04710331196638021,
+              0.07116603462551657,
+              0.0482106230975971,
+              0.0725288790947066,
+              0.046336711952460814
+            ],
+            "median_us": 0.0482106230975971,
+            "p05_us": 0.04649003195524469,
+            "p95_us": 0.07225631020086859,
+            "min_us": 0.046336711952460814,
+            "max_us": 0.0725288790947066
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 941,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "independent_throughput/dispatch-grid/sweep=grid,count=941,grid=1;hip-wave=32",
+      "mode": "independent_throughput",
+      "family": "dispatch-grid",
+      "name": "sweep=grid,count=941,grid=1",
+      "kernel": "dispatch_tiny",
+      "second_kernel": null,
+      "n0": 1,
+      "n1": 0,
+      "aux": 0,
+      "block": 32,
+      "second_block": 32,
+      "wave_size": 32,
+      "scheduler_profile": "default",
+      "grid_groups": 1,
+      "iterations": 941,
+      "logical_operations": 941,
+      "redline_queue_count": 2,
+      "redline_submission_policy": "independent_lane_local_retained_pm4",
+      "redline_dependency_cache_policies": {},
+      "radiowave_recipes": [
+        "hipfire.dispatch.live_lane_workgroup"
+      ],
+      "radiowave_lowerings": [],
+      "backend_order": [
+        "redline",
+        "vulkan"
+      ],
+      "backends": {
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              0.055024844760837306,
+              0.056217333656583005,
+              0.055535911430442605,
+              0.05549332254130883,
+              0.055748855876111475
+            ],
+            "median_us": 0.055535911430442605,
+            "p05_us": 0.055118540316931613,
+            "p95_us": 0.0561236381004887,
+            "min_us": 0.055024844760837306,
+            "max_us": 0.056217333656583005
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 941,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              0.09280119057390819,
+              0.07120862351517875,
+              0.07014390127362405,
+              0.05161773427057215,
+              0.06482029006585051
+            ],
+            "median_us": 0.07014390127362405,
+            "p05_us": 0.05425824542962782,
+            "p95_us": 0.0884826771621623,
+            "min_us": 0.05161773427057215,
+            "max_us": 0.09280119057390819
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 941,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "independent_throughput/dispatch-grid/sweep=grid,count=941,grid=128;hip-wave=32",
+      "mode": "independent_throughput",
+      "family": "dispatch-grid",
+      "name": "sweep=grid,count=941,grid=128",
+      "kernel": "dispatch_tiny",
+      "second_kernel": null,
+      "n0": 128,
+      "n1": 0,
+      "aux": 0,
+      "block": 32,
+      "second_block": 32,
+      "wave_size": 32,
+      "scheduler_profile": "default",
+      "grid_groups": 128,
+      "iterations": 941,
+      "logical_operations": 941,
+      "redline_queue_count": 2,
+      "redline_submission_policy": "independent_lane_local_retained_pm4",
+      "redline_dependency_cache_policies": {},
+      "radiowave_recipes": [
+        "hipfire.dispatch.live_lane_workgroup"
+      ],
+      "radiowave_lowerings": [],
+      "backend_order": [
+        "vulkan",
+        "redline"
+      ],
+      "backends": {
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              0.20868555675549752,
+              0.2175440456953227,
+              0.2100909900969121,
+              0.21720333458225252,
+              0.21937536792807505
+            ],
+            "median_us": 0.21720333458225252,
+            "p05_us": 0.20896664342378043,
+            "p95_us": 0.21900910348152458,
+            "min_us": 0.20868555675549752,
+            "max_us": 0.21937536792807505
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 120448,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              0.0775543680748448,
+              0.07631929027464135,
+              0.10864425752824222,
+              0.11839711326088333,
+              0.0738917235638966
+            ],
+            "median_us": 0.0775543680748448,
+            "p05_us": 0.07437723690604556,
+            "p95_us": 0.11644654211435511,
+            "min_us": 0.0738917235638966,
+            "max_us": 0.11839711326088333
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 120448,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "independent_throughput/dispatch-grid/sweep=grid,count=941,grid=1024;hip-wave=32",
+      "mode": "independent_throughput",
+      "family": "dispatch-grid",
+      "name": "sweep=grid,count=941,grid=1024",
+      "kernel": "dispatch_tiny",
+      "second_kernel": null,
+      "n0": 1024,
+      "n1": 0,
+      "aux": 0,
+      "block": 32,
+      "second_block": 32,
+      "wave_size": 32,
+      "scheduler_profile": "default",
+      "grid_groups": 1024,
+      "iterations": 941,
+      "logical_operations": 941,
+      "redline_queue_count": 2,
+      "redline_submission_policy": "independent_lane_local_retained_pm4",
+      "redline_dependency_cache_policies": {},
+      "radiowave_recipes": [
+        "hipfire.dispatch.live_lane_workgroup"
+      ],
+      "radiowave_lowerings": [],
+      "backend_order": [
+        "redline",
+        "vulkan"
+      ],
+      "backends": {
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              0.7566767932397804,
+              0.7763102711304508,
+              0.7693682822016454,
+              0.7614467488227633,
+              0.7588488265856029
+            ],
+            "median_us": 0.7614467488227633,
+            "p05_us": 0.7571111999089449,
+            "p95_us": 0.7749218733446898,
+            "min_us": 0.7566767932397804,
+            "max_us": 0.7763102711304508
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 963584,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              0.4740569308298174,
+              0.48542816436962166,
+              0.3681383622399552,
+              0.4811692754034028,
+              0.47418469749880393
+            ],
+            "median_us": 0.47418469749880393,
+            "p05_us": 0.38932207595792767,
+            "p95_us": 0.4845763865763779,
+            "min_us": 0.3681383622399552,
+            "max_us": 0.48542816436962166
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 963584,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    },
+    {
+      "key": "independent_throughput/dispatch-grid/sweep=grid,count=941,grid=8192;hip-wave=32",
+      "mode": "independent_throughput",
+      "family": "dispatch-grid",
+      "name": "sweep=grid,count=941,grid=8192",
+      "kernel": "dispatch_tiny",
+      "second_kernel": null,
+      "n0": 8192,
+      "n1": 0,
+      "aux": 0,
+      "block": 32,
+      "second_block": 32,
+      "wave_size": 32,
+      "scheduler_profile": "default",
+      "grid_groups": 8192,
+      "iterations": 941,
+      "logical_operations": 941,
+      "redline_queue_count": 2,
+      "redline_submission_policy": "independent_lane_local_retained_pm4",
+      "redline_dependency_cache_policies": {},
+      "radiowave_recipes": [
+        "hipfire.dispatch.live_lane_workgroup"
+      ],
+      "radiowave_lowerings": [],
+      "backend_order": [
+        "vulkan",
+        "redline"
+      ],
+      "backends": {
+        "redline": {
+          "distribution": {
+            "samples_us": [
+              3.3168226857383973,
+              3.3125637968250192,
+              3.320783452427838,
+              3.314139585722969,
+              3.3997432528818567
+            ],
+            "median_us": 3.3168226857383973,
+            "p05_us": 3.312878954604609,
+            "p95_us": 3.383951292791053,
+            "min_us": 3.3125637968250192,
+            "max_us": 3.3997432528818567
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 7708672,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        },
+        "vulkan": {
+          "distribution": {
+            "samples_us": [
+              3.5763594204925955,
+              2.844341584978904,
+              3.571461698181444,
+              2.8368885292880215,
+              3.576700131609893
+            ],
+            "median_us": 3.571461698181444,
+            "p05_us": 2.838379140426198,
+            "p95_us": 3.5766319893864336,
+            "min_us": 2.8368885292880215,
+            "max_us": 3.576700131609893
+          },
+          "correctness": {
+            "pass": true,
+            "mismatches": 0,
+            "checked_words": 7708672,
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          },
+          "error": null
+        }
+      }
+    }
+  ],
+  "summary": {
+    "attempted_rows": 8,
+    "families": {
+      "independent_throughput/dispatch-grid": {
+        "bench_n": 8,
+        "redline_wins": 5,
+        "win_percent": 62.5
+      }
+    },
+    "matched_rows": 8,
+    "pairwise": {
+      "redline_over_vulkan": {
+        "bench_n": 8,
+        "losses": 3,
+        "max_ratio": 2.8006589438345726,
+        "median_ratio": 0.860222145126649,
+        "min_ratio": 0.25382931851368246,
+        "ties": 0,
+        "win_percent": 62.5,
+        "wins": 5
+      }
+    },
+    "placements": {
+      "redline": {
+        "bench_n": 8,
+        "first": 5,
+        "fourth": 0,
+        "second": 3,
+        "third": 0,
+        "win_percent": 62.5,
+        "wins": 5
+      },
+      "vulkan": {
+        "bench_n": 8,
+        "first": 3,
+        "fourth": 0,
+        "second": 5,
+        "third": 0,
+        "win_percent": 37.5,
+        "wins": 3
+      }
+    },
+    "redline_losses": [
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 0.0482106230975971,
+            "redline_slower_percent": 14.840987974426367
+          }
+        ],
+        "key": "independent_throughput/dispatch-grid/sweep=count,count=941,grid=1;hip-wave=32",
+        "redline_median_us": 0.0553655558739075,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 14.840987974426367,
+        "winner": "vulkan",
+        "winner_median_us": 0.0482106230975971
+      },
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 0.0775543680748448,
+            "redline_slower_percent": 180.06589438345725
+          }
+        ],
+        "key": "independent_throughput/dispatch-grid/sweep=grid,count=941,grid=128;hip-wave=32",
+        "redline_median_us": 0.21720333458225252,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 180.06589438345725,
+        "winner": "vulkan",
+        "winner_median_us": 0.0775543680748448
+      },
+      {
+        "beaters": [
+          {
+            "backend": "vulkan",
+            "median_us": 0.47418469749880393,
+            "redline_slower_percent": 60.580202785789794
+          }
+        ],
+        "key": "independent_throughput/dispatch-grid/sweep=grid,count=941,grid=1024;hip-wave=32",
+        "redline_median_us": 0.7614467488227633,
+        "redline_place": 2,
+        "redline_slower_than_winner_percent": 60.580202785789794,
+        "winner": "vulkan",
+        "winner_median_us": 0.47418469749880393
+      }
+    ],
+    "redline_win_percent": 62.5,
+    "redline_wins": 5,
+    "rejected_rows": 0
+  },
+  "hipengine_baseline": null
+}

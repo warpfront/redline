@@ -34,6 +34,25 @@ Redline closes that gap **on the pure ROCm/HIP stack**:
 - **Hazard-checked, fail-closed.** Memory ordering is validated at instantiate
   time; an unsafe graph is rejected, not silently mis-fenced.
 
+## Architecture coverage
+
+The standard public ROCr/AQL replay is architecture-neutral. It has now run the
+same Radiowave-compiled HIP kernel correctly on gfx1010, gfx1030, gfx1100, and
+gfx1151 as well as gfx1201. Retained direct PM4 is architecture-specific:
+Redline keeps separate legacy GFX10/GFX11 and GFX12 command encoders and
+rejects a device-family mismatch before submission.
+
+The legacy direct backend supports zero-scratch HSA kernels whose implicit user
+data consists only of the optional private-segment buffer and kernarg pointer.
+It encodes static plus dynamic LDS in the GFX10/GFX11 512-byte allocation
+granule; unsupported scratch, queue, dispatch, or flat-scratch contracts fail
+closed. On hipx, a real retained-PM4 HIP kernel completed 1,000
+correctness-checked replays on each of gfx1010, gfx1030, gfx1100, and gfx1151,
+and the full LDS-bearing issue-6409 matrix passed its CPU oracle on all four.
+See the
+[gfx10 lowering artifact](crates/redline-rocr/tests/artifacts/hipx-gfx10-lowering-2026-07-14.json)
+and [`pm4_gfx10_smoke`](crates/redline-dispatch/examples/pm4_gfx10_smoke.rs).
+
 ## Results
 
 Measured against the equivalent HIP path on the originating integration, GPU
@@ -54,6 +73,21 @@ Radiowave-certified HIP policy and minimal same-agent RMW boundary take
 passed all four backend CPU oracles. See the
 [certified-boundary report](examples/hipfire-6409/results/gfx1201/2026-07-13-radiowave-vmem-final/comparison/REPORT.md)
 and [aggregate artifact](examples/hipfire-6409/results/gfx1201/2026-07-13-radiowave-vmem-final/comparison/aggregate.json).
+
+The 240-row HipEngine-parity matrix also runs through native retained PM4 on
+gfx1010, gfx1030, gfx1100, and gfx1151. All **960/960 rows** pass all four
+backend correctness gates; Redline takes **537/960 firsts (55.94%)**, beats
+Vulkan pairwise in **606/960 (63.13%)**, and beats HipGraph in **837/960
+(87.19%)** using architecture-safe baseline plans. See the
+[RDNA portability report](examples/hipfire-6409/results/2026-07-14-rdna-rocr-native/REPORT.md)
+and [aggregate](examples/hipfire-6409/results/2026-07-14-rdna-rocr-native/aggregate.json).
+
+For independent throughput, Redline can now release-publish up to four
+lane-local retained PM4 IBs and time their GPU makespan. In a same-HSACO Q1/Q4
+control this raises gfx1100 Redline-over-Vulkan wins from **67/120 to 100/120**
+and gfx1151 from **68/120 to 110/120**, with all selected CPU oracles passing.
+Serial RMW remains single-queue. See the
+[multi-queue benchmark result](examples/hipfire-6409/README.md#multi-queue-retained-pm4-result).
 
 The result also transfers back to the pinned HipEngine #6409 suite without
 replacing its kernels: Radiowave + Redline beats Vulkan in **192/212 matched

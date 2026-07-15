@@ -13,8 +13,9 @@ use redline_rocr::packet::{
     PacketError, PacketImage,
 };
 use redline_rocr::{
-    CompletionSignal, DEFAULT_WAIT_TIMEOUT, Gfx12Pm4CommandBuffer, GpuDevice, HeaderPolicy,
-    KernargBuffer, KernargPool, Kernel, QueueDepthReport, QueueSet, RuntimeError,
+    CompletionSignal, DEFAULT_WAIT_TIMEOUT, Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer,
+    GpuDevice, HeaderPolicy, KernargBuffer, KernargPool, Kernel, QueueDepthReport, QueueSet,
+    RuntimeError,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,10 +47,11 @@ fn apply_quiescence_transition(
     }
 }
 
-/// One retained GFX12 PM4 indirect buffer submitted through AMD's
-/// vendor-specific AQL packet. One queue publication replaces every dispatch
-/// packet in the command stream while preserving public ROCr ownership and
-/// completion handling.
+/// One retained architecture-specific PM4 indirect buffer submitted through
+/// AMD's vendor-specific AQL packet. Separate GFX10 and GFX12 constructors keep
+/// their register maps from being mixed. One queue publication replaces every
+/// dispatch packet in the command stream while preserving public ROCr
+/// ownership and completion handling.
 pub struct SingleQueuePm4Ib {
     queues: QueueSet,
     completion: CompletionSignal,
@@ -66,7 +68,51 @@ impl SingleQueuePm4Ib {
         pool: &KernargPool,
         commands: &Gfx12Pm4CommandBuffer,
     ) -> Result<Self, ReplayError> {
-        Self::create_inner(device, pool, commands, false)
+        ensure_device_family(device, "gfx12")?;
+        let bytes = commands.as_bytes();
+        Self::create_encoded(device, pool, &bytes, commands.len_dwords(), None, None)
+    }
+
+    /// Create a retained GFX10 IB. Unlike the GFX12 constructor this accepts
+    /// only the separate fail-closed GFX10 encoder, preventing register maps
+    /// from being mixed accidentally.
+    pub fn create_gfx10(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx10Pm4CommandBuffer,
+    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, "gfx10")?;
+        let bytes = commands.as_bytes();
+        Self::create_encoded(device, pool, &bytes, commands.len_dwords(), None, None)
+    }
+
+    /// Create a retained GFX11 IB using the shared GFX10/GFX11 register map.
+    pub fn create_gfx11(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx10Pm4CommandBuffer,
+    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, "gfx11")?;
+        let bytes = commands.as_bytes();
+        Self::create_encoded(device, pool, &bytes, commands.len_dwords(), None, None)
+    }
+
+    /// Create a profiled retained GFX10 IB.
+    pub fn create_profiled_gfx10(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx10Pm4CommandBuffer,
+    ) -> Result<Self, ReplayError> {
+        Self::create_profiled_legacy(device, pool, commands, "gfx10")
+    }
+
+    /// Create a profiled retained GFX11 IB using the shared legacy map.
+    pub fn create_profiled_gfx11(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx10Pm4CommandBuffer,
+    ) -> Result<Self, ReplayError> {
+        Self::create_profiled_legacy(device, pool, commands, "gfx11")
     }
 
     /// Create a retained IB whose one vendor-AQL completion signal carries
@@ -76,43 +122,70 @@ impl SingleQueuePm4Ib {
         pool: &KernargPool,
         commands: &Gfx12Pm4CommandBuffer,
     ) -> Result<Self, ReplayError> {
-        Self::create_inner(device, pool, commands, true)
-    }
-
-    fn create_inner(
-        device: &GpuDevice,
-        pool: &KernargPool,
-        commands: &Gfx12Pm4CommandBuffer,
-        profiling: bool,
-    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, "gfx12")?;
         if commands.is_empty() {
             return Err(ReplayError::EmptyGraph);
         }
-        let mut timestamps = if profiling {
-            Some(pool.allocate_executable_bytes(16)?)
-        } else {
-            None
-        };
-        let timed_commands = timestamps.as_mut().map(|buffer| {
-            buffer.as_mut_bytes().fill(0);
-            let start = buffer.address() as usize as u64;
-            commands.with_gpu_timestamps(start, start + 8)
-        });
-        let commands = timed_commands.as_ref().unwrap_or(commands);
-        let bytes = commands.as_bytes();
+        let mut timestamps = pool.allocate_executable_bytes(16)?;
+        timestamps.as_mut_bytes().fill(0);
+        let start = timestamps.address() as usize as u64;
+        let timed_commands = commands.with_gpu_timestamps(start, start + 8);
+        let frequency_hz = device.gpu_timestamp_frequency_hz()?;
+        let bytes = timed_commands.as_bytes();
+        Self::create_encoded(
+            device,
+            pool,
+            &bytes,
+            timed_commands.len_dwords(),
+            Some(timestamps),
+            Some(frequency_hz),
+        )
+    }
+
+    fn create_profiled_legacy(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx10Pm4CommandBuffer,
+        family: &'static str,
+    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, family)?;
+        if commands.is_empty() {
+            return Err(ReplayError::EmptyGraph);
+        }
+        let mut timestamps = pool.allocate_executable_bytes(16)?;
+        timestamps.as_mut_bytes().fill(0);
+        let start = timestamps.address() as usize as u64;
+        let timed_commands = commands.with_gpu_timestamps(start, start + 8);
+        let frequency_hz = device.gpu_timestamp_frequency_hz()?;
+        let bytes = timed_commands.as_bytes();
+        Self::create_encoded(
+            device,
+            pool,
+            &bytes,
+            timed_commands.len_dwords(),
+            Some(timestamps),
+            Some(frequency_hz),
+        )
+    }
+
+    fn create_encoded(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        bytes: &[u8],
+        dwords: u32,
+        timestamps: Option<KernargBuffer>,
+        timestamp_frequency_hz: Option<u64>,
+    ) -> Result<Self, ReplayError> {
+        if dwords == 0 {
+            return Err(ReplayError::EmptyGraph);
+        }
         let mut indirect = pool.allocate_executable_bytes(bytes.len())?;
-        indirect.write_exact(&bytes)?;
+        indirect.write_exact(bytes)?;
         let completion = CompletionSignal::new(device)?;
-        let packet = PacketImage::pm4_indirect_buffer(
-            indirect.address(),
-            commands.len_dwords(),
-            completion.raw(),
-        )?;
+        let packet =
+            PacketImage::pm4_indirect_buffer(indirect.address(), dwords, completion.raw())?;
         let queue_size = *device.queue_size_range().start();
         let queues = QueueSet::create(device, 1, queue_size)?;
-        let timestamp_frequency_hz = profiling
-            .then(|| device.gpu_timestamp_frequency_hz())
-            .transpose()?;
         Ok(Self {
             queues,
             completion,
@@ -210,7 +283,206 @@ impl SingleQueuePm4Ib {
     }
 }
 
+fn ensure_device_family(device: &GpuDevice, required: &'static str) -> Result<(), ReplayError> {
+    let actual = device.name();
+    if actual.starts_with(required) {
+        Ok(())
+    } else {
+        Err(ReplayError::ArchitectureMismatch {
+            required,
+            actual: actual.to_owned(),
+        })
+    }
+}
+
 impl Drop for SingleQueuePm4Ib {
+    fn drop(&mut self) {
+        if !self.usable {
+            let _ = self.queues.inactivate_all();
+        }
+    }
+}
+
+/// One retained PM4 indirect buffer per public ROCr queue.
+///
+/// Every lane has its own completion signal and GPU timestamp bracket. Replay
+/// release-publishes every vendor packet before ringing any doorbell, then
+/// reports the makespan from the earliest lane start through the latest lane
+/// end. There are deliberately no cross-lane barriers: callers may use this
+/// only for work whose memory footprints are independent.
+pub struct MultiQueuePm4Ib {
+    queues: QueueSet,
+    completions: Vec<CompletionSignal>,
+    indirects: Vec<KernargBuffer>,
+    batches: Vec<Vec<PacketImage>>,
+    timestamps: Vec<KernargBuffer>,
+    timestamp_frequency_hz: u64,
+    usable: bool,
+}
+
+impl MultiQueuePm4Ib {
+    /// Create profiled retained GFX12 IBs, one per queue lane.
+    pub fn create_profiled(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[Gfx12Pm4CommandBuffer],
+    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, "gfx12")?;
+        if commands.iter().any(Gfx12Pm4CommandBuffer::is_empty) {
+            return Err(ReplayError::EmptyGraph);
+        }
+        Self::create_profiled_encoded(device, pool, commands, |commands, start, end| {
+            let timed = commands.with_gpu_timestamps(start, end);
+            (timed.as_bytes(), timed.len_dwords())
+        })
+    }
+
+    /// Create profiled retained GFX10 IBs, one per queue lane.
+    pub fn create_profiled_gfx10(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[Gfx10Pm4CommandBuffer],
+    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, "gfx10")?;
+        if commands.iter().any(Gfx10Pm4CommandBuffer::is_empty) {
+            return Err(ReplayError::EmptyGraph);
+        }
+        Self::create_profiled_encoded(device, pool, commands, |commands, start, end| {
+            let timed = commands.with_gpu_timestamps(start, end);
+            (timed.as_bytes(), timed.len_dwords())
+        })
+    }
+
+    /// Create profiled retained GFX11 IBs using the legacy register map, one
+    /// per queue lane.
+    pub fn create_profiled_gfx11(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[Gfx10Pm4CommandBuffer],
+    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, "gfx11")?;
+        if commands.iter().any(Gfx10Pm4CommandBuffer::is_empty) {
+            return Err(ReplayError::EmptyGraph);
+        }
+        Self::create_profiled_encoded(device, pool, commands, |commands, start, end| {
+            let timed = commands.with_gpu_timestamps(start, end);
+            (timed.as_bytes(), timed.len_dwords())
+        })
+    }
+
+    fn create_profiled_encoded<C>(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[C],
+        encode: impl Fn(&C, u64, u64) -> (Vec<u8>, u32),
+    ) -> Result<Self, ReplayError> {
+        if commands.is_empty() {
+            return Err(ReplayError::EmptyGraph);
+        }
+        let timestamp_frequency_hz = device.gpu_timestamp_frequency_hz()?;
+        let mut completions = Vec::with_capacity(commands.len());
+        let mut indirects = Vec::with_capacity(commands.len());
+        let mut batches = Vec::with_capacity(commands.len());
+        let mut timestamps = Vec::with_capacity(commands.len());
+        for commands in commands {
+            let mut timestamp = pool.allocate_executable_bytes(16)?;
+            timestamp.as_mut_bytes().fill(0);
+            let start = timestamp.address() as usize as u64;
+            let (bytes, dwords) = encode(commands, start, start + 8);
+            if dwords == 0 {
+                return Err(ReplayError::EmptyGraph);
+            }
+            let mut indirect = pool.allocate_executable_bytes(bytes.len())?;
+            indirect.write_exact(&bytes)?;
+            let completion = CompletionSignal::new(device)?;
+            let packet =
+                PacketImage::pm4_indirect_buffer(indirect.address(), dwords, completion.raw())?;
+            timestamps.push(timestamp);
+            indirects.push(indirect);
+            completions.push(completion);
+            batches.push(vec![packet]);
+        }
+        let queue_size = *device.queue_size_range().start();
+        let queues = QueueSet::create(device, commands.len(), queue_size)?;
+        Ok(Self {
+            queues,
+            completions,
+            indirects,
+            batches,
+            timestamps,
+            timestamp_frequency_hz,
+            usable: true,
+        })
+    }
+
+    pub fn queue_count(&self) -> usize {
+        self.queues.len()
+    }
+
+    pub fn queue_ids(&self) -> impl ExactSizeIterator<Item = u64> + '_ {
+        self.queues.queue_ids()
+    }
+
+    pub fn indirect_addresses(&self) -> impl ExactSizeIterator<Item = usize> + '_ {
+        self.indirects
+            .iter()
+            .map(|indirect| indirect.address() as usize)
+    }
+
+    /// Submit every lane and synchronously prove completion with one finite
+    /// timeout, returning the cross-queue GPU makespan.
+    ///
+    /// # Safety
+    ///
+    /// Every lane must access memory independently of every other lane. All
+    /// code, kernarg, and pointee addresses encoded in every retained IB must
+    /// remain live and GPU-accessible until this returns `Ok`. After an error
+    /// they must remain live through this object's destruction.
+    pub unsafe fn replay_and_wait_profiled(&mut self) -> Result<GpuMultiQueueTiming, ReplayError> {
+        if !self.usable {
+            return Err(ReplayError::GraphInactive);
+        }
+        for completion in &mut self.completions {
+            completion.reset();
+        }
+        if let Err(error) = self.queues.prepare_batches(&self.batches) {
+            self.usable = false;
+            return Err(error.into());
+        }
+        if let Err(error) = self.queues.ring_prepared() {
+            self.usable = false;
+            return Err(error.into());
+        }
+        if let Err(operation) = self
+            .queues
+            .wait_signals(&self.completions, DEFAULT_WAIT_TIMEOUT)
+        {
+            self.usable = false;
+            return match self.queues.inactivate_all() {
+                Ok(()) => Err(operation.into()),
+                Err(teardown) => Err(RuntimeError::OperationAndTeardown {
+                    operation: Box::new(operation),
+                    teardown: Box::new(teardown),
+                }
+                .into()),
+            };
+        }
+        let pairs = self
+            .timestamps
+            .iter_mut()
+            .map(|timestamp| {
+                let bytes = timestamp.as_mut_bytes();
+                (
+                    u64::from_le_bytes(bytes[..8].try_into().unwrap()),
+                    u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+                )
+            })
+            .collect::<Vec<_>>();
+        gpu_multi_queue_timing(&pairs, self.timestamp_frequency_hz)
+    }
+}
+
+impl Drop for MultiQueuePm4Ib {
     fn drop(&mut self) {
         if !self.usable {
             let _ = self.queues.inactivate_all();
@@ -648,6 +920,32 @@ impl GpuMultiQueueTiming {
         self.last_end.saturating_sub(self.first_start) as f64 * 1_000_000.0
             / self.frequency_hz as f64
     }
+}
+
+fn gpu_multi_queue_timing(
+    timestamp_pairs: &[(u64, u64)],
+    frequency_hz: u64,
+) -> Result<GpuMultiQueueTiming, ReplayError> {
+    if timestamp_pairs.is_empty() {
+        return Err(ReplayError::EmptyGraph);
+    }
+    if frequency_hz == 0 {
+        return Err(ReplayError::ProfilingUnavailable);
+    }
+    let mut first_start = u64::MAX;
+    let mut last_end = 0;
+    for &(start, end) in timestamp_pairs {
+        if start == 0 || end < start {
+            return Err(ReplayError::InvalidGpuTimestamp { start, end });
+        }
+        first_start = first_start.min(start);
+        last_end = last_end.max(end);
+    }
+    Ok(GpuMultiQueueTiming {
+        first_start,
+        last_end,
+        frequency_hz,
+    })
 }
 
 impl GpuBatchTiming {
@@ -2278,6 +2576,10 @@ pub enum ReplayError {
     EmptyGraph,
     EmptyPhaseSet,
     EmptyTokenBatch,
+    ArchitectureMismatch {
+        required: &'static str,
+        actual: String,
+    },
     InvalidBatchShape(&'static str),
     BatchShapeOverflow,
     EmptyPhaseLane {
@@ -2356,6 +2658,10 @@ impl fmt::Display for ReplayError {
             Self::EmptyTokenBatch => {
                 write!(f, "serialized two-queue replay requires at least one token")
             }
+            Self::ArchitectureMismatch { required, actual } => write!(
+                f,
+                "PM4 command stream requires {required}, selected device reports {actual}"
+            ),
             Self::InvalidBatchShape(detail) => write!(f, "invalid AQL batch shape: {detail}"),
             Self::BatchShapeOverflow => {
                 write!(f, "serialized two-queue packet or signal count overflowed")
@@ -2457,6 +2763,33 @@ mod tests {
         };
         assert_eq!(timing.span_microseconds(), 1_000.0);
         assert_eq!(timing.dispatch_span_microseconds(), 1_000.0);
+    }
+
+    #[test]
+    fn multi_queue_timing_uses_earliest_start_and_latest_end() {
+        let timing = gpu_multi_queue_timing(
+            &[(500, 900), (100, 400), (250, 1_100), (700, 800)],
+            1_000_000,
+        )
+        .unwrap();
+        assert_eq!(timing.first_start, 100);
+        assert_eq!(timing.last_end, 1_100);
+        assert_eq!(timing.span_microseconds(), 1_000.0);
+    }
+
+    #[test]
+    fn multi_queue_timing_rejects_an_invalid_lane() {
+        assert!(matches!(
+            gpu_multi_queue_timing(&[(100, 200), (0, 300)], 1_000_000),
+            Err(ReplayError::InvalidGpuTimestamp { start: 0, end: 300 })
+        ));
+        assert!(matches!(
+            gpu_multi_queue_timing(&[(200, 100)], 1_000_000),
+            Err(ReplayError::InvalidGpuTimestamp {
+                start: 200,
+                end: 100
+            })
+        ));
     }
 
     #[test]

@@ -4,9 +4,9 @@
 # Hipfire-native ROCm issue 6409 benchmark
 
 This is a standalone Rust rewrite of the ROCm issue 6409 microbenchmark. It
-uses Hipfire's Rust HIP bridge as the harness, Redline's retained gfx1201 PM4
-path, and a native Vulkan/RADV backend. It does not import hipEngine and it does
-not use HIP graph capture to construct the Redline tape.
+uses Hipfire's Rust HIP bridge as the harness, Redline's retained GFX10/GFX11/
+GFX12 PM4 paths, and a native Vulkan/RADV backend. It does not import hipEngine
+and it does not use HIP graph capture to construct the Redline tape.
 
 `cargo run --release --bin hipengine_exact` and
 `cargo run --release --bin hipengine_exact_memory` are diagnostic exceptions.
@@ -69,6 +69,18 @@ packed result in the dependent dot stage. HIP, HipGraph, and Redline execute
 the identical selected HSACO within a row; Vulkan deliberately exercises
 RADV/ACO codegen for the same operation.
 
+The `radiowave` policy no longer owns a benchmark-local list of winning wave,
+workgroup, or source-variant decisions. It selects them from Radiowave's typed
+recipe catalog. Every result row records the applied recipe IDs and source
+lowerings, so a result can be traced back to the policy that produced it.
+Promoted evidence is architecture-specific: setting `HIPFIRE_BENCH_ARCH` to an
+uncertified target produces the baseline plan and exposes the applicable
+recipes as autoresearch candidates; it never silently imports gfx1201 winners.
+Pass Hipfire's exported catalog with `--recipe-catalog PATH` or
+`RADIOWAVE_RECIPE_CATALOG=PATH`; the built-in reference catalog remains the
+default. This closes the loop from `ar radiowave` promotion back into the
+benchmark consumer.
+
 Pinned HipEngine has 212 matched core rows because its HIP independent sampler
 path rejects 12 rows, and it reports 16 dispatch rows separately. Hipfire can
 execute and correctness-gate all 240 rows across all four backends. The former
@@ -90,6 +102,53 @@ Across the full grid, Redline also beats both direct HIP and HipGraph in
 217/240 rows. See the
 [parity report](results/gfx1201/2026-07-13-hipengine-parity/REPORT.md) and
 [machine-readable artifact](results/gfx1201/2026-07-13-hipengine-parity/results.json).
+
+## Native RDNA portability result
+
+The same 240-row matrix now runs through architecture-matched retained PM4 on
+gfx1010, gfx1030, gfx1100, and gfx1151. All **960/960 rows** pass all four
+backend oracles. In aggregate, Redline takes **537/960 first places (55.94%)**,
+finishes first or second in **862/960 (89.79%)**, beats Vulkan pairwise in
+**606/960 (63.13%)**, and beats HipGraph in **837/960 (87.19%)**.
+
+| Architecture | RL 1st | RL > Vulkan | RL > HipGraph | Correct rows |
+|---|---:|---:|---:|---:|
+| gfx1100 | 158/240 | 171/240 | 225/240 | 240/240 |
+| gfx1151 | 156/240 | 156/240 | 239/240 | 240/240 |
+| gfx1030 | 94/240 | 125/240 | 175/240 | 240/240 |
+| gfx1010 | 129/240 | 154/240 | 198/240 | 240/240 |
+
+These are architecture-safe baseline plans: no non-gfx1201 performance recipe
+is promoted yet. The result certifies the ROCr-native retained command path and
+keeps the remaining per-architecture kernel tuning visible. See the
+[cross-architecture report](results/2026-07-14-rdna-rocr-native/REPORT.md) and
+[machine-readable aggregate](results/2026-07-14-rdna-rocr-native/aggregate.json).
+
+## Multi-queue retained PM4 result
+
+Independent rows can now stripe disjoint operations across one retained PM4 IB
+per public ROCr queue. Redline release-publishes every vendor packet before it
+rings any doorbell, waits all lane completion signals under one finite timeout,
+and measures the same earliest-start through latest-end GPU makespan used by
+the Vulkan control. Serial RMW and one-kernel aggressive rows remain on the
+existing single queue.
+
+The causal Q1/Q4 comparison uses identical current Radiowave HSACO hashes,
+three warmups, seven measured GPU samples, and all 120 independent rows. Every
+selected Redline and Vulkan result passes its CPU oracle.
+
+| Architecture | Q1 RL > Vulkan | Q4 RL > Vulkan | Median Q1/Q4 RL speedup | Losses converted | Regressions |
+|---|---:|---:|---:|---:|---:|
+| gfx1100 | 67/120 | **100/120** | **1.147x** | 34 | 1 |
+| gfx1151 | 68/120 | **110/120** | **1.058x** | 42 | 0 |
+
+The corresponding full serial-plus-independent Q4 certifications take
+**189/240 rows on gfx1100 (78.75%)** and **206/240 on gfx1151 (85.83%)**, with
+240/240 correctness-passing rows on each GPU. See the
+[gfx1100 Q1 control](results/gfx1100/2026-07-14-redline-current-q1-independent/REPORT.md),
+[gfx1100 Q4 certification](results/gfx1100/2026-07-14-redline-multiqueue-q4/REPORT.md),
+[gfx1151 Q1 control](results/gfx1151/2026-07-14-redline-current-q1-independent/REPORT.md),
+and [gfx1151 Q4 certification](results/gfx1151/2026-07-14-redline-multiqueue-q4/REPORT.md).
 
 ## Legacy Radiowave and minimal-boundary result
 
@@ -279,19 +338,21 @@ minimal-dependency advantages on specific shapes.
   GPU time.
 - `hipgraph`: the same Hipfire bridge and the same selected HSACO, captured once and
   replayed under HIP-event GPU time.
-- `redline`: public ROCr loads the same selected HSACO; one retained PM4 IB is
-  replayed with GPU-written start/end timestamps.
+- `redline`: public ROCr loads the same selected HSACO; serial rows replay one
+  retained PM4 IB, while independent rows may stripe across up to four
+  lane-local retained IBs with GPU-written start/end timestamps.
 - `vulkan`: matched GLSL algorithms compiled by shaderc for RADV, device-local
   buffers, timestamp queries, and up to four compute queues.
 
 `serial_latency` is a true output read-modify-write chain. HIP uses stream
 order, Vulkan inserts compute-write to compute-read/write barriers, and
-Redline inserts its safe gfx12 RMW boundary. Every Redline sample completes a
+Redline inserts its architecture-matched safe RMW boundary. Every Redline sample completes a
 system ownership acquire after the HIP reset and before the timestamped tape.
 `independent_throughput` writes
 disjoint output slices and removes cross-operation barriers; HIP and Vulkan use
-up to four lanes and Redline uses one retained IB. Two-stage reductions retain
-their internal dependency in both modes. `single_kernel_aggressive` executes
+up to four lanes and Redline uses up to four retained lane-local IBs. Two-stage
+reductions retain their internal dependency within each lane in both modes.
+`single_kernel_aggressive` executes
 exactly one dispatch, excludes two-stage rows, and moves Redline's ownership
 acquire outside timing so the timed tape has no dependency fence.
 
@@ -303,8 +364,9 @@ reuse, and dense Q8 four-row reuse.
 ## HIP kernels
 
 The HIP source is [kernels/hipfire_6409.hip](kernels/hipfire_6409.hip). The
-inference-shaped kernels use gfx12 `sudot4`, wave-aware shuffles, small LDS wave
-partials, and row reuse (`Q4 x2`, `Q6 x8`, `Q8 x4`). The build compiles through
+inference-shaped kernels use `sudot4` where the target exposes DOT8 and an
+equivalent scalar packed-dot fallback on gfx10, plus wave-aware shuffles, small
+LDS wave partials, and row reuse (`Q4 x2`, `Q6 x8`, `Q8 x4`). The build compiles through
 the [`radiowave`](../../crates/radiowave/README.md) crate instead of invoking
 hipcc directly. Radiowave supplies the accepted buffer-resource load/store API,
 emits wave32 and wave64 code objects for every typed scheduler profile from the
@@ -354,11 +416,32 @@ gpu_acquire hipfire-6409
 gpu_release
 ```
 
+During architecture tuning, omit the already-established HIP and HipGraph
+controls and compare only the two relevant paths:
+
+```bash
+./target/release/hipfire-6409-bench \
+  --matrix hipengine \
+  --backends redline,vulkan \
+  --wave-policy radiowave \
+  --recipe-mode candidates \
+  --recipe-allow hipfire.cache.geometry_fma_vmem \
+  --recipe-allow hipfire.cache.reduction_wave_vmem \
+  --warmups 3 --samples 7 \
+  --out results/gfx1100/cache-candidate/results.json
+```
+
+This is a tuning smoke, not the final result table. Once recipes are promoted,
+rerun with `--backends all` to certify the complete Redline/Vulkan/HipGraph/HIP
+matrix and lower the accepted architecture evidence into the catalog.
+
 The build defaults to gfx1201 and honors `HIPFIRE_BENCH_ARCH`, `HIPCC`, and
 `GLSLC`. Cargo calls Radiowave's library API; only Radiowave owns the hipcc
 command line. `radiowave-vmem` is the default; `same-agent` remains the
 fail-closed control and `radv-global` the historical system-wide control. The
-upstream `default` scheduler profile is also selected unless overridden. Each
+upstream `default` scheduler profile is selected unless a certified per-kernel
+recipe chooses another profile or `--scheduler-profile` explicitly overrides
+the whole run. Each
 `hipfire_6409_wave*.radiowave.json` manifest records the source, injected
 header, selected scheduler profile, exact compiler command, compiler and output
 hashes, kernel resource metadata, scalar/VMEM cache-footprint classification,
@@ -366,3 +449,28 @@ memory-operation counts, waits, delay instructions, clauses, and maximum VMEM
 run. This host used
 ROCm 7.2 hipcc, Mesa/RADV 25.2.8, and shaderc 2025 for
 `GL_EXT_integer_dot_product`.
+
+Keep a distinct Cargo target directory for each architecture so its embedded
+HSACO cannot be reused by another build. This is the exact hipx four-device
+layout used for the RDNA portability run:
+
+```bash
+for target in 0:gfx1100 1:gfx1151 2:gfx1030 3:gfx1010; do
+  ordinal=${target%%:*}
+  arch=${target#*:}
+  HIPFIRE_BENCH_ARCH=$arch \
+    cargo build --release --target-dir target/$arch --bin hipfire-6409-bench
+  ROCR_VISIBLE_DEVICES=$ordinal HIPFIRE_BENCH_ARCH=$arch \
+    target/$arch/release/hipfire-6409-bench \
+      --matrix hipengine \
+      --wave-policy radiowave \
+      --scheduler-profile default \
+      --redline-rmw radiowave-vmem \
+      --warmups 3 --samples 7 \
+      --out results/$arch/2026-07-14-rdna-rocr-native/results.json
+done
+```
+
+The Vulkan backend enumerates AMD devices by PCI identity and selects the same
+physical adapter that ROCr selected, rather than assuming Vulkan and HSA use
+the same ordinal.

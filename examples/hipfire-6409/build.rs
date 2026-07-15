@@ -86,6 +86,9 @@ fn build_hip_code_object(
     if wave64 {
         request = request.define("HIPFIRE_BENCH_WAVE64=1");
     }
+    if !arch.starts_with("gfx10") {
+        request = request.define("HIPFIRE_BENCH_DOT8=1");
+    }
     if let Ok(args) = env::var("RADIOWAVE_HIP_ARGS") {
         request
             .extra_args

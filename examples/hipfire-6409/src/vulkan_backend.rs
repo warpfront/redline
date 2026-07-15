@@ -171,7 +171,7 @@ pub struct VulkanBackend {
 }
 
 impl VulkanBackend {
-    pub fn new() -> Result<Self> {
+    pub fn new(expected_pci: Option<&str>) -> Result<Self> {
         let entry = unsafe { Entry::load() }.context("load Vulkan loader")?;
         let app_name = CString::new("hipfire-6409")?;
         let app = vk::ApplicationInfo::default()
@@ -184,11 +184,22 @@ impl VulkanBackend {
         let instance = unsafe { entry.create_instance(&instance_info, None) }
             .context("create Vulkan instance")?;
         let physicals = unsafe { instance.enumerate_physical_devices() }?;
-        let physical = physicals
-            .iter()
-            .copied()
-            .find(|&p| unsafe { instance.get_physical_device_properties(p) }.vendor_id == 0x1002)
-            .context("no AMD Vulkan physical device")?;
+        let expected_pci = expected_pci.map(normalize_pci);
+        let physical = physicals.iter().copied().find(|&physical| {
+            let properties = unsafe { instance.get_physical_device_properties(physical) };
+            properties.vendor_id == 0x1002
+                && expected_pci.as_ref().is_none_or(|expected| {
+                    physical_pci(&instance, physical)
+                        .is_some_and(|actual| normalize_pci(&actual) == *expected)
+                })
+        });
+        let Some(physical) = physical else {
+            unsafe { instance.destroy_instance(None) };
+            bail!(
+                "no AMD Vulkan physical device matched PCI {}",
+                expected_pci.as_deref().unwrap_or("<any>")
+            );
+        };
         let properties = unsafe { instance.get_physical_device_properties(physical) };
         let name = unsafe { CStr::from_ptr(properties.device_name.as_ptr()) }
             .to_string_lossy()
@@ -295,19 +306,7 @@ impl VulkanBackend {
             unsafe { device.destroy_shader_module(module, None) };
         }
         let memory_properties = unsafe { instance.get_physical_device_memory_properties(physical) };
-        let mut pci_info = vk::PhysicalDevicePCIBusInfoPropertiesEXT::default();
-        let mut props2 = vk::PhysicalDeviceProperties2::default().push_next(&mut pci_info);
-        unsafe { instance.get_physical_device_properties2(physical, &mut props2) };
-        let pci = (pci_info.pci_domain != 0 || pci_info.pci_bus != 0 || pci_info.pci_device != 0)
-            .then(|| {
-                format!(
-                    "{:04x}:{:02x}:{:02x}.{}",
-                    pci_info.pci_domain,
-                    pci_info.pci_bus,
-                    pci_info.pci_device,
-                    pci_info.pci_function
-                )
-            });
+        let pci = physical_pci(&instance, physical);
         Ok(Self {
             _entry: entry,
             instance,
@@ -432,6 +431,10 @@ impl VulkanBackend {
                         ("vopd_dequant", spec.grid_groups)
                     } else if spec.kernel == "vopd_mixed_pair" {
                         ("vopd_mixed", spec.grid_groups)
+                    } else if spec.kernel == "geometry_fma_buffer" {
+                        ("geometry_fma", spec.grid_groups)
+                    } else if spec.kernel == "reduction_wave_buffer" {
+                        ("reduction_wave", spec.grid_groups)
                     } else {
                         (spec.kernel, spec.grid_groups)
                     };
@@ -825,6 +828,22 @@ impl VulkanBackend {
         self.device.destroy_buffer(buffer.buffer, None);
         self.device.free_memory(buffer.memory, None);
     }
+}
+
+fn physical_pci(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Option<String> {
+    let mut pci_info = vk::PhysicalDevicePCIBusInfoPropertiesEXT::default();
+    let mut props2 = vk::PhysicalDeviceProperties2::default().push_next(&mut pci_info);
+    unsafe { instance.get_physical_device_properties2(physical, &mut props2) };
+    (pci_info.pci_domain != 0 || pci_info.pci_bus != 0 || pci_info.pci_device != 0).then(|| {
+        format!(
+            "{:04x}:{:02x}:{:02x}.{}",
+            pci_info.pci_domain, pci_info.pci_bus, pci_info.pci_device, pci_info.pci_function
+        )
+    })
+}
+
+fn normalize_pci(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
 }
 
 impl Drop for VulkanBackend {

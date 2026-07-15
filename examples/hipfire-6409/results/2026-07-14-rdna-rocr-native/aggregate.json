@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "kind": "hipfire_6409_rdna_rocr_native_aggregate",
+  "date": "2026-07-14",
+  "host": "hipx",
+  "protocol": {
+    "matrix": "hipengine_f2c",
+    "timing_modes": [
+      "serial_latency",
+      "independent_throughput"
+    ],
+    "rows_per_architecture": 240,
+    "warmups": 3,
+    "samples": 7,
+    "wave_policy": "radiowave_tuned",
+    "scheduler_profile": "default",
+    "redline_rmw": "radiowave_certified_vmem",
+    "vulkan_device_selection": "match Redline ROCr PCI identity"
+  },
+  "correctness": {
+    "attempted_rows": 960,
+    "matched_rows": 960,
+    "rejected_rows": 0,
+    "backend_executions": 3840,
+    "backend_failures": 0
+  },
+  "architectures": [
+    {
+      "architecture": "gfx1100",
+      "device": "AMD Radeon RX 7900 XTX",
+      "pci": "0000:66:00.0",
+      "result": "../gfx1100/2026-07-14-rdna-rocr-native/results.json",
+      "hsaco_wave32_sha256": "175628245fc648cf80b41535e290776de30f7c0411dd2613506f52fb4c6e0555",
+      "redline_placements": {
+        "first": 158,
+        "second": 66,
+        "third": 6,
+        "fourth": 10
+      },
+      "redline_pairwise_wins": {
+        "vulkan": 171,
+        "hipgraph": 225,
+        "hip": 216
+      }
+    },
+    {
+      "architecture": "gfx1151",
+      "device": "Radeon 8060S Graphics",
+      "pci": "0000:bf:00.0",
+      "result": "../gfx1151/2026-07-14-rdna-rocr-native/results.json",
+      "hsaco_wave32_sha256": "f9e94f409fe29f6f8e9de53b8ac3a68e804dfd9ca359ed38e012494eeff2861f",
+      "redline_placements": {
+        "first": 156,
+        "second": 73,
+        "third": 10,
+        "fourth": 1
+      },
+      "redline_pairwise_wins": {
+        "vulkan": 156,
+        "hipgraph": 239,
+        "hip": 229
+      }
+    },
+    {
+      "architecture": "gfx1030",
+      "device": "AMD Radeon RX 6950 XT",
+      "pci": "0000:6e:00.0",
+      "result": "../gfx1030/2026-07-14-rdna-rocr-native/results.json",
+      "hsaco_wave32_sha256": "2bed37042980c3c83ea80a265adee90b9209f89e45f5702645235ec10497ed5b",
+      "redline_placements": {
+        "first": 94,
+        "second": 105,
+        "third": 22,
+        "fourth": 19
+      },
+      "redline_pairwise_wins": {
+        "vulkan": 125,
+        "hipgraph": 175,
+        "hip": 214
+      }
+    },
+    {
+      "architecture": "gfx1010",
+      "device": "AMD Radeon RX 5700 XT",
+      "pci": "0000:99:00.0",
+      "result": "../gfx1010/2026-07-14-rdna-rocr-native/results.json",
+      "hsaco_wave32_sha256": "07d696c4a1d28f3dae2ced965100f860fcbaa1ea85daf6f913e863b1fa33c57f",
+      "redline_placements": {
+        "first": 129,
+        "second": 81,
+        "third": 18,
+        "fourth": 12
+      },
+      "redline_pairwise_wins": {
+        "vulkan": 154,
+        "hipgraph": 198,
+        "hip": 215
+      }
+    }
+  ],
+  "aggregate": {
+    "placements": {
+      "redline": {
+        "first": 537,
+        "second": 325,
+        "third": 56,
+        "fourth": 42,
+        "first_percent": 55.9375,
+        "top_two": 862,
+        "top_two_percent": 89.79166666666667
+      },
+      "vulkan": {
+        "first": 330,
+        "second": 400,
+        "third": 20,
+        "fourth": 210
+      },
+      "hipgraph": {
+        "first": 77,
+        "second": 168,
+        "third": 322,
+        "fourth": 393
+      },
+      "hip": {
+        "first": 16,
+        "second": 67,
+        "third": 562,
+        "fourth": 315
+      }
+    },
+    "redline_by_mode": {
+      "serial_latency": {
+        "first": 259,
+        "second": 156,
+        "third": 37,
+        "fourth": 28,
+        "rows": 480
+      },
+      "independent_throughput": {
+        "first": 278,
+        "second": 169,
+        "third": 19,
+        "fourth": 14,
+        "rows": 480
+      }
+    },
+    "redline_pairwise": {
+      "vulkan": {
+        "wins": 606,
+        "losses": 354,
+        "win_percent": 63.125
+      },
+      "hipgraph": {
+        "wins": 837,
+        "losses": 123,
+        "win_percent": 87.1875
+      },
+      "hip": {
+        "wins": 874,
+        "losses": 86,
+        "win_percent": 91.04166666666667
+      }
+    }
+  },
+  "notes": [
+    "Every architecture used an independently built HSACO embedded in a distinct Cargo target directory.",
+    "The rebuilt current-source wave32 HSACO hashes match the measured result artifacts on all four architectures.",
+    "The Vulkan physical device was matched to Redline by PCI identity for every run.",
+    "No non-gfx1201 performance recipe is promoted yet; these runs use the architecture-safe baseline plan and are portability evidence, not per-architecture tuning ceilings.",
+    "gfx1010 selects a low-register B32 packed-dot load loop to keep dot_q6 spill-free and inside the direct PM4 backend's zero-scratch contract."
+  ]
+}

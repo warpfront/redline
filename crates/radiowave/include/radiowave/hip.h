@@ -6,16 +6,29 @@
 #include <hip/hip_runtime.h>
 #include <stdint.h>
 
-// Radiowave's first promoted lowering rule.  The descriptor word is the
-// untyped gfx11/gfx12 resource configuration used by ROCm CK.  Callers must
-// keep each byte offset within the 32-bit resource window; larger allocations
-// need a rebased descriptor.
+// Radiowave's first promoted lowering rule. The descriptor word is the untyped
+// AMDGPU resource configuration derived from ROCm CK and correctness-checked
+// on gfx1010, gfx1030, gfx1100, gfx1151, and gfx1201. Callers must keep each
+// byte offset within the 32-bit resource window; larger allocations need a
+// rebased descriptor. Performance promotion remains architecture-specific.
 namespace radiowave {
 
 using u32 = uint32_t;
 using i32x4 = int32_t __attribute__((ext_vector_type(4)));
 using u32x4 = uint32_t __attribute__((ext_vector_type(4)));
 using BufferResource = __amdgpu_buffer_rsrc_t;
+
+// AMDGPU cache-policy zero is the temporal/default path on the supported
+// RDNA targets: retain ordinary L0/L1/L2 reuse. Coherence and dependency
+// invalidation belong to Redline's certified dispatch boundary, not to every
+// load instruction. Naming the policy here keeps Radiowave's default explicit
+// and leaves room for correctness-gated non-temporal variants.
+enum class CachePolicy : int {
+    Temporal = 0,
+};
+
+inline constexpr int kDefaultCachePolicy =
+    static_cast<int>(CachePolicy::Temporal);
 
 // Preserve a distinct vector address expression through LLVM IR combining
 // without emitting a machine instruction or imposing a memory-ordering edge.
@@ -34,26 +47,27 @@ __device__ __forceinline__ BufferResource buffer_resource(const u32* p) {
 __device__ __forceinline__ u32 buffer_load_u32(BufferResource resource,
                                                 u32 word_offset) {
     return static_cast<u32>(__builtin_amdgcn_raw_buffer_load_b32(
-        resource, word_offset * sizeof(u32), 0, 0));
+        resource, word_offset * sizeof(u32), 0, kDefaultCachePolicy));
 }
 
 __device__ __forceinline__ u32 buffer_load_bytes_u32(BufferResource resource,
                                                       u32 byte_offset) {
     return static_cast<u32>(__builtin_amdgcn_raw_buffer_load_b32(
-        resource, byte_offset, 0, 0));
+        resource, byte_offset, 0, kDefaultCachePolicy));
 }
 
 __device__ __forceinline__ u32x4 buffer_load_u32x4(BufferResource resource,
                                                     u32 word_offset) {
     const i32x4 words = __builtin_amdgcn_raw_buffer_load_b128(
-        resource, word_offset * sizeof(u32), 0, 0);
+        resource, word_offset * sizeof(u32), 0, kDefaultCachePolicy);
     return __builtin_bit_cast(u32x4, words);
 }
 
 __device__ __forceinline__ void buffer_store_u32(BufferResource resource,
                                                   u32 word_offset, u32 value) {
     __builtin_amdgcn_raw_buffer_store_b32(
-        static_cast<int32_t>(value), resource, word_offset * sizeof(u32), 0, 0);
+        static_cast<int32_t>(value), resource, word_offset * sizeof(u32), 0,
+        kDefaultCachePolicy);
 }
 
 } // namespace radiowave

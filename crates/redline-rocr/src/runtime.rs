@@ -1299,6 +1299,33 @@ impl QueueSet {
         }
     }
 
+    /// Wait until every completion signal has reached zero under one shared
+    /// timeout. This is the multi-queue counterpart to [`Self::wait_signal`]:
+    /// polling lanes sequentially would otherwise multiply the caller's
+    /// finite timeout by the queue count.
+    pub fn wait_signals(
+        &self,
+        signals: &[CompletionSignal],
+        timeout: Duration,
+    ) -> Result<(), RuntimeError> {
+        let started = Instant::now();
+        let mut polls = 0_u32;
+        loop {
+            self.check_faults()?;
+            if signals.iter().all(CompletionSignal::is_complete) {
+                return Ok(());
+            }
+            if started.elapsed() >= timeout {
+                let signal = signals
+                    .iter()
+                    .find(|signal| !signal.is_complete())
+                    .map_or(0, |signal| signal.raw().0);
+                return Err(RuntimeError::SignalTimeout { signal, timeout });
+            }
+            bounded_poll_pause(&mut polls);
+        }
+    }
+
     /// Poll queue indices alongside the completion signal.
     ///
     /// This method is intentionally separate from `wait_signal`, so ordinary

@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "kind": "redline_rocr_gfx10_lowering",
+  "date": "2026-07-14",
+  "host": "hipx",
+  "base_commit": "c4f12eb4647790a10161637110dbfa04682cf0e2",
+  "runtime": {
+    "rocm_core": "7.2.2.70202-86~24.04",
+    "hip_version": "7.2.53211-671d39a71e",
+    "clang": "22.0.0git"
+  },
+  "source": "crates/radiowave/tests/fixtures/portable_buffer_probe.hip",
+  "kernel_symbol": "radiowave_portable_buffer_probe.kd",
+  "pm4_contract": {
+    "command_dwords": 53,
+    "kernel_code_properties": "0x0409",
+    "private_segment_bytes": 0,
+    "group_segment_bytes": 0,
+    "implicit_user_sgprs": "s[0:3]=zero private-segment buffer, s[4:5]=kernarg pointer"
+  },
+  "devices": [
+    {
+      "architecture": "gfx1010",
+      "marketing_name": "AMD Radeon RX 5700 XT",
+      "pci": "0000:99:00.0",
+      "code_object_sha256": "19c3f737d581b010e65662cc2cacd934309d11c65d8e88926c43822299329c51",
+      "vendor_aql_pm4_ib_nop": "pass",
+      "standard_aql": {
+        "output": 42,
+        "dispatches": 2,
+        "gpu_span_us": 21.76
+      },
+      "direct_pm4_via_vendor_aql": {
+        "output": 42,
+        "retained_replays": 1000,
+        "status": "pass"
+      }
+    },
+    {
+      "architecture": "gfx1030",
+      "marketing_name": "AMD Radeon RX 6950 XT",
+      "pci": "0000:6e:00.0",
+      "code_object_sha256": "271cea268e3feddb7b3b4c6a5dab1e0ce1afc3fa636d63dec976a30b9d61619a",
+      "vendor_aql_pm4_ib_nop": "pass",
+      "standard_aql": {
+        "output": 42,
+        "dispatches": 2,
+        "gpu_span_us": 17.6
+      },
+      "direct_pm4_via_vendor_aql": {
+        "output": 42,
+        "retained_replays": 1000,
+        "status": "pass"
+      }
+    }
+  ],
+  "scope": [
+    "The public ROCr/AQL packet path is architecture-neutral and passed on both devices.",
+    "The AMD vendor-AQL PM4 indirect-buffer carrier passed on both devices.",
+    "The separate GFX10 compute encoder passed the exercised zero-scratch HSA ABI subset; the probe itself requests zero LDS.",
+    "The shared GFX10/GFX11 encoder now rounds static plus dynamic LDS to the hardware 512-byte granule; the issue-6409 LDS rows provide the live correctness gate.",
+    "Scratch and queue/dispatch/flat-scratch implicit SGPR contracts remain fail-closed."
+  ]
+}
