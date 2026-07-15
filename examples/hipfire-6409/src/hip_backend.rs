@@ -72,7 +72,9 @@ pub fn embedded_code_object(
 const KERNELS: &[&str] = &[
     "dispatch_tiny",
     "geometry_fma",
+    "geometry_fma_buffer",
     "reduction_wave",
+    "reduction_wave_buffer",
     "reduction_lds",
     "reduction_extra_barrier",
     "reduction_multi4",
@@ -201,18 +203,7 @@ impl HipBackend {
     }
 
     #[allow(clippy::too_many_arguments)] // Mirrors the explicit launch ABI.
-    fn launch(
-        &self,
-        name: &str,
-        grid_groups: u32,
-        spec: &RowSpec,
-        offset: u32,
-        second: bool,
-        buffers: &Buffers,
-        stream: &Stream,
-        blob: &mut [u8],
-    ) -> Result<()> {
-        fill_blob(blob, buffers, spec, offset, second);
+    fn function(&self, name: &str, spec: &RowSpec) -> Result<&Function> {
         let profile = self
             .profiles
             .iter()
@@ -228,9 +219,25 @@ impl HipBackend {
             64 => &profile.functions_wave64,
             other => anyhow::bail!("unsupported HIP wave size {other}"),
         };
-        let function = functions
+        functions
             .get(name)
-            .with_context(|| format!("missing HIP wave{} kernel {name}", spec.wave_size))?;
+            .with_context(|| format!("missing HIP wave{} kernel {name}", spec.wave_size))
+    }
+
+    #[allow(clippy::too_many_arguments)] // Mirrors the explicit launch ABI.
+    fn launch(
+        &self,
+        name: &str,
+        grid_groups: u32,
+        spec: &RowSpec,
+        offset: u32,
+        second: bool,
+        buffers: &Buffers,
+        stream: &Stream,
+        blob: &mut [u8],
+    ) -> Result<()> {
+        fill_blob(blob, buffers, spec, offset, second);
+        let function = self.function(name, spec)?;
         let block = spec.stage_block(second);
         unsafe {
             self.hip.launch_kernel_blob(
@@ -393,6 +400,13 @@ impl HipBackend {
         warmups: usize,
         samples: usize,
     ) -> Result<Measurement> {
+        // Fail before beginning stream capture when a Radiowave-selected
+        // variant is absent. Returning from inside capture leaves HIP's stream
+        // capture state active and poisons every later backend allocation.
+        self.function(spec.kernel, spec)?;
+        if let Some(second) = spec.second_kernel {
+            self.function(second, spec)?;
+        }
         let buffers = self.allocate(spec, fixture, mode)?;
         let lanes = if mode == TimingMode::IndependentThroughput {
             4.min(spec.logical_iterations(mode))
@@ -508,6 +522,26 @@ impl HipBackend {
 
 fn words_as_bytes(words: &[u32]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), words.len() * 4) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn static_function_table_covers_radiowave_builtin_variants() {
+        for variant in [
+            "geometry_fma_buffer",
+            "reduction_wave_buffer",
+            "memory_interleave4_buffer",
+            "memory_interleave4_block64",
+            "memory_interleave4_block64_b32",
+            "vopd_dequant_chunk16",
+            "vopd_mixed_pair",
+        ] {
+            assert!(KERNELS.contains(&variant), "missing HIP kernel {variant}");
+        }
+    }
 }
 
 fn fill_blob(blob: &mut [u8], buffers: &Buffers, spec: &RowSpec, offset: u32, second: bool) {

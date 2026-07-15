@@ -30,8 +30,8 @@ use std::sync::Arc;
 
 use radiowave::{CodeObjectCertification, MutableReadCache, SchedulerProfile};
 use redline_dispatch::aql::{
-    Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargBuffer, KernargPool, Runtime,
-    SingleQueuePm4Ib, load_symbols,
+    Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargBuffer, KernargPool,
+    QueuePolicy, Runtime, SingleQueuePm4Ib, load_symbols,
 };
 
 use crate::{
@@ -72,6 +72,31 @@ pub enum RlSchedulerProfile {
     RlSchedulerIterativeIlp = 3,
     RlSchedulerMemoryClause = 4,
     RlSchedulerPipelineIlp = 5,
+}
+
+/// Public-queue fan-out policy for independent retained PM4 work.
+///
+/// `RlQueueAuto` uses the architecture table certified by the #6409 sweeps:
+/// gfx11 uses at most four lanes, gfx12 at most two, and unmeasured families
+/// retain one lane. The resolved count never exceeds `independent_width`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RlQueuePolicy {
+    RlQueueAuto = 0,
+    RlQueueOne = 1,
+    RlQueueTwo = 2,
+    RlQueueFour = 4,
+}
+
+impl From<RlQueuePolicy> for QueuePolicy {
+    fn from(value: RlQueuePolicy) -> Self {
+        match value {
+            RlQueuePolicy::RlQueueAuto => Self::Auto,
+            RlQueuePolicy::RlQueueOne => Self::One,
+            RlQueuePolicy::RlQueueTwo => Self::Two,
+            RlQueuePolicy::RlQueueFour => Self::Four,
+        }
+    }
 }
 
 /// A builder accumulating dispatches into one PM4 command buffer.
@@ -117,6 +142,23 @@ pub unsafe extern "C" fn rl_gpu_free(gpu: *mut RlGpu) {
     if !gpu.is_null() {
         drop(unsafe { Box::from_raw(gpu) });
     }
+}
+
+/// Resolve a PM4 queue policy for this GPU and an independent antichain width.
+/// Returns zero when `gpu` is null. Every valid GPU returns at least one lane.
+///
+/// # Safety
+/// `gpu` must be a live pointer from [`rl_gpu_new`], or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_gpu_pm4_queue_count(
+    gpu: *const RlGpu,
+    policy: RlQueuePolicy,
+    independent_width: usize,
+) -> usize {
+    let Some(gpu) = (unsafe { gpu.as_ref() }) else {
+        return 0;
+    };
+    QueuePolicy::from(policy).resolve(gpu.device.name(), independent_width)
 }
 
 /// Load a code object (HSACO bytes). Writes the module pointer to `out`.

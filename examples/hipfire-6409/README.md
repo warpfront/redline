@@ -163,6 +163,33 @@ All rows in all four runs pass their CPU oracle. See the
 [gfx1201 Q2 certification](results/gfx1201/2026-07-14-redline-multiqueue-q2/REPORT.md),
 and [gfx1201 Q4 negative control](results/gfx1201/2026-07-14-redline-multiqueue-q4/REPORT.md).
 
+The harness therefore defaults `--redline-queues auto`: gfx11 and gfx1151
+resolve to Q4, gfx12 resolves to Q2, and gfx10 or an unknown future family
+fails closed to Q1 until a queue sweep is certified. `--redline-queues 1|2|4`
+remains an explicit diagnostic override. Every result artifact records both
+the requested policy and the resolved queue count.
+
+The post-default Redline/Vulkan tuning validation exercises all 240 rows with
+three warmups and seven measured GPU samples. Auto resolves to Q4 on both
+devices, and every result passes its CPU oracle.
+
+| Architecture | RL first | Strict RL > Vulkan | Ties | Correct rows |
+|---|---:|---:|---:|---:|
+| gfx1100 | 196/240 (81.67%) | 194/240 (80.83%) | 2 | 240/240 |
+| gfx1151 | 203/240 (84.58%) | 203/240 (84.58%) | 0 | 240/240 |
+
+See the latest [gfx1100 Auto/Q4 validation](results/gfx1100/2026-07-14-auto-q4-validation/REPORT.md)
+and [gfx1151 Auto/Q4 validation](results/gfx1151/2026-07-14-auto-q4-validation/REPORT.md).
+These are the deliberate two-backend tuning matrix, not a replacement for the
+four-backend portability certification above.
+
+The next shared kernel target is `q6-x8-selected-down`: its prequantized and
+quantize-plus-dot rows lose in both timing modes on both gfx1100 and gfx1151,
+with the independent prequantized row still 355.13% and 165.49% behind Vulkan,
+respectively. That consistent decode-shaped deficit is a stronger Radiowave
+code-generation target than the architecture-specific near-ties. The separate
+high-grid dispatch losses remain the next retained-queue scheduling target.
+
 ## Legacy Radiowave and minimal-boundary result
 
 The fail-closed Radiowave/Redline path raises Redline to **121/133 four-way

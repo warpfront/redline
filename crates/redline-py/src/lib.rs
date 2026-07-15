@@ -22,8 +22,8 @@ use pyo3::prelude::*;
 use radiowave::{CodeObjectCertification, MutableReadCache};
 use redline_core::aql::{
     DeviceBuffer as HsaDeviceBuffer, DevicePool, Executable, Gfx12Pm4CommandBuffer, GpuDevice,
-    GpuSelector, KernargBuffer, KernargPool, LaunchGeometry, Runtime, SingleQueuePm4Ib,
-    load_symbols,
+    GpuSelector, KernargBuffer, KernargPool, LaunchGeometry, QueuePolicy, Runtime,
+    SingleQueuePm4Ib, load_symbols,
 };
 use redline_core::hipgraph::{Graph, GraphExec, Tuning};
 use redline_core::mock::MockBackend;
@@ -225,6 +225,14 @@ impl Gpu {
             device_pool,
             _runtime: runtime,
         })
+    }
+
+    /// Resolve `auto`, `1`, `2`, or `4` for this GPU and an independent phase.
+    /// The returned lane count never exceeds `independent_width`.
+    #[pyo3(signature = (independent_width, policy="auto"))]
+    fn pm4_queue_count(&self, independent_width: usize, policy: &str) -> PyResult<usize> {
+        let policy = policy.parse::<QueuePolicy>().map_err(to_py)?;
+        Ok(policy.resolve(self.device.name(), independent_width))
     }
 
     /// Load a code object. Supplying a Radiowave manifest verifies the exact

@@ -295,6 +295,28 @@ fn ensure_device_family(device: &GpuDevice, required: &'static str) -> Result<()
     }
 }
 
+fn retained_queue_size(
+    required_packets: usize,
+    minimum: u32,
+    maximum: u32,
+) -> Result<u32, ReplayError> {
+    let queue_size = required_packets
+        .checked_next_power_of_two()
+        .ok_or_else(|| ReplayError::PolicyShapeMismatch {
+            detail: format!("retained packet count {required_packets} overflows queue sizing"),
+        })?
+        .max(minimum as usize);
+    let queue_size = u32::try_from(queue_size).map_err(|_| ReplayError::PolicyShapeMismatch {
+        detail: format!("retained queue size {queue_size} exceeds u32"),
+    })?;
+    if queue_size > maximum {
+        return Err(ReplayError::PolicyShapeMismatch {
+            detail: format!("retained queue size {queue_size} outside {minimum}..={maximum}"),
+        });
+    }
+    Ok(queue_size)
+}
+
 impl Drop for SingleQueuePm4Ib {
     fn drop(&mut self) {
         if !self.usable {
@@ -315,12 +337,48 @@ pub struct MultiQueuePm4Ib {
     completions: Vec<CompletionSignal>,
     indirects: Vec<KernargBuffer>,
     batches: Vec<Vec<PacketImage>>,
-    timestamps: Vec<KernargBuffer>,
-    timestamp_frequency_hz: u64,
+    timestamps: Option<Vec<KernargBuffer>>,
+    timestamp_frequency_hz: Option<u64>,
     usable: bool,
 }
 
 impl MultiQueuePm4Ib {
+    /// Create unprofiled retained GFX12 IBs, one per independent queue lane.
+    pub fn create(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[Gfx12Pm4CommandBuffer],
+    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, "gfx12")?;
+        Self::create_unprofiled_encoded(device, pool, commands, |commands| {
+            (commands.as_bytes(), commands.len_dwords())
+        })
+    }
+
+    /// Create unprofiled retained GFX10 IBs, one per independent queue lane.
+    pub fn create_gfx10(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[Gfx10Pm4CommandBuffer],
+    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, "gfx10")?;
+        Self::create_unprofiled_encoded(device, pool, commands, |commands| {
+            (commands.as_bytes(), commands.len_dwords())
+        })
+    }
+
+    /// Create unprofiled retained GFX11 IBs using the shared legacy map.
+    pub fn create_gfx11(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[Gfx10Pm4CommandBuffer],
+    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, "gfx11")?;
+        Self::create_unprofiled_encoded(device, pool, commands, |commands| {
+            (commands.as_bytes(), commands.len_dwords())
+        })
+    }
+
     /// Create profiled retained GFX12 IBs, one per queue lane.
     pub fn create_profiled(
         device: &GpuDevice,
@@ -380,30 +438,60 @@ impl MultiQueuePm4Ib {
             return Err(ReplayError::EmptyGraph);
         }
         let timestamp_frequency_hz = device.gpu_timestamp_frequency_hz()?;
-        let mut completions = Vec::with_capacity(commands.len());
-        let mut indirects = Vec::with_capacity(commands.len());
-        let mut batches = Vec::with_capacity(commands.len());
         let mut timestamps = Vec::with_capacity(commands.len());
+        let mut encoded = Vec::with_capacity(commands.len());
         for commands in commands {
             let mut timestamp = pool.allocate_executable_bytes(16)?;
             timestamp.as_mut_bytes().fill(0);
             let start = timestamp.address() as usize as u64;
             let (bytes, dwords) = encode(commands, start, start + 8);
-            if dwords == 0 {
-                return Err(ReplayError::EmptyGraph);
-            }
+            timestamps.push(timestamp);
+            encoded.push((bytes, dwords));
+        }
+        Self::create_encoded(
+            device,
+            pool,
+            encoded,
+            Some(timestamps),
+            Some(timestamp_frequency_hz),
+        )
+    }
+
+    fn create_unprofiled_encoded<C>(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[C],
+        encode: impl Fn(&C) -> (Vec<u8>, u32),
+    ) -> Result<Self, ReplayError> {
+        let encoded = commands.iter().map(encode).collect::<Vec<_>>();
+        Self::create_encoded(device, pool, encoded, None, None)
+    }
+
+    fn create_encoded(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        encoded: Vec<(Vec<u8>, u32)>,
+        timestamps: Option<Vec<KernargBuffer>>,
+        timestamp_frequency_hz: Option<u64>,
+    ) -> Result<Self, ReplayError> {
+        if encoded.is_empty() || encoded.iter().any(|(_, dwords)| *dwords == 0) {
+            return Err(ReplayError::EmptyGraph);
+        }
+        let mut completions = Vec::with_capacity(encoded.len());
+        let mut indirects = Vec::with_capacity(encoded.len());
+        let mut batches = Vec::with_capacity(encoded.len());
+        for (bytes, dwords) in encoded {
             let mut indirect = pool.allocate_executable_bytes(bytes.len())?;
             indirect.write_exact(&bytes)?;
             let completion = CompletionSignal::new(device)?;
             let packet =
                 PacketImage::pm4_indirect_buffer(indirect.address(), dwords, completion.raw())?;
-            timestamps.push(timestamp);
             indirects.push(indirect);
             completions.push(completion);
             batches.push(vec![packet]);
         }
         let queue_size = *device.queue_size_range().start();
-        let queues = QueueSet::create(device, commands.len(), queue_size)?;
+        let queues = QueueSet::create(device, batches.len(), queue_size)?;
         Ok(Self {
             queues,
             completions,
@@ -430,7 +518,7 @@ impl MultiQueuePm4Ib {
     }
 
     /// Submit every lane and synchronously prove completion with one finite
-    /// timeout, returning the cross-queue GPU makespan.
+    /// timeout.
     ///
     /// # Safety
     ///
@@ -438,7 +526,41 @@ impl MultiQueuePm4Ib {
     /// code, kernarg, and pointee addresses encoded in every retained IB must
     /// remain live and GPU-accessible until this returns `Ok`. After an error
     /// they must remain live through this object's destruction.
+    pub unsafe fn replay_and_wait(&mut self) -> Result<(), ReplayError> {
+        // SAFETY: forwarded from this method's caller.
+        unsafe { self.replay_and_wait_inner() }
+    }
+
+    /// Submit every profiled lane and return the cross-queue GPU makespan.
+    ///
+    /// # Safety
+    ///
+    /// The pointer and independence contract is identical to
+    /// [`Self::replay_and_wait`].
     pub unsafe fn replay_and_wait_profiled(&mut self) -> Result<GpuMultiQueueTiming, ReplayError> {
+        let frequency_hz = self
+            .timestamp_frequency_hz
+            .ok_or(ReplayError::ProfilingUnavailable)?;
+        // SAFETY: forwarded from this method's caller.
+        unsafe { self.replay_and_wait_inner()? };
+        let timestamps = self
+            .timestamps
+            .as_mut()
+            .ok_or(ReplayError::ProfilingUnavailable)?;
+        let pairs = timestamps
+            .iter_mut()
+            .map(|timestamp| {
+                let bytes = timestamp.as_mut_bytes();
+                (
+                    u64::from_le_bytes(bytes[..8].try_into().unwrap()),
+                    u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+                )
+            })
+            .collect::<Vec<_>>();
+        gpu_multi_queue_timing(&pairs, frequency_hz)
+    }
+
+    unsafe fn replay_and_wait_inner(&mut self) -> Result<(), ReplayError> {
         if !self.usable {
             return Err(ReplayError::GraphInactive);
         }
@@ -467,22 +589,197 @@ impl MultiQueuePm4Ib {
                 .into()),
             };
         }
-        let pairs = self
-            .timestamps
-            .iter_mut()
-            .map(|timestamp| {
-                let bytes = timestamp.as_mut_bytes();
-                (
-                    u64::from_le_bytes(bytes[..8].try_into().unwrap()),
-                    u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
-                )
-            })
-            .collect::<Vec<_>>();
-        gpu_multi_queue_timing(&pairs, self.timestamp_frequency_hz)
+        Ok(())
     }
 }
 
 impl Drop for MultiQueuePm4Ib {
+    fn drop(&mut self) {
+        if !self.usable {
+            let _ = self.queues.inactivate_all();
+        }
+    }
+}
+
+/// Ordered retained-PM4 phases over one reusable public queue set.
+///
+/// Commands within a phase are independent. AQL barrier packets make every
+/// active lane in phase N wait for all active lanes in phase N-1, retaining
+/// the original dependent order without a host wait or additional doorbell.
+pub struct PhasedMultiQueuePm4Ib {
+    queues: QueueSet,
+    phase_completions: Vec<Vec<CompletionSignal>>,
+    indirects: Vec<KernargBuffer>,
+    batches: Vec<Vec<PacketImage>>,
+    usable: bool,
+}
+
+impl PhasedMultiQueuePm4Ib {
+    pub fn create(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        phases: &[Vec<Gfx12Pm4CommandBuffer>],
+    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, "gfx12")?;
+        Self::create_encoded(device, pool, phases, |commands| {
+            (commands.as_bytes(), commands.len_dwords())
+        })
+    }
+
+    pub fn create_gfx10(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        phases: &[Vec<Gfx10Pm4CommandBuffer>],
+    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, "gfx10")?;
+        Self::create_encoded(device, pool, phases, |commands| {
+            (commands.as_bytes(), commands.len_dwords())
+        })
+    }
+
+    pub fn create_gfx11(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        phases: &[Vec<Gfx10Pm4CommandBuffer>],
+    ) -> Result<Self, ReplayError> {
+        ensure_device_family(device, "gfx11")?;
+        Self::create_encoded(device, pool, phases, |commands| {
+            (commands.as_bytes(), commands.len_dwords())
+        })
+    }
+
+    fn create_encoded<C>(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        phases: &[Vec<C>],
+        encode: impl Fn(&C) -> (Vec<u8>, u32),
+    ) -> Result<Self, ReplayError> {
+        if phases.is_empty() || phases.iter().any(Vec::is_empty) {
+            return Err(ReplayError::EmptyGraph);
+        }
+        let queue_count = phases.iter().map(Vec::len).max().unwrap();
+        let mut batches = vec![Vec::new(); queue_count];
+        let mut indirects = Vec::new();
+        let mut phase_completions = Vec::<Vec<CompletionSignal>>::with_capacity(phases.len());
+        let mut prior = Vec::new();
+
+        for phase in phases {
+            let mut completions = Vec::with_capacity(phase.len());
+            for _ in phase {
+                completions.push(CompletionSignal::new(device)?);
+            }
+            for (lane, commands) in phase.iter().enumerate() {
+                for dependencies in prior.chunks(BARRIER_DEPENDENCY_CAPACITY) {
+                    let barrier = BarrierAndPacket::new(dependencies, abi::Signal(0))?;
+                    batches[lane].push(PacketImage::barrier(&barrier));
+                }
+                let (bytes, dwords) = encode(commands);
+                if dwords == 0 {
+                    return Err(ReplayError::EmptyGraph);
+                }
+                let mut indirect = pool.allocate_executable_bytes(bytes.len())?;
+                indirect.write_exact(&bytes)?;
+                let packet = PacketImage::pm4_indirect_buffer(
+                    indirect.address(),
+                    dwords,
+                    completions[lane].raw(),
+                )?;
+                indirects.push(indirect);
+                batches[lane].push(packet);
+            }
+            prior = completions.iter().map(CompletionSignal::raw).collect();
+            phase_completions.push(completions);
+        }
+
+        let required_packets = batches.iter().map(Vec::len).max().unwrap();
+        let queue_size = retained_queue_size(
+            required_packets,
+            *device.queue_size_range().start(),
+            *device.queue_size_range().end(),
+        )?;
+        let queues = QueueSet::create(device, queue_count, queue_size)?;
+
+        for (lane, batch) in batches.iter().enumerate() {
+            let capacity = queues.size(lane).expect("queue count is fixed") as usize;
+            if batch.len() > capacity {
+                return Err(ReplayError::BatchExceedsQueue {
+                    lane,
+                    packets: batch.len(),
+                    capacity,
+                });
+            }
+        }
+
+        Ok(Self {
+            queues,
+            phase_completions,
+            indirects,
+            batches,
+            usable: true,
+        })
+    }
+
+    pub fn queue_count(&self) -> usize {
+        self.queues.len()
+    }
+
+    pub fn queue_ids(&self) -> impl ExactSizeIterator<Item = u64> + '_ {
+        self.queues.queue_ids()
+    }
+
+    pub fn phase_count(&self) -> usize {
+        self.phase_completions.len()
+    }
+
+    pub fn indirect_addresses(&self) -> impl ExactSizeIterator<Item = usize> + '_ {
+        self.indirects
+            .iter()
+            .map(|indirect| indirect.address() as usize)
+    }
+
+    /// Replay every phase and synchronously prove terminal completion.
+    ///
+    /// # Safety
+    ///
+    /// Commands within each phase must be pairwise memory-independent. Every
+    /// encoded address must remain live and GPU-accessible until completion.
+    pub unsafe fn replay_and_wait(&mut self) -> Result<(), ReplayError> {
+        if !self.usable {
+            return Err(ReplayError::GraphInactive);
+        }
+        for completions in &mut self.phase_completions {
+            for completion in completions {
+                completion.reset();
+            }
+        }
+        if let Err(error) = self.queues.prepare_batches(&self.batches) {
+            self.usable = false;
+            return Err(error.into());
+        }
+        if let Err(error) = self.queues.ring_prepared() {
+            self.usable = false;
+            return Err(error.into());
+        }
+        let terminal = self
+            .phase_completions
+            .last()
+            .expect("nonempty phase list has terminal completions");
+        if let Err(operation) = self.queues.wait_signals(terminal, DEFAULT_WAIT_TIMEOUT) {
+            self.usable = false;
+            return match self.queues.inactivate_all() {
+                Ok(()) => Err(operation.into()),
+                Err(teardown) => Err(RuntimeError::OperationAndTeardown {
+                    operation: Box::new(operation),
+                    teardown: Box::new(teardown),
+                }
+                .into()),
+            };
+        }
+        Ok(())
+    }
+}
+
+impl Drop for PhasedMultiQueuePm4Ib {
     fn drop(&mut self) {
         if !self.usable {
             let _ = self.queues.inactivate_all();
@@ -2751,6 +3048,15 @@ impl std::error::Error for ReplayError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_queue_size_tracks_packet_count_and_hardware_range() {
+        assert_eq!(retained_queue_size(1, 64, 4096).unwrap(), 64);
+        assert_eq!(retained_queue_size(64, 64, 4096).unwrap(), 64);
+        assert_eq!(retained_queue_size(65, 64, 4096).unwrap(), 128);
+        assert_eq!(retained_queue_size(4096, 64, 4096).unwrap(), 4096);
+        assert!(retained_queue_size(4097, 64, 4096).is_err());
+    }
 
     #[test]
     fn gpu_batch_span_uses_first_and_last_kernel_timestamps() {

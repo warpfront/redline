@@ -11,7 +11,7 @@ use radiowave::{
 use redline_dispatch::aql::{
     load_symbols, Executable, Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, GpuDevice,
     GpuMultiQueueTiming, GpuSelector, KernargBuffer, KernargPool, Kernel, LaunchGeometry,
-    MultiQueuePm4Ib, Runtime, SingleQueuePm4Ib,
+    MultiQueuePm4Ib, QueuePolicy, Runtime, SingleQueuePm4Ib,
 };
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -62,6 +62,7 @@ pub struct RedlineBackend {
     profiles: Vec<ProfileExecutables>,
     pool: KernargPool,
     pm4_family: Pm4Family,
+    queue_policy: QueuePolicy,
     independent_queue_count: usize,
     pub name: String,
     pub pci: String,
@@ -166,14 +167,11 @@ struct ProfileExecutables {
 }
 
 impl RedlineBackend {
-    pub fn new(rmw_boundary: RmwBoundary, independent_queue_count: usize) -> Result<Self> {
-        anyhow::ensure!(
-            independent_queue_count > 0,
-            "Redline queue count must be nonzero"
-        );
+    pub fn new(rmw_boundary: RmwBoundary, queue_policy: QueuePolicy) -> Result<Self> {
         let runtime = Runtime::initialize(load_symbols()?).context("initialize public ROCr")?;
         let device = runtime.select_gpu(GpuSelector::Ordinal(0))?;
         let name = device.name().to_owned();
+        let independent_queue_count = queue_policy.resolve(&name, usize::MAX);
         let pm4_family = Pm4Family::from_device(&name)?;
         let pci = device.pci_bus_id().to_string();
         let mut profiles = Vec::with_capacity(SchedulerProfile::ALL.len());
@@ -205,6 +203,7 @@ impl RedlineBackend {
             profiles,
             pool,
             pm4_family,
+            queue_policy,
             independent_queue_count,
             name,
             pci,
@@ -370,6 +369,14 @@ impl RedlineBackend {
 
     pub fn queue_count_for(&self, mode: TimingMode, iterations: usize) -> usize {
         active_queue_count(mode, self.independent_queue_count, iterations)
+    }
+
+    pub fn queue_policy(&self) -> QueuePolicy {
+        self.queue_policy
+    }
+
+    pub fn independent_queue_count(&self) -> usize {
+        self.independent_queue_count
     }
 
     pub fn dependency_policy_name(

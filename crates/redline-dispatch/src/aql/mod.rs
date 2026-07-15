@@ -8,9 +8,11 @@
 //! compatibility re-exports for existing `redline_dispatch::aql` callers.
 
 mod generic;
+mod queue_policy;
 mod replay;
 
 pub use generic::{AqlKernelCatalog, GenericAqlError, PreparedAqlPlan};
+pub use queue_policy::{QueuePolicy, QueuePolicyParseError};
 pub use redline_rocr::abi;
 pub use redline_rocr::{
     AqlQueue, BARRIER_DEPENDENCY_CAPACITY, CompletionSignal, DeviceBuffer, DevicePool, Executable,
@@ -22,8 +24,8 @@ pub use redline_rocr::{
     QueueSet, Runtime, RuntimeError, Symbols, load_symbols,
 };
 pub use replay::{
-    BatchFencePolicy, GpuBatchTiming, GpuMultiQueueTiming, MultiQueuePm4Ib, RecordedDispatch,
-    RecordedGraph, ReplayError, ReplaySubmission, SingleQueueBatchGraph,
+    BatchFencePolicy, GpuBatchTiming, GpuMultiQueueTiming, MultiQueuePm4Ib, PhasedMultiQueuePm4Ib,
+    RecordedDispatch, RecordedGraph, ReplayError, ReplaySubmission, SingleQueueBatchGraph,
     SingleQueueBatchSubmission, SingleQueuePm4Ib, TwoQueueBatchSubmission, TwoQueuePhase,
     TwoQueuePhasedGraph, TwoQueueSerializedBatchGraph, TwoQueueSubmission,
 };

@@ -46,6 +46,20 @@ typedef enum RlMode {
 } RlMode;
 
 /**
+ * Public-queue fan-out policy for independent retained PM4 work.
+ *
+ * `RlQueueAuto` uses the architecture table certified by the #6409 sweeps:
+ * gfx11 uses at most four lanes, gfx12 at most two, and unmeasured families
+ * retain one lane. The resolved count never exceeds `independent_width`.
+ */
+typedef enum RlQueuePolicy {
+    RlQueueAuto = 0,
+    RlQueueOne = 1,
+    RlQueueTwo = 2,
+    RlQueueFour = 4,
+} RlQueuePolicy;
+
+/**
  * Scheduler profile recorded by a verified Radiowave manifest.
  */
 typedef enum RlSchedulerProfile {
@@ -228,6 +242,17 @@ struct RlGpu *rl_gpu_new(int32_t device_ordinal);
  * `gpu` must be a pointer from [`rl_gpu_new`], or null.
  */
 void rl_gpu_free(struct RlGpu *gpu);
+
+/**
+ * Resolve a PM4 queue policy for this GPU and an independent antichain width.
+ * Returns zero when `gpu` is null. Every valid GPU returns at least one lane.
+ *
+ * # Safety
+ * `gpu` must be a live pointer from [`rl_gpu_new`], or null.
+ */
+uintptr_t rl_gpu_pm4_queue_count(const struct RlGpu *gpu,
+                                 enum RlQueuePolicy policy,
+                                 uintptr_t independent_width);
 
 /**
  * Load a code object (HSACO bytes). Writes the module pointer to `out`.

@@ -86,7 +86,12 @@ For independent throughput, Redline can now release-publish up to four
 lane-local retained PM4 IBs and time their GPU makespan. In a same-HSACO Q1/Q4
 control this raises gfx1100 Redline-over-Vulkan wins from **67/120 to 100/120**
 and gfx1151 from **68/120 to 110/120**, with all selected CPU oracles passing.
-Serial RMW remains single-queue. See the
+The default `QueuePolicy::Auto` retains Q1 on unswept gfx10, selects Q4 on
+gfx11/gfx1151, and selects Q2 on gfx12; explicit Q1/Q2/Q4 policies remain
+available for causal controls. Serial RMW remains single-queue. Ordered mixed
+graphs use one reusable queue set: independent antichains fan out, while AQL
+barrier packets keep dependent phase transitions on-GPU with one doorbell per
+active queue. See the
 [multi-queue benchmark result](examples/hipfire-6409/README.md#multi-queue-retained-pm4-result).
 
 The result also transfers back to the pinned HipEngine #6409 suite without

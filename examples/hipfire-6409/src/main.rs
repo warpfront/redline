@@ -13,6 +13,7 @@ use hip_backend::{embedded_code_object, HipBackend};
 use radiowave::recipes::{RecipeCatalog, SelectionMode};
 use radiowave::{SchedulerProfile, Wavefront};
 use redline_backend::{RedlineBackend, RmwBoundary};
+use redline_dispatch::aql::QueuePolicy;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -42,7 +43,7 @@ struct Config {
     list: bool,
     wave_policy: WavePolicy,
     rmw_boundary: RmwBoundary,
-    redline_queue_count: usize,
+    redline_queue_policy: QueuePolicy,
     scheduler_profile: SchedulerProfile,
     scheduler_profile_explicit: bool,
     interleave_aggressive_b32: bool,
@@ -138,7 +139,7 @@ fn main() -> Result<()> {
     println!("initializing Hipfire HIP bridge");
     let hip = HipBackend::new()?;
     println!("initializing Redline retained-PM4 backend");
-    let redline = RedlineBackend::new(config.rmw_boundary, config.redline_queue_count)?;
+    let redline = RedlineBackend::new(config.rmw_boundary, config.redline_queue_policy)?;
     println!("initializing RADV Vulkan backend");
     let vulkan = VulkanBackend::new(Some(&redline.pci))?;
     if hip.arch != config.target_architecture {
@@ -331,7 +332,8 @@ fn main() -> Result<()> {
             "hipfire_device": "HIP ordinal 0",
             "redline_device": redline.name,
             "redline_pci": redline.pci,
-            "redline_independent_queues": config.redline_queue_count,
+            "redline_queue_policy": redline.queue_policy().as_str(),
+            "redline_independent_queues": redline.independent_queue_count(),
             "vulkan_device": vulkan.name,
             "vulkan_pci": vulkan.pci,
             "vulkan_compute_queues": vulkan.queue_count,
@@ -360,7 +362,8 @@ fn main() -> Result<()> {
             "interleave_aggressive_b32": config.interleave_aggressive_b32,
             "mixed_paired_hash": config.mixed_paired_hash,
             "redline_rmw_boundary": config.rmw_boundary.as_str(),
-            "redline_independent_queues": config.redline_queue_count,
+            "redline_queue_policy": redline.queue_policy().as_str(),
+            "redline_independent_queues": redline.independent_queue_count(),
             "matrix_profile": config.matrix_profile.as_str(),
             "include_aggressive_extension": config.include_aggressive,
             "selected_rows": rows.len(),
@@ -818,7 +821,7 @@ fn parse_args() -> Result<Config> {
     let mut list = false;
     let mut wave_policy = WavePolicy::RadiowaveTuned;
     let mut rmw_boundary = RmwBoundary::RadiowaveVmem;
-    let mut redline_queue_count = 4usize;
+    let mut redline_queue_policy = QueuePolicy::Auto;
     let mut scheduler_profile = SchedulerProfile::Default;
     let mut scheduler_profile_explicit = false;
     let mut interleave_aggressive_b32 = false;
@@ -865,13 +868,10 @@ fn parse_args() -> Result<Config> {
                 })?;
             }
             "--redline-queues" => {
-                redline_queue_count = args
+                redline_queue_policy = args
                     .next()
                     .context("--redline-queues requires a value")?
                     .parse()?;
-                if !matches!(redline_queue_count, 1 | 2 | 4) {
-                    bail!("--redline-queues must be 1, 2, or 4");
-                }
             }
             "--scheduler-profile" => {
                 let value = args
@@ -917,7 +917,7 @@ fn parse_args() -> Result<Config> {
             "--list" => list = true,
             "--help" | "-h" => {
                 println!(
-                    "usage: hipfire-6409-bench [--out PATH] [--warmups N] [--samples N] [--filter TEXT] [--max-rows N] [--matrix hipengine|legacy] [--include-aggressive] [--backends all|redline,vulkan] [--wave-policy all32|targeted64|radiowave|blanket64] [--recipe-catalog PATH] [--recipe-mode certified|candidates] [--recipe-allow ID ...] [--scheduler-profile default|max-ilp|iterative-ilp|memory-clause|pipeline-ilp] [--interleave-aggressive-b32] [--mixed-paired-hash] [--redline-rmw radiowave-vmem|same-agent|radv-global] [--redline-queues 1|2|4] [--list]"
+                    "usage: hipfire-6409-bench [--out PATH] [--warmups N] [--samples N] [--filter TEXT] [--max-rows N] [--matrix hipengine|legacy] [--include-aggressive] [--backends all|redline,vulkan] [--wave-policy all32|targeted64|radiowave|blanket64] [--recipe-catalog PATH] [--recipe-mode certified|candidates] [--recipe-allow ID ...] [--scheduler-profile default|max-ilp|iterative-ilp|memory-clause|pipeline-ilp] [--interleave-aggressive-b32] [--mixed-paired-hash] [--redline-rmw radiowave-vmem|same-agent|radv-global] [--redline-queues auto|1|2|4] [--list]"
                 );
                 std::process::exit(0);
             }
@@ -965,7 +965,7 @@ fn parse_args() -> Result<Config> {
         list,
         wave_policy,
         rmw_boundary,
-        redline_queue_count,
+        redline_queue_policy,
         scheduler_profile,
         scheduler_profile_explicit,
         interleave_aggressive_b32,
