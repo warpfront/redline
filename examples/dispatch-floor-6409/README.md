@@ -1,129 +1,146 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev> -->
 
-# Beating the HIP graph dispatch floor (ROCm/ROCm#6409)
+# Redline on the ROCm/ROCm#6409 matrix
 
-[ROCm#6409](https://github.com/ROCm/ROCm/issues/6409) reports that HIP graph
-replay loses to a pre-recorded Vulkan command buffer at the tiny-dispatch floor.
-This runs the **exact hipEngine microbenchmark** — the same kernel
-(`gmb_noop_kernel`, `out[idx] += 1.0f`, block=256), the same `serial_latency`
-dependency chain on a shared buffer, at the same counts (1, 50, 200, 941) — and
-adds a Redline arm that lowers those dispatches to **one retained GFX12 PM4
-indirect buffer**. Both arms verify correctness (every element == count).
+> **Hipfire-native follow-up:** the independent Rust rewrite in
+> [`examples/hipfire-6409`](../hipfire-6409/README.md) removes hipEngine from
+> the harness, uses tuned spill-free HIP kernels, adds HipGraph as a fourth
+> contender, and fixes the earlier multi-workgroup test's block-ID assumption.
+> Its final correctness-gated result is Redline 46/90 first places (51.11%),
+> with 49/90 pairwise wins over Vulkan, 88/90 over HipGraph, and 89/90 over
+> direct HIP. Treat that run as the stricter harness/codegen attribution result;
+> the 212-row hipEngine run below remains the historical reproduction of the
+> pinned issue suite.
 
-## Result — AMD Radeon AI PRO R9700 (gfx1201), device 3
+[ROCm#6409](https://github.com/ROCm/ROCm/issues/6409) is not evidence that a
+correct retained-PM4 HIP path does not exist. Redline now runs the issue's
+pinned hipEngine matrix using ordinary hipcc/LLVM code objects, one retained
+GFX12 PM4 IB, and in-IB GPU timestamps. HIP graph capture is used once to
+recover the exact kernel and argument values; no HIP graph is replayed or timed.
 
-Host µs/dispatch (median of 50 replays), matched to hipEngine's `host_wall`
-domain. Three HIP submission paths are shown: `hip_serial` (plain host-enqueued
-launches), `hip_graph` (captured graph replay), and `redline` (one retained PM4
-IB):
+The benchmark source is pinned at
+[`f2c3ad6d74c86e3641ce09ff9fd759eaa6cd75e0`](https://github.com/shisa-ai/hipEngine/tree/f2c3ad6d74c86e3641ce09ff9fd759eaa6cd75e0/benchmarks/micro).
+This gfx1201 rerun uses the retained issue sampling (`10` repetitions, `3`
+warmups, `5` samples; dispatch `20/5`) in both `serial_latency` and
+`independent_throughput` modes.
 
-| count | hip_serial | hip_graph | redline | vs serial | vs graph | correct |
-| ---: | ---: | ---: | ---: | ---: | ---: | :---: |
-| 1 | 26.02 | 33.34 | 17.56 | **1.48×** | **1.90×** | PASS |
-| 50 | 3.19 | 2.99 | 2.08 | **1.53×** | **1.44×** | PASS |
-| 200 | 2.81 | 2.55 | 1.96 | **1.43×** | **1.30×** | PASS |
-| 941 | 2.74 | 2.26 | 1.90 | **1.44×** | **1.19×** | PASS |
+## Result
 
-Redline replays the same dependency chain faster than both plain HIP launches and
-a real `hipGraphLaunch`, correctness-gated, on the exact benchmark #6409 measures.
+The ratio below is `Redline GPU time / Vulkan GPU time`; below `1.0` favors
+Redline. “Wins” counts correctness-passing rows with a ratio below one.
 
-**The submission overhead is deterministic and bakeable.** `hip_serial − hip_graph`
-≈ 0.48 µs/dispatch at count=941 is the per-dispatch host-submission cost the graph
-amortizes. Redline pays submission *once* (the whole sequence is a single retained
-PM4 IB) and fences each boundary with the minimal gfx12 dependency fence
-(`wait_compute_idle` + inter-node acquire — L2/MALL stays coherent) instead of
-HIP's heavier per-dispatch fence, so it beats even the graph.
+| Family | Serial wins | Serial median | Independent wins | Independent median |
+| --- | ---: | ---: | ---: | ---: |
+| Geometry | 8/8 | 0.403x | 8/8 | 0.477x |
+| Reduction variants | 24/24 | 0.413x | 24/24 | 0.389x |
+| Memory/waitcnt | 8/8 | 0.927x | 5/8 | 0.965x |
+| Packed dot | 0/8 | 1.060x | 0/8 | 1.239x |
+| VOPD/VALU | 8/8 | 0.775x | 8/8 | 0.844x |
+| Sampler | 12/12 | 0.426x | rejected HIP control | — |
+| Two-stage reduction | 16/16 | 0.494x | 16/16 | 0.614x |
+| Q4 selected-dual | 3/5 | 0.993x | 5/5 | 0.491x |
+| Q6 X8 selected-down | 2/3 | 0.607x | 3/3 | 0.346x |
+| Dense Q8_0 | 16/20 | 0.447x | 20/20 | 0.294x |
 
-## vs Vulkan — the real #6409 test (and where Redline still loses)
+Across the 212 three-way, correctness-passing rows, Redline beats Vulkan in
+186 and HIP in 157. The median ratios are 0.479x versus Vulkan and 0.834x versus
+HIP. This directly invalidates the categorical theory that there is no real
+Redline PM4 path: the same HIP kernels and buffers execute correctly through a
+retained PM4 submission, and that submission wins most of the pinned matrix.
 
-Running lhl's own `vulkan_command_buffer` arm (RADV, R9700, device 3), host
-µs/dispatch at count=941:
+This is not an unconditional “Redline wins everything” result. Packed-dot is a
+real remaining loss in both modes. Some serial production rows also remain
+Vulkan wins. Those are kernel/codegen or workload-shape targets; they do not
+erase the transport result.
 
-| hip_serial | hip_graph | redline | vulkan |
-| ---: | ---: | ---: | ---: |
-| 2.74 | 2.26 | 1.90 | **1.07** |
+The machine-readable audit is
+[`summary.json`](../hipengine-6409/results/gfx1201/2026-07-12/summary.json).
+The directory also contains every normalized artifact, raw Redline artifact,
+environment record, and command log.
 
-**Redline beats HIP (1.19–1.44×) but Vulkan beats Redline (~1.78×) on this strict
-serial chain.** This is the honest heart of #6409: Vulkan's compute barrier
-(`SHADER_WRITE → SHADER_READ`) is a *cheaper dependency fence* than Redline's
-`wait_compute_idle` (a full compute-idle drain). From the tuned decomposition,
-Redline's wait costs ~1.47 µs/dispatch; Vulkan gets the equivalent wait+invalidate
-for ~1.07 total. So the remaining gap is **not** submission (Redline already bakes
-that away) and **not** the binding (pure Rust ≈ PyO3) — it is the *fence*.
+## Dispatch/grid row
 
-Two implications:
+For the one-block `gmb_noop_kernel` count sweep, Redline is a correct single
+retained PM4 IB and decisively beats HIP graph GPU time:
 
-- **Redline's win is on *independent* work, not strict chains.** The fence-free
-  aggressive path is ~0.11 µs/dispatch (~10× — see
-  [`../../docs/DISPATCH-FLOOR.md`](../../docs/DISPATCH-FLOOR.md)); real decode
-  overlaps its independent branches, where Redline pulls ahead of both HIP and
-  Vulkan.
-- **The optimization target is a lighter dependency fence** — a targeted
-  wait-for-writer + read-cache invalidate matching Vulkan's barrier, instead of
-  the full `wait_compute_idle` drain. Closing that closes the serial-chain gap to
-  Vulkan.
+| Mode | Count | HIP | Vulkan | Redline | Redline/HIP | Redline/Vulkan |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| serial | 1 | 17.800 us | 1.600 us | 3.240 us | 0.182x | 2.025x |
+| serial | 50 | 3.678 us | 1.272 us | 1.666 us | 0.453x | 1.310x |
+| serial | 200 | 3.458 us | 1.171 us | 1.643 us | 0.475x | 1.403x |
+| serial | 941 | 3.402 us | 1.146 us | 1.643 us | 0.483x | 1.434x |
+| independent | 1 | 20.960 us | 1.600 us | 2.640 us | 0.126x | 1.650x |
+| independent | 50 | 9.086 us | 0.038 us | 0.110 us | 0.012x | 2.854x |
+| independent | 200 | 8.138 us | 0.023 us | 0.070 us | 0.009x | 3.097x |
+| independent | 941 | 7.864 us | 0.019 us | 0.061 us | 0.008x | 3.232x |
 
-Reproduce the Vulkan arm:
-`python .engines/hipEngine/benchmarks/micro/runners/vulkan_dispatch_floor.py
---counts 1,50,200,941 --n 256 --reps 50 --device-index <gpu>`.
+These results overturn the “PM4 cannot correctly launch even one HIP kernel”
+premise and reproduce the known Redline-over-HipGraph advantage. They do not yet
+beat Vulkan's tiny-kernel dispatch floor on this gfx1201 host.
 
-## Why 1.2× here and not the ~10× floor (it is NOT the binding)
+The grid sweep exposed a separate correctness bug: with more than one workgroup,
+the current gfx1201 `DISPATCH_DIRECT` encoding does not supply distinct hardware
+block IDs to this HIP kernel. Grid 128/1024/8192 Redline timings are therefore
+rejected, not reported as wins. Fixing that TGID/tunnel encoding is the next
+dispatch-specific task. The artifact is
+[`dispatch-matrix.json`](../hipengine-6409/results/gfx1201/2026-07-12/dispatch-matrix.json).
 
-`crates/redline-dispatch/examples/gmb_floor.rs` runs the *same* experiment in
-**pure Rust** (no Python, no C — `SingleQueuePm4Ib` driven directly). At count=941
-on the R9700:
+## What is actually being timed
 
-Three fence modes at the dependency boundary (count=941):
+Redline's profiled replay brackets the retained IB on the GPU:
 
-| mode | boundary fence | pure Rust µs/disp | correct |
-| --- | --- | ---: | :---: |
-| conservative | `wait_compute_idle` + inter-node acquire | ~1.9 | PASS |
-| tuned | inter-node acquire only (no wait) | ~0.32 | FAIL (races) |
-| aggressive | none | ~0.11 | FAIL (races) |
+- start: `COPY_DATA` GPU timestamp to fine-grained memory;
+- body: ordinary hipcc kernels lowered to PM4 dispatches;
+- serial dependency: compute-idle plus the required cache acquire;
+- end: bottom-of-pipe `RELEASE_MEM` timestamp;
+- submission: one AMD vendor AQL packet and one completion signal.
 
-Three conclusions:
+The GPU clock frequency is queried from the HSA agent. These timestamps replace
+the earlier host-wall-only comparison and make the primary timing domain match
+HIP events and Vulkan device timestamps.
 
-- **The binding is not the bottleneck.** Pure-Rust conservative ≈ the PyO3 arm
-  (1.86) — ~4% wrapper overhead. Python did not swamp the win.
-- **`wait_compute_idle` is irreducible for a non-atomic RMW chain.** Decomposed,
-  the acquire costs ~0.15 µs/disp and the wait ~1.67. Dropping the wait (the
-  *tuned* row) invalidates caches but does not stop wave overlap, so the shared
-  buffer races (FAIL). So conservative is the **minimal correct** fence — there is
-  no correctness-preserving speed left on the table for a strict chain.
-- **The ~10–20× floor is fence-free** (the aggressive row, ~0.11 µs/disp ≈ 20× over
-  hip_graph) and applies to *independent* dispatches (disjoint outputs / no-op —
-  see [`../../docs/DISPATCH-FLOOR.md`](../../docs/DISPATCH-FLOOR.md)). A true
-  dependency chain is serialization-bound; there Redline still beats HIP because
-  its minimal-*scope* fence is cheaper than HIP's system-scope fence (1.2×). The
-  big win comes from workload structure (overlapping the independent parts of a
-  decode graph), not from tuning the fence of a strict chain.
+`serial_latency` inserts a dependency boundary between logical operations.
+`independent_throughput` uses disjoint outputs, removes cross-operation barriers,
+and preserves internal barriers inside multi-stage operations. All timed output
+slices are checked by the pinned runner's oracle.
 
-Real decode is a mix — cheaper fences on the serial parts, overlap on the
-independent parts, and fewer submissions.
+## HIP-only code-object contract
 
-`gmb_noop_kernel` also reads `blockIdx`/`blockDim`/`threadIdx` (272-byte kernarg
-with hidden args) and Redline dispatches it correctly, validating the binding for
-real engine kernels. The `vulkan_command_buffer` arm (#6409's other strategy) is
-the next comparison.
+The retained results do not use the experimental ACO-shaped or direct-SRD
+assembly images in this repository. The code path is backend-agnostic:
+
+1. hipcc builds the unchanged HIP source with the exact requested codegen flags;
+2. a small manifest records standard AMDGPU kernarg offsets;
+3. the unchanged launch closure is captured once to recover exact arguments;
+4. Redline loads that ordinary offload bundle through public HSA;
+5. the captured graph is destroyed and the retained PM4 IB is replayed.
+
+That distinction matters. These rows measure a submission/runtime replacement
+for HipGraph, not a compiler fork and not a Vulkan-ish kernel smuggled into the
+Redline column.
 
 ## Reproduce
 
+Build the C API and run the pinned matrix:
+
 ```bash
-pip install redline-dispatch          # the PyO3 wheel (Rust core, dlopens ROCr)
-# gmb_noop.hip and hipgraph_baseline are auto-compiled with hipcc on first run.
-ROCR_VISIBLE_DEVICES=3 python demo.py
+cargo build --release -p redline-capi
+python3 examples/hipengine-6409/run_matrix.py \
+  --hipengine-root /tmp/hipEngine-f2c \
+  --out-dir examples/hipengine-6409/results/gfx1201/2026-07-12
+
+cargo build --release -p redline-dispatch --example gmb_floor
+python3 examples/hipengine-6409/dispatch_matrix.py \
+  --hipengine-root /tmp/hipEngine-f2c \
+  --environment examples/hipengine-6409/results/gfx1201/2026-07-12/environment.json \
+  --out-dir examples/hipengine-6409/results/gfx1201/2026-07-12
+
+python3 examples/hipengine-6409/summarize_results.py \
+  examples/hipengine-6409/results/gfx1201/2026-07-12 \
+  --out examples/hipengine-6409/results/gfx1201/2026-07-12/summary.json
 ```
 
-Environment knobs: `REDLINE_GFX_ARCH` (default `gfx1201`), `REDLINE_6409_COUNTS`,
-`REDLINE_6409_N`, `REDLINE_6409_REPS`. Select the GPU with `ROCR_VISIBLE_DEVICES`
-(it filters HIP too, so both arms target the same device).
-
-## Files
-
-- `gmb_noop.hip` — the exact #6409 narrow kernel (for Redline's code object).
-- `hipgraph_baseline.hip` — faithful `hipStreamBeginCapture → hipGraphInstantiate
-  → hipGraphLaunch` baseline, hipEvent + host timed, correctness == count.
-- `demo.py` — runs both arms and prints the comparison. The `run_redline`
-  function is the drop-in pattern for a Python engine: `Gpu(0)` →
-  `load_module(code)` → `build(module, dispatches)` → `replay()`.
+This host needed shaderc 2025.2 for `GL_EXT_integer_dot_product`; the retained
+environment and logs record that toolchain. `run_matrix.py` resumes from
+completed artifacts, so interrupted runs do not discard earlier families.

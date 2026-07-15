@@ -31,6 +31,7 @@ pub mod abi;
 #[doc(hidden)]
 pub mod packet;
 mod pm4;
+mod pm4_gfx10;
 mod runtime;
 
 pub use abi::{MissingSymbol, Symbols};
@@ -38,12 +39,18 @@ pub use packet::{
     BARRIER_DEPENDENCY_CAPACITY, FenceScope, HeaderPolicy, KernelMetadata, LaunchGeometry,
     PacketError,
 };
-pub use pm4::{Gfx12Pm4CommandBuffer, Pm4BuildError};
+pub use pm4::{
+    Gfx12DispatchMode, Gfx12KernelImage, Gfx12Pm4CommandBuffer, Gfx12RmwAcquirePolicy,
+    Pm4BuildError,
+};
+pub use pm4_gfx10::{
+    Gfx10KernelImage, Gfx10Pm4BuildError, Gfx10Pm4CommandBuffer, Gfx11Pm4CommandBuffer,
+};
 pub use runtime::DEFAULT_WAIT_TIMEOUT;
 pub use runtime::{
-    AqlQueue, CompletionSignal, Executable, GpuDevice, GpuSelector, KernargBuffer, KernargPool,
-    Kernel, KernelPm4Metadata, PciBusId, PciBusIdParseError, QueueDepthReport, QueueDepthSample,
-    QueueDepthStats, QueueSet, Runtime, RuntimeError,
+    AqlQueue, CompletionSignal, DeviceBuffer, DevicePool, Executable, GpuDevice, GpuSelector,
+    KernargBuffer, KernargPool, Kernel, KernelPm4Metadata, PciBusId, PciBusIdParseError,
+    QueueDepthReport, QueueDepthSample, QueueDepthStats, QueueSet, Runtime, RuntimeError,
 };
 
 /// Load the installed public ROCr runtime without a link-time ROCm dependency.

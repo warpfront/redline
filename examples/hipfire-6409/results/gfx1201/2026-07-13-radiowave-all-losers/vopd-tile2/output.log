@@ -1,0 +1,66 @@
+initializing Hipfire HIP bridge
+initializing Redline retained-PM4 backend
+initializing RADV Vulkan backend
+[1/12] serial_latency/vopd/variant=independent-fma,n=32768,body=64;hip-wave=64 (32 operations; order redline -> vulkan -> hipgraph -> hip)
+  redline     12.3925 us/op correctness=true mismatches=0
+  vulkan       9.0750 us/op correctness=true mismatches=0
+  hipgraph    47.4563 us/op correctness=true mismatches=0
+  hip         48.2088 us/op correctness=true mismatches=0
+[2/12] serial_latency/vopd/variant=dependent-fma,n=32768,body=64;hip-wave=64 (32 operations; order vulkan -> hipgraph -> hip -> redline)
+  vulkan       9.2287 us/op correctness=true mismatches=0
+  hipgraph    47.3200 us/op correctness=true mismatches=0
+  hip         47.2938 us/op correctness=true mismatches=0
+  redline     11.1738 us/op correctness=true mismatches=0
+[3/12] serial_latency/vopd/variant=mixed-int-float,n=32768,body=64;hip-wave=64 (32 operations; order hipgraph -> hip -> redline -> vulkan)
+  hipgraph    56.1250 us/op correctness=true mismatches=0
+  hip         56.0825 us/op correctness=true mismatches=0
+  redline     24.6863 us/op correctness=true mismatches=0
+  vulkan      15.8712 us/op correctness=true mismatches=0
+[4/12] serial_latency/vopd/variant=dequant-like,n=32768,body=64;hip-wave=64 (32 operations; order hip -> redline -> vulkan -> hipgraph)
+  hip         51.3837 us/op correctness=true mismatches=0
+  redline     21.9563 us/op correctness=true mismatches=0
+  vulkan      14.8812 us/op correctness=true mismatches=0
+  hipgraph    51.3325 us/op correctness=true mismatches=0
+[5/12] independent_throughput/vopd/variant=independent-fma,n=32768,body=64;hip-wave=64 (32 operations; order redline -> vulkan -> hipgraph -> hip)
+  redline      8.7025 us/op correctness=true mismatches=0
+  vulkan       7.5338 us/op correctness=true mismatches=0
+  hipgraph    55.1388 us/op correctness=true mismatches=0
+  hip         48.6375 us/op correctness=true mismatches=0
+[6/12] independent_throughput/vopd/variant=dependent-fma,n=32768,body=64;hip-wave=64 (32 operations; order vulkan -> hipgraph -> hip -> redline)
+  vulkan       6.0775 us/op correctness=true mismatches=0
+  hipgraph    44.0588 us/op correctness=true mismatches=0
+  hip         35.4175 us/op correctness=true mismatches=0
+  redline      4.4988 us/op correctness=true mismatches=0
+[7/12] independent_throughput/vopd/variant=mixed-int-float,n=32768,body=64;hip-wave=64 (32 operations; order hipgraph -> hip -> redline -> vulkan)
+  hipgraph    39.7500 us/op correctness=true mismatches=0
+  hip         33.1825 us/op correctness=true mismatches=0
+  redline      9.9138 us/op correctness=true mismatches=0
+  vulkan       7.3388 us/op correctness=true mismatches=0
+[8/12] independent_throughput/vopd/variant=dequant-like,n=32768,body=64;hip-wave=64 (32 operations; order hip -> redline -> vulkan -> hipgraph)
+  hip         30.3038 us/op correctness=true mismatches=0
+  redline      8.2550 us/op correctness=true mismatches=0
+  vulkan       6.4625 us/op correctness=true mismatches=0
+  hipgraph    36.0050 us/op correctness=true mismatches=0
+[9/12] single_kernel_aggressive/vopd/variant=independent-fma,n=32768,body=64;hip-wave=64 (1 operations; order redline -> vulkan -> hipgraph -> hip)
+  redline      9.2400 us/op correctness=false mismatches=31139
+  vulkan       8.2400 us/op correctness=false mismatches=31139
+  hipgraph    23.0800 us/op correctness=false mismatches=31139
+  hip         17.3200 us/op correctness=false mismatches=31139
+[10/12] single_kernel_aggressive/vopd/variant=dependent-fma,n=32768,body=64;hip-wave=64 (1 operations; order vulkan -> hipgraph -> hip -> redline)
+  vulkan       8.2400 us/op correctness=false mismatches=31139
+  hipgraph    23.0000 us/op correctness=false mismatches=31139
+  hip         17.2400 us/op correctness=false mismatches=31139
+  redline      8.5600 us/op correctness=false mismatches=31139
+[11/12] single_kernel_aggressive/vopd/variant=mixed-int-float,n=32768,body=64;hip-wave=64 (1 operations; order hipgraph -> hip -> redline -> vulkan)
+  hipgraph    27.2800 us/op correctness=false mismatches=31132
+  hip         21.5200 us/op correctness=false mismatches=31132
+  redline     15.4400 us/op correctness=false mismatches=31132
+  vulkan      11.6800 us/op correctness=false mismatches=31132
+[12/12] single_kernel_aggressive/vopd/variant=dequant-like,n=32768,body=64;hip-wave=64 (1 operations; order hip -> redline -> vulkan -> hipgraph)
+  hip         17.2000 us/op correctness=true mismatches=0
+  redline     13.9600 us/op correctness=true mismatches=0
+  vulkan      10.9200 us/op correctness=true mismatches=0
+  hipgraph    22.9600 us/op correctness=true mismatches=0
+wrote results/gfx1201/2026-07-13-radiowave-all-losers/vopd-tile2/results.json
+wrote results/gfx1201/2026-07-13-radiowave-all-losers/vopd-tile2/REPORT.md
+Redline wins 1/9 (11.11%). Four-way placements: 1st 1, 2nd 8, 3rd 0, 4th 0.

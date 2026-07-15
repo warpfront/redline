@@ -1,0 +1,811 @@
+WARNING: radv is not a conformant Vulkan implementation, testing use only.
+[vulkan-q6-x8] mode=serial_latency queues=1 quantize=0.002004 ms dot=0.031264 ms combined=0.037628 ms correctness=pass
+{
+  "artifact_ref": "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/serial_latency/vulkan-q6-x8-selected-down.json",
+  "backend": "vulkan",
+  "bench": "q6_x8_selected_down_real_slice",
+  "classification": "real_slice_probe",
+  "command": [
+    "python3",
+    "/tmp/hipEngine-f2c/benchmarks/micro/runners/q6_x8_real_slice.py",
+    "--backend",
+    "vulkan",
+    "--timing-mode",
+    "serial_latency",
+    "--independent-streams",
+    "4",
+    "--reps",
+    "10",
+    "--warmup",
+    "3",
+    "--samples",
+    "5",
+    "--environment-json",
+    "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/environment.json",
+    "--environment-ref",
+    "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/environment.json",
+    "--gfx-arch",
+    "gfx1201",
+    "--hardware-gpu",
+    "AMD Radeon Graphics",
+    "--build-dir",
+    "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/build/vulkan/q6-x8-selected-down",
+    "--rows",
+    "8",
+    "--experts",
+    "256",
+    "--in-features",
+    "512",
+    "--out-features",
+    "2048",
+    "--local-size",
+    "64",
+    "--out",
+    "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/serial_latency/vulkan-q6-x8-selected-down.json",
+    "--pretty"
+  ],
+  "correctness": {
+    "all_pass": true,
+    "oracle": "CPU Q6_K X8 selected-down q8_1+dp4a BF16 output",
+    "rows": 3,
+    "status": "pass"
+  },
+  "correctness_vs_cpu": {
+    "oracle": "CPU Q6_K X8 selected-down q8_1+dp4a",
+    "pass": true
+  },
+  "environment_ref": "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/environment.json",
+  "hardware": {
+    "device": {
+      "active_queue_count": 1,
+      "api_version": "1.4.318",
+      "calibrated_timestamps_extension": null,
+      "cross_queue_gpu_timing_calibrated": false,
+      "device_id": 30032,
+      "device_name": "AMD Radeon Graphics (RADV GFX1201)",
+      "device_type": 2,
+      "driver_version_raw": 104865800,
+      "queue_family": 1,
+      "shader_integer_dot_product": true,
+      "storage_buffer_16bit": true,
+      "vendor_id": 4098
+    },
+    "gfx_arch": "gfx1201",
+    "gpu_name": "AMD Radeon Graphics"
+  },
+  "kind": "hipengine_micro_result",
+  "measurements": {
+    "rows": [
+      {
+        "activation_quant": "q8_1",
+        "backend": "vulkan",
+        "blocks_per_row": 2,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "raw Q6_K selected q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 9,
+            "method": "vulkan_compute_barrier",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 10,
+            "oracle": "raw Q6_K selected q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "experts": 256,
+        "in_features": 512,
+        "kv_type": "not_applicable",
+        "local_size": 32,
+        "median_us": 2.004,
+        "model_fingerprint": "synthetic_q6_x8_selected_down_v1",
+        "numeric_correctness": {
+          "burst": {
+            "exact_bf16_mismatches": 2584,
+            "expected_repetitions": [
+              9
+            ],
+            "kl_divergence": 0.0004001082667,
+            "max_abs": 0.25,
+            "mean_abs": 0.002821721806,
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1
+          },
+          "single": {
+            "exact_bf16_mismatches": 2383,
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 0.001734951059,
+            "max_abs": 0.25,
+            "mean_abs": 0.003079732531,
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1
+          }
+        },
+        "operation": "q8_1_quantize",
+        "out_features": 2048,
+        "out_packed": 256,
+        "output_dtype": "bf16",
+        "q8_blocks_per_row": 16,
+        "quant": "q6_k",
+        "row_tile": 0,
+        "rows": 8,
+        "selected_dtype": "int64",
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            9
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "shared",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "shared"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 2.012,
+                "median": 2.004,
+                "min": 1.996,
+                "n": 5,
+                "p05": 1.996,
+                "p95": 2.0104,
+                "samples": 5,
+                "stdev": 0.005986651818838311
+              },
+              "sequence_us": {
+                "max": 20.12,
+                "median": 20.04,
+                "min": 19.96,
+                "n": 5,
+                "p05": 19.96,
+                "p95": 20.104,
+                "samples": 5,
+                "stdev": 0.05986651818838293
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 7.601999999999999,
+                "median": 7.544,
+                "min": 7.5230999999999995,
+                "n": 5,
+                "p05": 7.524100000000001,
+                "p95": 7.591019999999999,
+                "samples": 5,
+                "stdev": 0.028089613738889182
+              },
+              "sequence_us": {
+                "max": 76.02,
+                "median": 75.44,
+                "min": 75.231,
+                "n": 5,
+                "p05": 75.241,
+                "p95": 75.9102,
+                "samples": 5,
+                "stdev": 0.2808961373888919
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 10
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 9.28,
+                "median": 9.0,
+                "min": 7.72,
+                "n": 5,
+                "p05": 7.752000000000001,
+                "p95": 9.248,
+                "samples": 5,
+                "stdev": 0.6611505123646202
+              },
+              "sequence_us": {
+                "max": 9.28,
+                "median": 9.0,
+                "min": 7.72,
+                "n": 5,
+                "p05": 7.752000000000001,
+                "p95": 9.248,
+                "samples": 5,
+                "stdev": 0.6611505123646202
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 68.181,
+                "median": 67.23,
+                "min": 63.54,
+                "n": 5,
+                "p05": 63.564,
+                "p95": 68.175,
+                "samples": 5,
+                "stdev": 2.11222788543282
+              },
+              "sequence_us": {
+                "max": 68.181,
+                "median": 67.23,
+                "min": 63.54,
+                "n": 5,
+                "p05": 63.564,
+                "p95": 68.175,
+                "samples": 5,
+                "stdev": 2.11222788543282
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "variant": "quantize",
+        "weight_layout": "q6_k_x8",
+        "workgroup_match": "exact"
+      },
+      {
+        "activation_quant": "q8_1",
+        "backend": "vulkan",
+        "blocks_per_row": 2,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "raw Q6_K selected q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 9,
+            "method": "vulkan_compute_barrier",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 10,
+            "oracle": "raw Q6_K selected q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "experts": 256,
+        "in_features": 512,
+        "kv_type": "not_applicable",
+        "local_size": 64,
+        "median_us": 31.264,
+        "model_fingerprint": "synthetic_q6_x8_selected_down_v1",
+        "numeric_correctness": {
+          "burst": {
+            "exact_bf16_mismatches": 2584,
+            "expected_repetitions": [
+              9
+            ],
+            "kl_divergence": 0.0004001082667,
+            "max_abs": 0.25,
+            "mean_abs": 0.002821721806,
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1
+          },
+          "single": {
+            "exact_bf16_mismatches": 2383,
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 0.001734951059,
+            "max_abs": 0.25,
+            "mean_abs": 0.003079732531,
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1
+          }
+        },
+        "operation": "x8_selected_dp4a_dot_prequantized",
+        "out_features": 2048,
+        "out_packed": 256,
+        "output_dtype": "bf16",
+        "q8_blocks_per_row": 16,
+        "quant": "q6_k",
+        "row_tile": 1,
+        "rows": 8,
+        "selected_dtype": "int64",
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            9
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "shared",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "shared"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 31.54,
+                "median": 31.264,
+                "min": 30.932,
+                "n": 5,
+                "p05": 30.9968,
+                "p95": 31.531999999999996,
+                "samples": 5,
+                "stdev": 0.2173675228731287
+              },
+              "sequence_us": {
+                "max": 315.4,
+                "median": 312.64,
+                "min": 309.32,
+                "n": 5,
+                "p05": 309.968,
+                "p95": 315.32,
+                "samples": 5,
+                "stdev": 2.1736752287312817
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 36.711200000000005,
+                "median": 36.6922,
+                "min": 36.0882,
+                "n": 5,
+                "p05": 36.15542,
+                "p95": 36.71020000000001,
+                "samples": 5,
+                "stdev": 0.24347187435102308
+              },
+              "sequence_us": {
+                "max": 367.112,
+                "median": 366.922,
+                "min": 360.882,
+                "n": 5,
+                "p05": 361.55420000000004,
+                "p95": 367.102,
+                "samples": 5,
+                "stdev": 2.4347187435102304
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 10
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 39.8,
+                "median": 39.64,
+                "min": 38.28,
+                "n": 5,
+                "p05": 38.52,
+                "p95": 39.784,
+                "samples": 5,
+                "stdev": 0.5620533782480084
+              },
+              "sequence_us": {
+                "max": 39.8,
+                "median": 39.64,
+                "min": 38.28,
+                "n": 5,
+                "p05": 38.52,
+                "p95": 39.784,
+                "samples": 5,
+                "stdev": 0.5620533782480084
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 102.19,
+                "median": 96.771,
+                "min": 93.081,
+                "n": 5,
+                "p05": 93.4188,
+                "p95": 101.654,
+                "samples": 5,
+                "stdev": 3.2640638841787393
+              },
+              "sequence_us": {
+                "max": 102.19,
+                "median": 96.771,
+                "min": 93.081,
+                "n": 5,
+                "p05": 93.4188,
+                "p95": 101.654,
+                "samples": 5,
+                "stdev": 3.2640638841787393
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "variant": "q6_x8_selected_down",
+        "weight_layout": "q6_k_x8",
+        "workgroup_match": "exact"
+      },
+      {
+        "activation_quant": "q8_1",
+        "backend": "vulkan",
+        "blocks_per_row": 2,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "raw Q6_K selected q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 28,
+            "method": "vulkan_compute_barrier",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 10,
+            "oracle": "raw Q6_K selected q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "experts": 256,
+        "in_features": 512,
+        "kv_type": "not_applicable",
+        "local_size": 64,
+        "median_us": 37.628,
+        "model_fingerprint": "synthetic_q6_x8_selected_down_v1",
+        "numeric_correctness": {
+          "burst": {
+            "exact_bf16_mismatches": 2584,
+            "expected_repetitions": [
+              9
+            ],
+            "kl_divergence": 0.0004001082667,
+            "max_abs": 0.25,
+            "mean_abs": 0.002821721806,
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1
+          },
+          "single": {
+            "exact_bf16_mismatches": 2383,
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 0.001734951059,
+            "max_abs": 0.25,
+            "mean_abs": 0.003079732531,
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1
+          }
+        },
+        "operation": "x8_selected_dp4a_quantize_plus_dot",
+        "out_features": 2048,
+        "out_packed": 256,
+        "output_dtype": "bf16",
+        "q8_blocks_per_row": 16,
+        "quant": "q6_k",
+        "row_tile": 1,
+        "rows": 8,
+        "selected_dtype": "int64",
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            9
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "shared",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "shared"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 37.768,
+                "median": 37.628,
+                "min": 37.552,
+                "n": 5,
+                "p05": 37.5672,
+                "p95": 37.74,
+                "samples": 5,
+                "stdev": 0.07008109588184282
+              },
+              "sequence_us": {
+                "max": 377.68,
+                "median": 376.28,
+                "min": 375.52,
+                "n": 5,
+                "p05": 375.672,
+                "p95": 377.4,
+                "samples": 5,
+                "stdev": 0.7008109588184349
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 43.1203,
+                "median": 42.9863,
+                "min": 42.9443,
+                "n": 5,
+                "p05": 42.94928,
+                "p95": 43.1059,
+                "samples": 5,
+                "stdev": 0.06341622505321498
+              },
+              "sequence_us": {
+                "max": 431.203,
+                "median": 429.863,
+                "min": 429.443,
+                "n": 5,
+                "p05": 429.4928,
+                "p95": 431.05899999999997,
+                "samples": 5,
+                "stdev": 0.6341622505321434
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 10
+          },
+          "single": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 42.24,
+                "median": 40.44,
+                "min": 40.32,
+                "n": 5,
+                "p05": 40.344,
+                "p95": 42.208,
+                "samples": 5,
+                "stdev": 0.8648144309619269
+              },
+              "sequence_us": {
+                "max": 42.24,
+                "median": 40.44,
+                "min": 40.32,
+                "n": 5,
+                "p05": 40.344,
+                "p95": 42.208,
+                "samples": 5,
+                "stdev": 0.8648144309619269
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 102.63,
+                "median": 98.041,
+                "min": 94.591,
+                "n": 5,
+                "p05": 94.6548,
+                "p95": 102.2822,
+                "samples": 5,
+                "stdev": 3.1855878327241287
+              },
+              "sequence_us": {
+                "max": 102.63,
+                "median": 98.041,
+                "min": 94.591,
+                "n": 5,
+                "p05": 94.6548,
+                "p95": 102.2822,
+                "samples": 5,
+                "stdev": 3.1855878327241287
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "variant": "q6_x8_selected_down",
+        "weight_layout": "q6_k_x8",
+        "workgroup_match": "exact"
+      }
+    ]
+  },
+  "notes": "Vulkan Q6_K X8 selected-down q8_1+dp4a slice under timing contract v2.",
+  "parameters": {
+    "activation_quant": "q8_1",
+    "experts": 256,
+    "in_features": 512,
+    "independent_lanes": 1,
+    "input_scale": 0.1,
+    "kv_type": "not_applicable",
+    "local_size": 64,
+    "model_fingerprint": "synthetic_q6_x8_selected_down_v1",
+    "out_features": 2048,
+    "output_dtype": "bf16",
+    "quant": "q6_k",
+    "repetitions": 10,
+    "row_tile": 1,
+    "rows": 8,
+    "samples": 5,
+    "selected_dtype": "int64",
+    "timing_mode": "serial_latency",
+    "warmup_iterations": 3,
+    "weight_layout": "q6_k_x8"
+  },
+  "schema_version": 2,
+  "source": {
+    "branch": "",
+    "commit": "f2c3ad6d74c86e3641ce09ff9fd759eaa6cd75e0",
+    "dirty": false,
+    "repo": "/tmp/hipEngine-f2c",
+    "source_hash": "sha256:c8136d5a066feb0cfdce0ffcbfaeb2708a8693ebe80e469272eb1c75c28ffea5"
+  },
+  "timing": {
+    "q8_1_quantize": {
+      "max_us": 2.012,
+      "median_ms": 0.002004,
+      "median_us": 2.004,
+      "min_us": 1.996,
+      "p05_us": 1.996,
+      "p95_us": 2.0104
+    },
+    "x8_selected_dp4a_dot_prequantized": {
+      "max_us": 31.54,
+      "median_ms": 0.031264,
+      "median_us": 31.264,
+      "min_us": 30.932,
+      "p05_us": 30.9968,
+      "p95_us": 31.531999999999996
+    },
+    "x8_selected_dp4a_quantize_plus_dot": {
+      "max_us": 37.768,
+      "median_ms": 0.037628,
+      "median_us": 37.628,
+      "min_us": 37.552,
+      "p05_us": 37.5672,
+      "p95_us": 37.74
+    }
+  },
+  "wrapper": {
+    "build_dir": "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/build/vulkan/q6-x8-selected-down",
+    "commands": [
+      {
+        "command": [
+          "/tmp/shaderc-2025/root/usr/bin/glslc",
+          "--target-env=vulkan1.1",
+          "-O",
+          "/tmp/hipEngine-f2c/benchmarks/micro/kernels/vulkan/q8_1_quantize.comp",
+          "-o",
+          "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/build/vulkan/q6-x8-selected-down/q8_1_quantize.spv"
+        ],
+        "kind": "compile_shader"
+      },
+      {
+        "command": [
+          "/tmp/shaderc-2025/root/usr/bin/glslc",
+          "--target-env=vulkan1.1",
+          "-O",
+          "-DHIPENGINE_LOCAL_SIZE_X=64",
+          "/tmp/hipEngine-f2c/benchmarks/micro/kernels/vulkan/q6_x8_selected_down.comp",
+          "-o",
+          "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/build/vulkan/q6-x8-selected-down/q6_x8_selected_down.spv"
+        ],
+        "kind": "compile_shader"
+      },
+      {
+        "command": [
+          "/usr/bin/c++",
+          "-O2",
+          "-std=c++17",
+          "/tmp/hipEngine-f2c/benchmarks/micro/runners/vulkan_q6_x8_selected_down.cpp",
+          "-o",
+          "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/build/vulkan/q6-x8-selected-down/vulkan_q6_x8_selected_down",
+          "-lvulkan"
+        ],
+        "kind": "compile_harness"
+      },
+      {
+        "command": [
+          "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/build/vulkan/q6-x8-selected-down/vulkan_q6_x8_selected_down",
+          "--quantize-spirv",
+          "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/build/vulkan/q6-x8-selected-down/q8_1_quantize.spv",
+          "--dot-spirv",
+          "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/build/vulkan/q6-x8-selected-down/q6_x8_selected_down.spv",
+          "--json",
+          "/home/kaden/ClaudeCode/autorocm/redline-pub/examples/hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/build/vulkan/q6-x8-selected-down/vulkan-q6-x8-selected-down-raw.json",
+          "--rows",
+          "8",
+          "--experts",
+          "256",
+          "--in-features",
+          "512",
+          "--out-features",
+          "2048",
+          "--input-scale",
+          "0.1",
+          "--local-size",
+          "64",
+          "--reps",
+          "10",
+          "--warmup",
+          "3",
+          "--samples",
+          "5",
+          "--timing-mode",
+          "serial_latency",
+          "--independent-lanes",
+          "1",
+          "--device-index",
+          "0"
+        ],
+        "kind": "run_harness",
+        "returncode": 0
+      }
+    ],
+    "cwd": "/tmp/hipEngine-f2c",
+    "schema": "hipengine.micro.q6_x8_real_slice_runner.v2"
+  }
+}
+

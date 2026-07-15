@@ -515,6 +515,24 @@ impl GpuDevice {
         .timestamp_frequency_hz()
     }
 
+    /// GPU clock frequency used by PM4 timestamp packets. This is distinct
+    /// from the HSA system-clock frequency used by ROCr dispatch profiling.
+    pub fn gpu_timestamp_frequency_hz(&self) -> Result<u64, RuntimeError> {
+        let mut frequency = 0_u64;
+        query_agent(
+            &self.runtime.symbols,
+            self.gpu_agent(),
+            abi::AMD_AGENT_INFO_TIMESTAMP_FREQUENCY,
+            (&mut frequency as *mut u64).cast(),
+        )?;
+        if frequency == 0 {
+            return Err(RuntimeError::InvalidRuntimeObject(
+                "GPU timestamp frequency is zero",
+            ));
+        }
+        Ok(frequency)
+    }
+
     fn gpu_agent(&self) -> abi::Agent {
         self.gpu.handle
     }
@@ -1281,6 +1299,33 @@ impl QueueSet {
         }
     }
 
+    /// Wait until every completion signal has reached zero under one shared
+    /// timeout. This is the multi-queue counterpart to [`Self::wait_signal`]:
+    /// polling lanes sequentially would otherwise multiply the caller's
+    /// finite timeout by the queue count.
+    pub fn wait_signals(
+        &self,
+        signals: &[CompletionSignal],
+        timeout: Duration,
+    ) -> Result<(), RuntimeError> {
+        let started = Instant::now();
+        let mut polls = 0_u32;
+        loop {
+            self.check_faults()?;
+            if signals.iter().all(CompletionSignal::is_complete) {
+                return Ok(());
+            }
+            if started.elapsed() >= timeout {
+                let signal = signals
+                    .iter()
+                    .find(|signal| !signal.is_complete())
+                    .map_or(0, |signal| signal.raw().0);
+                return Err(RuntimeError::SignalTimeout { signal, timeout });
+            }
+            bounded_poll_pause(&mut polls);
+        }
+    }
+
     /// Poll queue indices alongside the completion signal.
     ///
     /// This method is intentionally separate from `wait_signal`, so ordinary
@@ -1626,6 +1671,252 @@ impl Drop for KernargBuffer {
             // The owning graph guarantees all dispatches have completed.
             // SAFETY: pointer was allocated from this runtime memory pool and
             // is uniquely owned here.
+            let _ =
+                unsafe { (self.pool.runtime.symbols.memory_pool_free)(pointer.as_ptr().cast()) };
+        }
+    }
+}
+
+/// Allocatable coarse-grained memory physically associated with one GPU.
+#[derive(Clone)]
+pub struct DevicePool {
+    inner: Arc<DevicePoolInner>,
+}
+
+struct DevicePoolInner {
+    runtime: Arc<RuntimeInner>,
+    pool: abi::MemoryPool,
+    granule: usize,
+    alignment: usize,
+}
+
+impl DevicePool {
+    pub fn discover(device: &GpuDevice) -> Result<Self, RuntimeError> {
+        unsafe extern "C" fn collect(pool: abi::MemoryPool, data: *mut c_void) -> abi::Status {
+            // SAFETY: context is a live vector for synchronous iteration.
+            unsafe { &mut *data.cast::<Vec<abi::MemoryPool>>() }.push(pool);
+            abi::STATUS_SUCCESS
+        }
+        let mut pools = Vec::new();
+        // GPU-associated coarse-grained global pools are the public-HSA device
+        // local allocation surface.
+        // SAFETY: callback and context satisfy the iteration contract.
+        let status = unsafe {
+            (device.runtime.symbols.agent_iterate_memory_pools)(
+                device.gpu_agent(),
+                Some(collect),
+                (&mut pools as *mut Vec<abi::MemoryPool>).cast(),
+            )
+        };
+        check_status(
+            &device.runtime.symbols,
+            "hsa_amd_agent_iterate_memory_pools",
+            status,
+        )?;
+
+        for pool in pools {
+            let mut segment = 0_u32;
+            let mut flags = 0_u32;
+            let mut location = 0_u32;
+            let mut allowed = false;
+            query_pool(
+                &device.runtime.symbols,
+                pool,
+                abi::AMD_MEMORY_POOL_INFO_SEGMENT,
+                (&mut segment as *mut u32).cast(),
+            )?;
+            if segment != abi::AMD_SEGMENT_GLOBAL {
+                continue;
+            }
+            query_pool(
+                &device.runtime.symbols,
+                pool,
+                abi::AMD_MEMORY_POOL_INFO_GLOBAL_FLAGS,
+                (&mut flags as *mut u32).cast(),
+            )?;
+            query_pool(
+                &device.runtime.symbols,
+                pool,
+                abi::AMD_MEMORY_POOL_INFO_LOCATION,
+                (&mut location as *mut u32).cast(),
+            )?;
+            query_pool(
+                &device.runtime.symbols,
+                pool,
+                abi::AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALLOWED,
+                (&mut allowed as *mut bool).cast(),
+            )?;
+            if !allowed
+                || location != abi::AMD_MEMORY_POOL_LOCATION_GPU
+                || flags & abi::AMD_MEMORY_POOL_GLOBAL_FLAG_COARSE_GRAINED == 0
+            {
+                continue;
+            }
+            let mut granule = 0_usize;
+            let mut alignment = 0_usize;
+            query_pool(
+                &device.runtime.symbols,
+                pool,
+                abi::AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_GRANULE,
+                (&mut granule as *mut usize).cast(),
+            )?;
+            query_pool(
+                &device.runtime.symbols,
+                pool,
+                abi::AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALIGNMENT,
+                (&mut alignment as *mut usize).cast(),
+            )?;
+            if granule == 0 || !alignment.is_power_of_two() {
+                continue;
+            }
+            return Ok(Self {
+                inner: Arc::new(DevicePoolInner {
+                    runtime: device.runtime.clone(),
+                    pool,
+                    granule,
+                    alignment,
+                }),
+            });
+        }
+        Err(RuntimeError::NoDevicePool)
+    }
+
+    pub fn allocate(&self, length: usize) -> Result<DeviceBuffer, RuntimeError> {
+        if length == 0 {
+            return Ok(DeviceBuffer {
+                pool: self.inner.clone(),
+                pointer: None,
+                length: 0,
+            });
+        }
+        let allocation_size = length
+            .checked_add(self.inner.granule - 1)
+            .map(|value| value / self.inner.granule * self.inner.granule)
+            .ok_or(RuntimeError::DeviceAllocationSizeOverflow(length))?;
+        let mut pointer = ptr::null_mut();
+        // SAFETY: selected pool allows runtime allocations and output is valid.
+        let status = unsafe {
+            (self.inner.runtime.symbols.memory_pool_allocate)(
+                self.inner.pool,
+                allocation_size,
+                abi::AMD_MEMORY_POOL_STANDARD_FLAG,
+                &mut pointer,
+            )
+        };
+        check_status(
+            &self.inner.runtime.symbols,
+            "hsa_amd_memory_pool_allocate(device)",
+            status,
+        )?;
+        let pointer = NonNull::new(pointer.cast::<u8>()).ok_or(
+            RuntimeError::InvalidRuntimeObject("device memory-pool allocation returned null"),
+        )?;
+        if pointer.as_ptr() as usize % self.inner.alignment != 0 {
+            // SAFETY: pointer came from the matching allocation function.
+            let _ =
+                unsafe { (self.inner.runtime.symbols.memory_pool_free)(pointer.as_ptr().cast()) };
+            return Err(RuntimeError::DeviceAllocationAlignmentNotMet {
+                required: self.inner.alignment,
+                address: pointer.as_ptr() as usize,
+            });
+        }
+        Ok(DeviceBuffer {
+            pool: self.inner.clone(),
+            pointer: Some(pointer),
+            length,
+        })
+    }
+}
+
+/// Coarse-grained GPU-local storage. Host transfers use synchronous public-HSA
+/// copies rather than dereferencing the device pointer.
+pub struct DeviceBuffer {
+    pool: Arc<DevicePoolInner>,
+    pointer: Option<NonNull<u8>>,
+    length: usize,
+}
+
+impl DeviceBuffer {
+    pub fn len(&self) -> usize {
+        self.length
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.length == 0
+    }
+
+    pub fn address(&self) -> *mut c_void {
+        self.pointer
+            .map_or(ptr::null_mut(), |pointer| pointer.as_ptr().cast())
+    }
+
+    /// Copy host bytes into this allocation after all prior users have
+    /// completed and before any retained dispatch can access it.
+    ///
+    /// # Safety
+    /// The caller must ensure no GPU work accesses this allocation concurrently.
+    pub unsafe fn copy_from_host(&mut self, bytes: &[u8]) -> Result<(), RuntimeError> {
+        self.check_transfer_length(bytes.len())?;
+        if self.length == 0 {
+            return Ok(());
+        }
+        // SAFETY: caller excludes GPU access; both regions are valid for length.
+        let status = unsafe {
+            (self.pool.runtime.symbols.memory_copy)(
+                self.address(),
+                bytes.as_ptr().cast(),
+                self.length,
+            )
+        };
+        check_status(
+            &self.pool.runtime.symbols,
+            "hsa_memory_copy(to device)",
+            status,
+        )
+    }
+
+    /// Copy this allocation into host bytes after all retained dispatches have
+    /// completed.
+    ///
+    /// # Safety
+    /// The caller must ensure no GPU work accesses this allocation concurrently.
+    pub unsafe fn copy_to_host(&self, bytes: &mut [u8]) -> Result<(), RuntimeError> {
+        self.check_transfer_length(bytes.len())?;
+        if self.length == 0 {
+            return Ok(());
+        }
+        // SAFETY: caller excludes GPU access; both regions are valid for length.
+        let status = unsafe {
+            (self.pool.runtime.symbols.memory_copy)(
+                bytes.as_mut_ptr().cast(),
+                self.address(),
+                self.length,
+            )
+        };
+        check_status(
+            &self.pool.runtime.symbols,
+            "hsa_memory_copy(from device)",
+            status,
+        )
+    }
+
+    fn check_transfer_length(&self, actual: usize) -> Result<(), RuntimeError> {
+        if actual == self.length {
+            Ok(())
+        } else {
+            Err(RuntimeError::DeviceTransferLengthMismatch {
+                expected: self.length,
+                actual,
+            })
+        }
+    }
+}
+
+impl Drop for DeviceBuffer {
+    fn drop(&mut self) {
+        if let Some(pointer) = self.pointer {
+            // The owner guarantees all GPU users have completed.
+            // SAFETY: pointer is uniquely owned and came from this runtime pool.
             let _ =
                 unsafe { (self.pool.runtime.symbols.memory_pool_free)(pointer.as_ptr().cast()) };
         }
@@ -2123,12 +2414,22 @@ pub enum RuntimeError {
     DuplicateQueueId,
     InvalidRuntimeObject(&'static str),
     NoKernargPool,
+    NoDevicePool,
     InvalidKernargAlignment(usize),
     KernargAlignmentNotMet {
         required: usize,
         address: usize,
     },
     KernargSizeOverflow(usize),
+    DeviceAllocationSizeOverflow(usize),
+    DeviceAllocationAlignmentNotMet {
+        required: usize,
+        address: usize,
+    },
+    DeviceTransferLengthMismatch {
+        expected: usize,
+        actual: usize,
+    },
     KernargLengthMismatch {
         expected: usize,
         actual: usize,
@@ -2218,6 +2519,10 @@ impl fmt::Display for RuntimeError {
                 f,
                 "no allocatable fine-grained host pool with KERNARG_INIT was found"
             ),
+            Self::NoDevicePool => write!(
+                f,
+                "no allocatable coarse-grained GPU-local memory pool was found"
+            ),
             Self::InvalidKernargAlignment(alignment) => {
                 write!(f, "kernel reported invalid kernarg alignment {alignment}")
             }
@@ -2228,6 +2533,17 @@ impl fmt::Display for RuntimeError {
             Self::KernargSizeOverflow(size) => {
                 write!(f, "kernarg allocation size overflows while rounding {size}")
             }
+            Self::DeviceAllocationSizeOverflow(size) => {
+                write!(f, "device allocation size overflows while rounding {size}")
+            }
+            Self::DeviceAllocationAlignmentNotMet { required, address } => write!(
+                f,
+                "device allocation at {address:#x} does not meet {required}-byte alignment"
+            ),
+            Self::DeviceTransferLengthMismatch { expected, actual } => write!(
+                f,
+                "device transfer is {actual} bytes; allocation requires {expected}"
+            ),
             Self::KernargLengthMismatch { expected, actual } => write!(
                 f,
                 "kernarg payload is {actual} bytes; loader metadata requires {expected}"

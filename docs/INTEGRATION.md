@@ -25,9 +25,12 @@ identities and buffers*:
    infers implicitly.
 3. **A real backend** — `redline_dispatch::hip::HipMultiStreamBackend` (or the
    public-AQL replay in `redline_dispatch::aql`) executes the retained
-   submission. Validated live on gfx1201 (R9700): `redline-rocr`'s
-   `pm4_ib_smoke` example submits a retained PM4 IB and the CP signals
-   completion.
+   submission. The architecture-neutral AQL path and vendor PM4-IB carrier are
+   live-validated on gfx1010, gfx1030, gfx1100, gfx1151, and gfx1201. Direct
+   compute PM4 uses separate legacy GFX10/GFX11 and GFX12 encoders. The legacy
+   path admits zero-scratch HSA kernels with kernarg plus optional
+   private-segment-buffer user SGPRs, encodes static and dynamic LDS, and fails
+   closed on unsupported implicit inputs or scratch.
 
 The C-ABI (`redline-capi`) and Python (`redline-py`) currently expose
 record → instantiate → plan-inspect → **mock** launch. The remaining
@@ -93,7 +96,8 @@ harness.
 
 - **Done & verified:** C-ABI + PyO3 bindings (Rust ≡ C ≡ Python plan
   fingerprint); engines cloned; seams located; repo synced to hiptrx; retained
-  PM4 submission runs on the R9700.
+  PM4 submission runs on the R9700; public-ROCr AQL plus retained direct PM4
+  correctness pass on hipx's gfx1010, gfx1030, gfx1100, and gfx1151 devices.
 - **Pending (the integration):** bind Redline's real HIP/AQL backend to each
   engine's kernel objects at the seam above, then run the A/B. The proven
   per-engine ratio comes from that step; it is not asserted here.

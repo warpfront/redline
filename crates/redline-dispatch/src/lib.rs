@@ -56,6 +56,7 @@ pub use bindings::{
     AllocationPolicy, BindingLayoutFingerprint, BindingRevision, PreparedPlanInvalidation,
     PreparedPlanStamp, PreparedPlanState, ReplayBindingError, ReplayBindings, ResourceBinding,
 };
+pub use hipgraph::{Graph, GraphExec, Tuning};
 pub use identity::{
     ArtifactCatalog, ArtifactCatalogError, KernargAbi, KernargAbiError, KernargAbiHash,
     KernargField, KernelArtifactIdentity, Sha256Digest,
@@ -68,7 +69,6 @@ pub use plan::{
     CompileError, CompileOptions, CompiledPlan, Hazard, HazardKind, LaneId, PlanFingerprint,
     PlannedDispatch, PlannedResource,
 };
-pub use hipgraph::{Graph, GraphExec, Tuning};
 pub use recorder::{RecordError, Recorder};
 pub use selection::{
     AutoDecision, AutoPolicy, BackendEvidence, BackendKind, PlanCacheError, PlanCacheKey,
