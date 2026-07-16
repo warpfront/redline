@@ -187,6 +187,39 @@ Runtime adapters should construct `CodeObjectCertification::from_json` from
 the exact bytes they will load. The C and PyO3 bindings use this same reusable
 validator; neither binding independently interprets or trusts manifest JSON.
 
+## Exact architecture campaigns
+
+Architecture-specific tuning uses `ArchProfile`, not a family prefix.  The
+initial exact profile is `ArchProfile::Gfx1151`: its resource contract requires
+the gfx1151 bundle target, ELF machine id `0x04a`, ISA `{11,5,1}`, wave32, no
+register spills or scratch, no lower VGPR occupancy class than the incumbent,
+and no more than 32 static memory-clause instructions.  In particular, a
+gfx1100 or generic gfx11 object cannot satisfy the gfx1151 contract.
+
+`CampaignLedger` persists a campaign as append-only JSONL.  The default policy
+allows three completed, distinct code-object batteries per target, requires an
+eight-turn battery, and makes promotion require at least a 0.5% median gain and
+five paired wins.  Byte-identical objects are returned as
+`RecordDisposition::DuplicateSkipped`; infrastructure failures do not consume
+a GPU round and receive one retry.  Completed batteries require an accepted
+resource assessment plus correctness and timing artifacts before they can be
+recorded or promoted.  The ledger tracks the kernel object SHA separately from
+the whole-product executable SHA: objects are the de-duplication key, while a
+promotion advances the cumulative product incumbent used by the next target.
+
+```rust
+use radiowave::{
+    ArchProfile, CampaignLedger, CampaignStarted, ResourceContract,
+};
+
+let ledger = CampaignLedger::create(
+    "gfx1151-campaign.jsonl",
+    CampaignStarted::new("gfx1151-tg128", ArchProfile::Gfx1151, baseline_sha),
+)?;
+let assessment = ResourceContract::new(ArchProfile::Gfx1151)
+    .assess(&candidate_inspection, kernel_symbol, incumbent_kernel);
+```
+
 ## Current safety boundary
 
 - Radiowave accepts any architecture understood by the installed hipcc; callers

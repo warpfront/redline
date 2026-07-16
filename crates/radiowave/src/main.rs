@@ -2,7 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
 
 use radiowave::{
-    CompileRequest, Compiler, Inspector, SchedulerProfile, Wavefront, support_header_path,
+    ArchProfile, CampaignLedger, CampaignStarted, CandidateSubmission, CandidateVerdict,
+    CompileRequest, Compiler, Inspector, KernelReport, ResourceAssessment, ResourceContract,
+    SchedulerProfile, Wavefront, support_header_path,
 };
 use std::env;
 use std::error::Error;
@@ -17,6 +19,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some("inspect") => inspect(args.collect()),
         Some("oracle") => oracle(args.collect()),
         Some("recipes") => recipes(args.collect()),
+        Some("assess") => assess(args.collect()),
+        Some("campaign") => campaign(args.collect()),
         Some("header") => {
             println!("{}", support_header_path().display());
             Ok(())
@@ -338,6 +342,67 @@ fn write_json<T: serde::Serialize>(
     Ok(())
 }
 
+fn assess(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
+    let mut input = None;
+    let mut arch = "gfx1151".to_owned();
+    let mut kernel = None;
+    let mut incumbent_vgprs = None;
+    let mut incumbent_wavefront = 32;
+    let mut hipcc = env::var_os("HIPCC")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("hipcc"));
+    let mut output = None;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.to_str() {
+            Some("--input") => input = Some(PathBuf::from(next(&mut iter, "--input")?)),
+            Some("--arch") => arch = next_string(&mut iter, "--arch")?,
+            Some("--kernel") => kernel = Some(next_string(&mut iter, "--kernel")?),
+            Some("--incumbent-vgprs") => {
+                incumbent_vgprs = Some(next_parse(&mut iter, "--incumbent-vgprs")?)
+            }
+            Some("--incumbent-wavefront") => {
+                incumbent_wavefront = next_parse(&mut iter, "--incumbent-wavefront")?
+            }
+            Some("--hipcc") => hipcc = PathBuf::from(next(&mut iter, "--hipcc")?),
+            Some("--out") => output = Some(PathBuf::from(next(&mut iter, "--out")?)),
+            Some("--help" | "-h") => {
+                usage();
+                return Ok(());
+            }
+            _ => return Err(format!("unknown assess argument {}", arg.to_string_lossy()).into()),
+        }
+    }
+    let input = input.ok_or("assess requires --input")?;
+    let kernel = kernel.ok_or("assess requires --kernel")?;
+    let incumbent_vgprs = incumbent_vgprs.ok_or("assess requires --incumbent-vgprs")?;
+    let profile = ArchProfile::from_arch(&arch)
+        .ok_or_else(|| format!("no exact Radiowave profile for {arch}"))?;
+    let inspection = Inspector::from_hipcc(&hipcc).inspect(&input, &arch)?;
+    let incumbent = KernelReport {
+        name: kernel.clone(),
+        wavefront_size: incumbent_wavefront,
+        vgpr_count: incumbent_vgprs,
+        ..KernelReport::default()
+    };
+    let assessment = ResourceContract::new(profile).assess(&inspection, &kernel, &incumbent);
+    let encoded = serde_json::to_string_pretty(&assessment)? + "\n";
+    if let Some(path) = output {
+        std::fs::write(&path, encoded.as_bytes())?;
+        println!(
+            "assessment={} accepted={}",
+            path.display(),
+            assessment.accepted
+        );
+    } else {
+        print!("{encoded}");
+    }
+    if !assessment.accepted {
+        return Err("resource assessment rejected candidate".into());
+    }
+    Ok(())
+}
+
 fn recipes(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
     use radiowave::recipes::{RecipeCatalog, SelectionMode, WorkloadDescriptor};
 
@@ -484,9 +549,207 @@ fn load_catalog(
     Ok(catalog)
 }
 
+fn campaign(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
+    let mut iter = args.into_iter();
+    let action = next_string(&mut iter, "campaign action")?;
+    let args = iter.collect();
+    match action.as_str() {
+        "init" => campaign_init(args),
+        "record" => campaign_record(args),
+        "promote" => campaign_promote(args),
+        "status" => campaign_status(args),
+        _ => Err(format!("unknown campaign action {action}").into()),
+    }
+}
+
+fn campaign_init(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
+    let mut ledger = None;
+    let mut id = None;
+    let mut arch = None;
+    let mut baseline_sha = None;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.to_str() {
+            Some("--ledger") => ledger = Some(PathBuf::from(next(&mut iter, "--ledger")?)),
+            Some("--id") => id = Some(next_string(&mut iter, "--id")?),
+            Some("--arch") => arch = Some(next_string(&mut iter, "--arch")?),
+            Some("--baseline-sha") => {
+                baseline_sha = Some(next_string(&mut iter, "--baseline-sha")?)
+            }
+            _ => {
+                return Err(
+                    format!("unknown campaign init argument {}", arg.to_string_lossy()).into(),
+                );
+            }
+        }
+    }
+    let arch = arch.ok_or("campaign init requires --arch")?;
+    let profile = ArchProfile::from_arch(&arch)
+        .ok_or_else(|| format!("no exact Radiowave profile for {arch}"))?;
+    let ledger = CampaignLedger::create(
+        ledger.ok_or("campaign init requires --ledger")?,
+        CampaignStarted::new(
+            id.ok_or("campaign init requires --id")?,
+            profile,
+            baseline_sha.ok_or("campaign init requires --baseline-sha")?,
+        ),
+    )?;
+    println!("ledger={}", ledger.path().display());
+    Ok(())
+}
+
+fn campaign_record(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
+    let mut ledger = None;
+    let mut target = None;
+    let mut source_sha = None;
+    let mut object_sha = None;
+    let mut product_sha = None;
+    let mut incumbent_sha = None;
+    let mut verdict = None;
+    let mut reason = None;
+    let mut assessment = None;
+    let mut correctness = None;
+    let mut timing = None;
+    let mut median_gain_percent = None;
+    let mut paired_wins = None;
+    let mut paired_turns = 8;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.to_str() {
+            Some("--ledger") => ledger = Some(PathBuf::from(next(&mut iter, "--ledger")?)),
+            Some("--target") => target = Some(next_string(&mut iter, "--target")?),
+            Some("--source-sha") => source_sha = Some(next_string(&mut iter, "--source-sha")?),
+            Some("--object-sha") => object_sha = Some(next_string(&mut iter, "--object-sha")?),
+            Some("--product-sha") => product_sha = Some(next_string(&mut iter, "--product-sha")?),
+            Some("--incumbent-sha") => {
+                incumbent_sha = Some(next_string(&mut iter, "--incumbent-sha")?)
+            }
+            Some("--verdict") => verdict = Some(next_string(&mut iter, "--verdict")?),
+            Some("--reason") => reason = Some(next_string(&mut iter, "--reason")?),
+            Some("--assessment") => {
+                assessment = Some(PathBuf::from(next(&mut iter, "--assessment")?))
+            }
+            Some("--correctness") => correctness = Some(next_string(&mut iter, "--correctness")?),
+            Some("--timing") => timing = Some(next_string(&mut iter, "--timing")?),
+            Some("--median-gain-percent") => {
+                median_gain_percent = Some(next_parse(&mut iter, "--median-gain-percent")?)
+            }
+            Some("--paired-wins") => paired_wins = Some(next_parse(&mut iter, "--paired-wins")?),
+            Some("--paired-turns") => paired_turns = next_parse(&mut iter, "--paired-turns")?,
+            _ => {
+                return Err(
+                    format!("unknown campaign record argument {}", arg.to_string_lossy()).into(),
+                );
+            }
+        }
+    }
+    let verdict_name = verdict.ok_or("campaign record requires --verdict")?;
+    let verdict = match verdict_name.as_str() {
+        "static-rejected" => CandidateVerdict::StaticRejected {
+            reason: reason.ok_or("static-rejected requires --reason")?,
+        },
+        "correctness-rejected" => CandidateVerdict::CorrectnessRejected {
+            reason: reason.ok_or("correctness-rejected requires --reason")?,
+        },
+        "infrastructure-failure" => CandidateVerdict::InfrastructureFailure {
+            reason: reason.ok_or("infrastructure-failure requires --reason")?,
+        },
+        "completed" => CandidateVerdict::BatteryCompleted {
+            median_gain_percent: median_gain_percent
+                .ok_or("completed requires --median-gain-percent")?,
+            paired_wins: paired_wins.ok_or("completed requires --paired-wins")?,
+            paired_turns,
+        },
+        _ => return Err(format!("unknown candidate verdict {verdict_name}").into()),
+    };
+    let mut submission = CandidateSubmission::new(
+        target.ok_or("campaign record requires --target")?,
+        source_sha.ok_or("campaign record requires --source-sha")?,
+        object_sha.ok_or("campaign record requires --object-sha")?,
+        incumbent_sha.ok_or("campaign record requires --incumbent-sha")?,
+        verdict,
+    )
+    .product_sha256(product_sha.ok_or("campaign record requires --product-sha")?);
+    if let Some(path) = assessment {
+        let parsed: ResourceAssessment = serde_json::from_slice(&std::fs::read(path)?)?;
+        submission = submission.resource_assessment(parsed);
+    }
+    if let Some(path) = correctness {
+        submission = submission.correctness_artifact(path);
+    }
+    if let Some(path) = timing {
+        submission = submission.timing_artifact(path);
+    }
+    let disposition = CampaignLedger::open(ledger.ok_or("campaign record requires --ledger")?)?
+        .record_candidate(submission)?;
+    println!("{}", serde_json::to_string_pretty(&disposition)?);
+    Ok(())
+}
+
+fn campaign_promote(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
+    let mut ledger = None;
+    let mut target = None;
+    let mut object_sha = None;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.to_str() {
+            Some("--ledger") => ledger = Some(PathBuf::from(next(&mut iter, "--ledger")?)),
+            Some("--target") => target = Some(next_string(&mut iter, "--target")?),
+            Some("--object-sha") => object_sha = Some(next_string(&mut iter, "--object-sha")?),
+            _ => {
+                return Err(format!(
+                    "unknown campaign promote argument {}",
+                    arg.to_string_lossy()
+                )
+                .into());
+            }
+        }
+    }
+    let record = CampaignLedger::open(ledger.ok_or("campaign promote requires --ledger")?)?
+        .promote(
+            &target.ok_or("campaign promote requires --target")?,
+            &object_sha.ok_or("campaign promote requires --object-sha")?,
+        )?;
+    println!("{}", serde_json::to_string_pretty(&record)?);
+    Ok(())
+}
+
+fn campaign_status(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
+    let mut ledger = None;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.to_str() {
+            Some("--ledger") => ledger = Some(PathBuf::from(next(&mut iter, "--ledger")?)),
+            _ => {
+                return Err(
+                    format!("unknown campaign status argument {}", arg.to_string_lossy()).into(),
+                );
+            }
+        }
+    }
+    let ledger = CampaignLedger::open(ledger.ok_or("campaign status requires --ledger")?)?;
+    println!("{}", serde_json::to_string_pretty(&ledger.events()?)?);
+    Ok(())
+}
+
 fn next(iter: &mut impl Iterator<Item = OsString>, option: &str) -> Result<OsString, String> {
     iter.next()
         .ok_or_else(|| format!("{option} requires a value"))
+}
+
+fn next_string(iter: &mut impl Iterator<Item = OsString>, option: &str) -> Result<String, String> {
+    Ok(next(iter, option)?.to_string_lossy().into_owned())
+}
+
+fn next_parse<T>(iter: &mut impl Iterator<Item = OsString>, option: &str) -> Result<T, String>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let value = next_string(iter, option)?;
+    value
+        .parse()
+        .map_err(|error| format!("invalid value for {option}: {value}: {error}"))
 }
 
 fn usage() {
@@ -500,6 +763,8 @@ fn usage() {
          radiowave recipes builtin [--output CATALOG.json]\n\
          radiowave recipes select --arch TARGET --kernel NAME [--family FAMILY] [--tag TAG] [--catalog CATALOG.json] [--candidates]\n\
          radiowave recipes ingest [--catalog CATALOG.json] --ledger WIN_ROWS.jsonl --output CATALOG.json\n\
+         radiowave assess --input KERNEL.hsaco --arch gfx1151 --kernel SYMBOL --incumbent-vgprs N [--out assessment.json]\n\
+         radiowave campaign init|record|promote|status ...\n\
          radiowave header"
     );
 }

@@ -5,8 +5,21 @@
 //! It injects reviewed source-level lowering rules, invokes hipcc, inspects the
 //! emitted code object, and records enough evidence to reproduce the build.
 
+mod arch;
+mod campaign;
+mod contracts;
 pub mod oracle;
 pub mod recipes;
+
+pub use arch::{ArchProfile, CodeObjectIdentity, IsaVersion};
+pub use campaign::{
+    CAMPAIGN_SCHEMA_VERSION, CampaignError, CampaignEvent, CampaignLedger, CampaignPolicy,
+    CampaignResult, CampaignStarted, CandidateRecord, CandidateSubmission, CandidateVerdict,
+    DEFAULT_MAX_COMPLETED_GPU_BATTERIES_PER_TARGET, PromotionRecord, RecordDisposition,
+};
+pub use contracts::{
+    RESOURCE_CONTRACT_SCHEMA_VERSION, ResourceAssessment, ResourceContract, ResourceRejection,
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -262,6 +275,8 @@ impl KernelReport {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CodeObjectInspection {
     pub bundle_target: String,
+    #[serde(default)]
+    pub identity: Option<CodeObjectIdentity>,
     pub kernels: Vec<KernelReport>,
 }
 
@@ -487,8 +502,9 @@ impl Inspector {
 
         let result = (|| {
             let mut notes = Command::new(&self.readobj);
-            notes.arg("--notes").arg(&extracted);
+            notes.arg("--file-headers").arg("--notes").arg(&extracted);
             let notes = checked_output(&mut notes, "llvm-readobj")?;
+            let notes = String::from_utf8_lossy(&notes.stdout);
 
             let mut disassembly = Command::new(&self.objdump);
             disassembly
@@ -498,9 +514,10 @@ impl Inspector {
             let disassembly = checked_output(&mut disassembly, "llvm-objdump")?;
 
             Ok(CodeObjectInspection {
+                identity: Some(CodeObjectIdentity::from_readobj(&target, &notes)),
                 bundle_target: target,
                 kernels: combine_reports(
-                    &parse_metadata(&String::from_utf8_lossy(&notes.stdout)),
+                    &parse_metadata(&notes),
                     &parse_disassembly(&String::from_utf8_lossy(&disassembly.stdout)),
                 ),
             })
@@ -964,6 +981,7 @@ mod tests {
             output_sha256: sha256_bytes(code_object),
             inspection: Some(CodeObjectInspection {
                 bundle_target: "hipv4-amdgcn-amd-amdhsa--gfx1201".to_owned(),
+                identity: None,
                 kernels: vec![KernelReport {
                     name: "consumer".to_owned(),
                     wavefront_size: 64,

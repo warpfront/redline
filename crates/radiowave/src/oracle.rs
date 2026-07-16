@@ -621,6 +621,7 @@ _amdgpu_cs_main:
             output_sha256: "output".to_owned(),
             inspection: Some(CodeObjectInspection {
                 bundle_target: "gfx1201".to_owned(),
+                identity: None,
                 kernels: vec![KernelReport {
                     name: "probe".to_owned(),
                     wavefront_size: 64,
