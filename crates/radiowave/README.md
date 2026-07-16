@@ -207,15 +207,24 @@ radiowave assess --input router.hsaco --arch gfx1151 --kernel router \
 ```
 
 `CampaignLedger` persists a campaign as append-only JSONL.  The default policy
-allows three completed, distinct code-object batteries per target, requires an
+allows three completed, distinct candidate batteries per target, requires an
 eight-turn battery, and makes promotion require at least a 0.5% median gain and
-five paired wins.  Byte-identical objects are returned as
-`RecordDisposition::DuplicateSkipped`; infrastructure failures do not consume
-a GPU round and receive one retry.  Completed batteries require an accepted
-resource assessment plus correctness and timing artifacts before they can be
-recorded or promoted.  The ledger tracks the kernel object SHA separately from
-the whole-product executable SHA: objects are the de-duplication key, while a
-promotion advances the cumulative product incumbent used by the next target.
+five paired wins. By default the exact object SHA is the de-duplication and
+retry identity. When replay geometry or another runtime configuration changes
+without changing the HSACO (for example tile32 versus tile64), record a
+`configuration_sha256`/`--configuration-sha` over the canonical complete
+candidate configuration. The object and configuration SHA pair becomes the
+campaign identity while the source and object SHAs remain required provenance.
+Exact duplicate identities are returned as
+`RecordDisposition::DuplicateSkipped`; distinct configurations of the same
+object and recompiled objects using the same configuration consume distinct
+rounds. Infrastructure failures do not consume a GPU round and receive one
+retry. Completed batteries require an accepted resource assessment plus
+correctness and timing artifacts before they can be recorded or promoted. A
+configured promotion supplies both `--object-sha` and the same
+`--configuration-sha`, so equal objects with different geometry remain
+unambiguous. Promotion advances the cumulative whole-product incumbent used by
+the next target.
 
 ```rust
 use radiowave::{

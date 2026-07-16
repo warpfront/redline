@@ -616,6 +616,7 @@ fn campaign_record(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
     let mut target = None;
     let mut source_sha = None;
     let mut object_sha = None;
+    let mut configuration_sha = None;
     let mut product_sha = None;
     let mut incumbent_sha = None;
     let mut verdict = None;
@@ -633,6 +634,9 @@ fn campaign_record(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
             Some("--target") => target = Some(next_string(&mut iter, "--target")?),
             Some("--source-sha") => source_sha = Some(next_string(&mut iter, "--source-sha")?),
             Some("--object-sha") => object_sha = Some(next_string(&mut iter, "--object-sha")?),
+            Some("--configuration-sha") => {
+                configuration_sha = Some(next_string(&mut iter, "--configuration-sha")?)
+            }
             Some("--product-sha") => product_sha = Some(next_string(&mut iter, "--product-sha")?),
             Some("--incumbent-sha") => {
                 incumbent_sha = Some(next_string(&mut iter, "--incumbent-sha")?)
@@ -683,6 +687,9 @@ fn campaign_record(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
         verdict,
     )
     .product_sha256(product_sha.ok_or("campaign record requires --product-sha")?);
+    if let Some(sha) = configuration_sha {
+        submission = submission.configuration_sha256(sha);
+    }
     if let Some(path) = assessment {
         let parsed: ResourceAssessment = serde_json::from_slice(&std::fs::read(path)?)?;
         submission = submission.resource_assessment(parsed);
@@ -703,12 +710,16 @@ fn campaign_promote(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
     let mut ledger = None;
     let mut target = None;
     let mut object_sha = None;
+    let mut configuration_sha = None;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.to_str() {
             Some("--ledger") => ledger = Some(PathBuf::from(next(&mut iter, "--ledger")?)),
             Some("--target") => target = Some(next_string(&mut iter, "--target")?),
             Some("--object-sha") => object_sha = Some(next_string(&mut iter, "--object-sha")?),
+            Some("--configuration-sha") => {
+                configuration_sha = Some(next_string(&mut iter, "--configuration-sha")?)
+            }
             _ => {
                 return Err(format!(
                     "unknown campaign promote argument {}",
@@ -719,9 +730,10 @@ fn campaign_promote(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
         }
     }
     let record = CampaignLedger::open(ledger.ok_or("campaign promote requires --ledger")?)?
-        .promote(
+        .promote_candidate(
             &target.ok_or("campaign promote requires --target")?,
             &object_sha.ok_or("campaign promote requires --object-sha")?,
+            configuration_sha.as_deref(),
         )?;
     println!("{}", serde_json::to_string_pretty(&record)?);
     Ok(())
@@ -777,7 +789,8 @@ fn usage() {
          radiowave recipes select --arch TARGET --kernel NAME [--family FAMILY] [--tag TAG] [--catalog CATALOG.json] [--candidates]\n\
          radiowave recipes ingest [--catalog CATALOG.json] --ledger WIN_ROWS.jsonl --output CATALOG.json\n\
          radiowave assess --input KERNEL.hsaco --arch gfx1151 --kernel SYMBOL --incumbent-vgprs N [--incumbent-wavefront 32|64] [--required-wavefront 32|64] [--out assessment.json]\n\
-         radiowave campaign init|record|promote|status ...\n\
+         radiowave campaign init|status ...\n\
+         radiowave campaign record|promote ... [--configuration-sha SHA]\n\
          radiowave header"
     );
 }

@@ -4,8 +4,10 @@
 //! Append-only optimization-campaign accounting.
 //!
 //! GPU rounds are reconstructed from durable JSONL history.  Infrastructure
-//! failures do not consume a round, while a byte-identical code object can
-//! never consume two completed rounds.
+//! failures do not consume a round, while an identical candidate identity can
+//! never consume two completed rounds.  A submitted configuration SHA joins
+//! the exact code-object SHA as a paired identity; without one, the code-object
+//! SHA remains the identity for backwards compatibility.
 
 use crate::{ArchProfile, RESOURCE_CONTRACT_SCHEMA_VERSION, ResourceAssessment};
 use serde::{Deserialize, Serialize};
@@ -202,6 +204,12 @@ pub struct CandidateSubmission {
     pub target: String,
     pub source_sha256: String,
     pub object_sha256: String,
+    /// Optional identity for launch/replay configuration that can change while
+    /// the compiled object remains byte-identical (for example tile geometry).
+    /// When present, campaign de-duplication and retry accounting use its pair
+    /// with `object_sha256` instead of the object SHA alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_sha256: Option<String>,
     /// Whole-product executable or bundle that contains this object and is
     /// used by the correctness/timing harnesses.
     pub product_sha256: String,
@@ -224,6 +232,7 @@ impl CandidateSubmission {
             target: target.into(),
             source_sha256: source_sha256.into(),
             object_sha256: object_sha256.into(),
+            configuration_sha256: None,
             product_sha256: String::new(),
             incumbent_sha256: incumbent_sha256.into(),
             resource_assessment: None,
@@ -235,6 +244,11 @@ impl CandidateSubmission {
 
     pub fn product_sha256(mut self, product_sha256: impl Into<String>) -> Self {
         self.product_sha256 = product_sha256.into();
+        self
+    }
+
+    pub fn configuration_sha256(mut self, configuration_sha256: impl Into<String>) -> Self {
+        self.configuration_sha256 = Some(configuration_sha256.into());
         self
     }
 
@@ -265,6 +279,8 @@ pub struct CandidateRecord {
     pub attempt: u8,
     pub source_sha256: String,
     pub object_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_sha256: Option<String>,
     pub product_sha256: String,
     pub incumbent_sha256: String,
     pub resource_assessment: Option<ResourceAssessment>,
@@ -280,6 +296,8 @@ pub struct PromotionRecord {
     pub gpu_round: u8,
     pub source_sha256: String,
     pub object_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_sha256: Option<String>,
     pub product_sha256: String,
     pub previous_incumbent_sha256: String,
     pub median_gain_percent: f64,
@@ -392,7 +410,8 @@ impl CampaignLedger {
             .filter_map(|event| match event {
                 CampaignEvent::Candidate(record)
                     if record.target == submission.target
-                        && record.object_sha256 == submission.object_sha256 =>
+                        && candidate_identity(record)
+                            == submission_candidate_identity(&submission) =>
                 {
                     Some(record)
                 }
@@ -440,6 +459,7 @@ impl CampaignLedger {
             attempt: infrastructure_failures.saturating_add(1),
             source_sha256: submission.source_sha256,
             object_sha256: submission.object_sha256,
+            configuration_sha256: submission.configuration_sha256,
             product_sha256: submission.product_sha256,
             incumbent_sha256: submission.incumbent_sha256,
             resource_assessment: submission.resource_assessment,
@@ -453,11 +473,24 @@ impl CampaignLedger {
     }
 
     pub fn promote(&self, target: &str, object_sha256: &str) -> CampaignResult<PromotionRecord> {
+        self.promote_candidate(target, object_sha256, None)
+    }
+
+    /// Promote one exact candidate identity. Configured candidates must provide
+    /// their configuration SHA; an object-only promotion deliberately matches
+    /// only legacy/object-identified candidates so equal objects with distinct
+    /// replay geometry cannot be confused.
+    pub fn promote_candidate(
+        &self,
+        target: &str,
+        object_sha256: &str,
+        configuration_sha256: Option<&str>,
+    ) -> CampaignResult<PromotionRecord> {
         let events = self.events()?;
         let started = started_from(&events);
         if events.iter().any(|event| {
             matches!(event, CampaignEvent::Promotion(record)
-                if record.target == target && record.object_sha256 == object_sha256)
+                if promotion_matches(record, target, object_sha256, configuration_sha256))
         }) {
             return Err(CampaignError::AlreadyPromoted {
                 target: target.to_owned(),
@@ -466,9 +499,12 @@ impl CampaignLedger {
         }
         let candidate = events.iter().rev().find_map(|event| match event {
             CampaignEvent::Candidate(record)
-                if record.target == target
-                    && record.object_sha256 == object_sha256
-                    && matches!(record.verdict, CandidateVerdict::BatteryCompleted { .. }) =>
+                if candidate_matches_promotion(
+                    record,
+                    target,
+                    object_sha256,
+                    configuration_sha256,
+                ) && matches!(record.verdict, CandidateVerdict::BatteryCompleted { .. }) =>
             {
                 Some(record)
             }
@@ -512,6 +548,7 @@ impl CampaignLedger {
                 .expect("completed batteries have a GPU round"),
             source_sha256: candidate.source_sha256.clone(),
             object_sha256: candidate.object_sha256.clone(),
+            configuration_sha256: candidate.configuration_sha256.clone(),
             product_sha256: candidate.product_sha256.clone(),
             previous_incumbent_sha256: candidate.incumbent_sha256.clone(),
             median_gain_percent,
@@ -581,6 +618,57 @@ fn completed_batteries(events: &[CampaignEvent], target: &str) -> u8 {
         .unwrap_or(u8::MAX)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CandidateIdentity<'a> {
+    Configured {
+        object_sha256: &'a str,
+        configuration_sha256: &'a str,
+    },
+    Object(&'a str),
+}
+
+fn candidate_identity(record: &CandidateRecord) -> CandidateIdentity<'_> {
+    match record.configuration_sha256.as_deref() {
+        Some(configuration_sha256) => CandidateIdentity::Configured {
+            object_sha256: &record.object_sha256,
+            configuration_sha256,
+        },
+        None => CandidateIdentity::Object(&record.object_sha256),
+    }
+}
+
+fn submission_candidate_identity(submission: &CandidateSubmission) -> CandidateIdentity<'_> {
+    match submission.configuration_sha256.as_deref() {
+        Some(configuration_sha256) => CandidateIdentity::Configured {
+            object_sha256: &submission.object_sha256,
+            configuration_sha256,
+        },
+        None => CandidateIdentity::Object(&submission.object_sha256),
+    }
+}
+
+fn candidate_matches_promotion(
+    record: &CandidateRecord,
+    target: &str,
+    object_sha256: &str,
+    configuration_sha256: Option<&str>,
+) -> bool {
+    record.target == target
+        && record.object_sha256 == object_sha256
+        && record.configuration_sha256.as_deref() == configuration_sha256
+}
+
+fn promotion_matches(
+    record: &PromotionRecord,
+    target: &str,
+    object_sha256: &str,
+    configuration_sha256: Option<&str>,
+) -> bool {
+    record.target == target
+        && record.object_sha256 == object_sha256
+        && record.configuration_sha256.as_deref() == configuration_sha256
+}
+
 fn validate_submission(submission: &CandidateSubmission) -> CampaignResult<()> {
     for (label, value) in [
         ("target", submission.target.as_str()),
@@ -594,6 +682,15 @@ fn validate_submission(submission: &CandidateSubmission) -> CampaignResult<()> {
                 "{label} must be non-empty"
             )));
         }
+    }
+    if submission
+        .configuration_sha256
+        .as_deref()
+        .is_some_and(|sha| sha.trim().is_empty())
+    {
+        return Err(CampaignError::InvalidCandidate(
+            "configuration SHA-256 must be non-empty when provided".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -789,6 +886,115 @@ mod tests {
             Err(CampaignError::BatteryBudgetExhausted { .. })
         ));
         assert_eq!(ledger.completed_batteries("tile").unwrap(), 3);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn configuration_sha_distinguishes_geometry_for_one_object() {
+        let (path, ledger) = ledger();
+        let tile32 = completed("flash-tile", "shared-object", "baseline", 0.1, 4)
+            .configuration_sha256("config-tile32");
+        let first = ledger.record_candidate(tile32.clone()).unwrap();
+        let RecordDisposition::Recorded(first) = first else {
+            panic!("first geometry was unexpectedly deduplicated")
+        };
+        assert_eq!(first.gpu_round, Some(1));
+        assert_eq!(first.configuration_sha256.as_deref(), Some("config-tile32"));
+
+        let tile64 = completed("flash-tile", "shared-object", "baseline", 0.1, 4)
+            .configuration_sha256("config-tile64");
+        let second = ledger.record_candidate(tile64).unwrap();
+        let RecordDisposition::Recorded(second) = second else {
+            panic!("distinct geometry was unexpectedly deduplicated")
+        };
+        assert_eq!(second.gpu_round, Some(2));
+        assert_eq!(
+            second.configuration_sha256.as_deref(),
+            Some("config-tile64")
+        );
+
+        let duplicate = ledger.record_candidate(tile32).unwrap();
+        assert!(matches!(
+            duplicate,
+            RecordDisposition::DuplicateSkipped(record)
+                if record.configuration_sha256.as_deref() == Some("config-tile32")
+        ));
+        assert_eq!(ledger.completed_batteries("flash-tile").unwrap(), 2);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn recompiled_object_with_same_configuration_consumes_a_distinct_round() {
+        let (path, ledger) = ledger();
+        let object_a = completed("flash-tile", "object-a", "baseline", 0.1, 4)
+            .configuration_sha256("config-tile32");
+        let first = ledger.record_candidate(object_a.clone()).unwrap();
+        let RecordDisposition::Recorded(first) = first else {
+            panic!("first object was unexpectedly deduplicated")
+        };
+        assert_eq!(first.gpu_round, Some(1));
+
+        let object_b = completed("flash-tile", "object-b", "baseline", 0.1, 4)
+            .configuration_sha256("config-tile32");
+        let second = ledger.record_candidate(object_b).unwrap();
+        let RecordDisposition::Recorded(second) = second else {
+            panic!("recompiled object was unexpectedly deduplicated")
+        };
+        assert_eq!(second.gpu_round, Some(2));
+
+        assert!(matches!(
+            ledger.record_candidate(object_a).unwrap(),
+            RecordDisposition::DuplicateSkipped(_)
+        ));
+        assert_eq!(ledger.completed_batteries("flash-tile").unwrap(), 2);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn configured_promotion_requires_the_exact_object_and_configuration() {
+        let (path, ledger) = ledger();
+        ledger
+            .record_candidate(
+                completed("flash-tile", "shared-object", "baseline", 0.5, 5)
+                    .configuration_sha256("config-tile32"),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            ledger.promote("flash-tile", "shared-object"),
+            Err(CampaignError::NotPromotionEligible { .. })
+        ));
+        assert!(matches!(
+            ledger.promote_candidate("flash-tile", "different-object", Some("config-tile32")),
+            Err(CampaignError::NotPromotionEligible { .. })
+        ));
+        let promotion = ledger
+            .promote_candidate("flash-tile", "shared-object", Some("config-tile32"))
+            .unwrap();
+        assert_eq!(promotion.object_sha256, "shared-object");
+        assert_eq!(
+            promotion.configuration_sha256.as_deref(),
+            Some("config-tile32")
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn configuration_identity_does_not_replace_source_or_object_provenance() {
+        let (path, ledger) = ledger();
+        for missing in ["source", "object"] {
+            let mut submission = completed("flash-tile", "object", "baseline", 0.1, 4)
+                .configuration_sha256("config-tile32");
+            match missing {
+                "source" => submission.source_sha256.clear(),
+                "object" => submission.object_sha256.clear(),
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                ledger.record_candidate(submission),
+                Err(CampaignError::InvalidCandidate(_))
+            ));
+        }
         fs::remove_file(path).unwrap();
     }
 
