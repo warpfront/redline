@@ -3,10 +3,10 @@
 
 //! Fail-closed emitted-resource contracts for campaign candidates.
 
-use crate::{ArchProfile, CodeObjectInspection, IsaVersion, KernelReport};
+use crate::{ArchProfile, CodeObjectInspection, IsaVersion, KernelReport, Wavefront};
 use serde::{Deserialize, Serialize};
 
-pub const RESOURCE_CONTRACT_SCHEMA_VERSION: u32 = 1;
+pub const RESOURCE_CONTRACT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -32,6 +32,10 @@ pub enum ResourceRejection {
     },
     MissingKernel {
         symbol: String,
+    },
+    IncumbentWavefrontMismatch {
+        expected: u32,
+        actual: u32,
     },
     WavefrontMismatch {
         expected: u32,
@@ -61,6 +65,8 @@ pub struct ResourceAssessment {
     pub schema_version: u32,
     pub profile: ArchProfile,
     pub kernel: String,
+    #[serde(default)]
+    pub required_wavefront_size: u32,
     pub accepted: bool,
     pub incumbent_waves_per_simd: Option<u32>,
     pub candidate_waves_per_simd: Option<u32>,
@@ -70,11 +76,33 @@ pub struct ResourceAssessment {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ResourceContract {
     pub profile: ArchProfile,
+    /// A narrow per-target override. `None` preserves the architecture
+    /// profile's default wavefront.
+    #[serde(default)]
+    pub required_wavefront: Option<Wavefront>,
 }
 
 impl ResourceContract {
     pub const fn new(profile: ArchProfile) -> Self {
-        Self { profile }
+        Self {
+            profile,
+            required_wavefront: None,
+        }
+    }
+
+    /// Require a wavefront for one target without changing the architecture's
+    /// default contract. The incumbent must use the same wavefront or the
+    /// assessment fails before occupancy classes are compared.
+    pub const fn require_wavefront(mut self, wavefront: Wavefront) -> Self {
+        self.required_wavefront = Some(wavefront);
+        self
+    }
+
+    pub const fn required_wavefront_size(self) -> u32 {
+        match self.required_wavefront {
+            Some(wavefront) => wavefront.width(),
+            None => self.profile.required_wavefront_size(),
+        }
     }
 
     /// Assess a candidate against the resource occupancy of the currently
@@ -88,6 +116,14 @@ impl ResourceContract {
     ) -> ResourceAssessment {
         let canonical = symbol.strip_suffix(".kd").unwrap_or(symbol);
         let mut rejections = Vec::new();
+        let required_wavefront_size = self.required_wavefront_size();
+        let incumbent_wavefront_compatible = incumbent.wavefront_size == required_wavefront_size;
+        if !incumbent_wavefront_compatible {
+            rejections.push(ResourceRejection::IncumbentWavefrontMismatch {
+                expected: required_wavefront_size,
+                actual: incumbent.wavefront_size,
+            });
+        }
 
         let bundle_architecture = architecture_from_bundle_target(&inspection.bundle_target)
             .unwrap_or_else(|| inspection.bundle_target.clone());
@@ -138,9 +174,11 @@ impl ResourceContract {
         let incumbent_waves_per_simd = Some(incumbent_waves);
         let mut candidate_waves_per_simd = None;
         if let Some(candidate) = candidate {
-            if candidate.wavefront_size != self.profile.required_wavefront_size() {
+            let candidate_wavefront_compatible =
+                candidate.wavefront_size == required_wavefront_size;
+            if !candidate_wavefront_compatible {
                 rejections.push(ResourceRejection::WavefrontMismatch {
-                    expected: self.profile.required_wavefront_size(),
+                    expected: required_wavefront_size,
                     actual: candidate.wavefront_size,
                 });
             }
@@ -168,7 +206,10 @@ impl ResourceContract {
                 .profile
                 .vgpr_limited_waves(candidate.vgpr_count, candidate.wavefront_size);
             candidate_waves_per_simd = Some(candidate_waves);
-            if candidate_waves < incumbent_waves {
+            if incumbent_wavefront_compatible
+                && candidate_wavefront_compatible
+                && candidate_waves < incumbent_waves
+            {
                 rejections.push(ResourceRejection::OccupancyRegression {
                     incumbent_waves_per_simd: incumbent_waves,
                     candidate_waves_per_simd: candidate_waves,
@@ -186,6 +227,7 @@ impl ResourceContract {
             schema_version: RESOURCE_CONTRACT_SCHEMA_VERSION,
             profile: self.profile,
             kernel: symbol.to_owned(),
+            required_wavefront_size,
             accepted: rejections.is_empty(),
             incumbent_waves_per_simd,
             candidate_waves_per_simd,
@@ -209,9 +251,13 @@ mod tests {
     use crate::{CodeObjectIdentity, InstructionStats};
 
     fn report(vgprs: u32) -> KernelReport {
+        report_for_wavefront(vgprs, 32)
+    }
+
+    fn report_for_wavefront(vgprs: u32, wavefront_size: u32) -> KernelReport {
         KernelReport {
             name: "candidate".to_owned(),
-            wavefront_size: 32,
+            wavefront_size,
             vgpr_count: vgprs,
             sgpr_count: 20,
             ..KernelReport::default()
@@ -240,6 +286,57 @@ mod tests {
         assert!(assessment.accepted, "{:?}", assessment.rejections);
         assert_eq!(assessment.incumbent_waves_per_simd, Some(16));
         assert_eq!(assessment.candidate_waves_per_simd, Some(16));
+    }
+
+    #[test]
+    fn default_contract_remains_wave32() {
+        let assessment = ResourceContract::new(ArchProfile::Gfx1151).assess(
+            &inspection(report_for_wavefront(82, 64)),
+            "candidate",
+            &report_for_wavefront(82, 64),
+        );
+        assert!(!assessment.accepted);
+        assert!(assessment.rejections.iter().any(|rejection| matches!(
+            rejection,
+            ResourceRejection::WavefrontMismatch {
+                expected: 32,
+                actual: 64
+            }
+        )));
+    }
+
+    #[test]
+    fn explicit_wave64_override_accepts_an_incumbent_compatible_router() {
+        let assessment = ResourceContract::new(ArchProfile::Gfx1151)
+            .require_wavefront(Wavefront::Wave64)
+            .assess(
+                &inspection(report_for_wavefront(96, 64)),
+                "candidate",
+                &report_for_wavefront(82, 64),
+            );
+        assert!(assessment.accepted, "{:?}", assessment.rejections);
+        assert_eq!(assessment.required_wavefront_size, 64);
+        assert_eq!(assessment.incumbent_waves_per_simd, Some(8));
+        assert_eq!(assessment.candidate_waves_per_simd, Some(8));
+    }
+
+    #[test]
+    fn wavefront_override_cannot_change_a_wave32_incumbent_contract() {
+        let assessment = ResourceContract::new(ArchProfile::Gfx1151)
+            .require_wavefront(Wavefront::Wave64)
+            .assess(
+                &inspection(report_for_wavefront(82, 64)),
+                "candidate",
+                &report(82),
+            );
+        assert!(!assessment.accepted);
+        assert!(assessment.rejections.iter().any(|rejection| matches!(
+            rejection,
+            ResourceRejection::IncumbentWavefrontMismatch {
+                expected: 64,
+                actual: 32
+            }
+        )));
     }
 
     #[test]

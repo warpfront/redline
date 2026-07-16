@@ -609,6 +609,7 @@ fn validate_battery_evidence(
         .is_some_and(|assessment| {
             assessment.schema_version == RESOURCE_CONTRACT_SCHEMA_VERSION
                 && assessment.profile == started.profile
+                && matches!(assessment.required_wavefront_size, 32 | 64)
                 && assessment.accepted
                 && assessment.rejections.is_empty()
         });
@@ -694,9 +695,10 @@ mod tests {
 
     fn accepted_resources() -> ResourceAssessment {
         ResourceAssessment {
-            schema_version: 1,
+            schema_version: RESOURCE_CONTRACT_SCHEMA_VERSION,
             profile: ArchProfile::Gfx1151,
             kernel: "kernel".to_owned(),
+            required_wavefront_size: 32,
             accepted: true,
             incumbent_waves_per_simd: Some(16),
             candidate_waves_per_simd: Some(16),

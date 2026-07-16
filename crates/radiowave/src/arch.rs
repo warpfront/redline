@@ -86,16 +86,16 @@ impl ArchProfile {
     /// quanta.  This captures the important 96 -> 97 VGPR cliff (16 -> 12
     /// resident waves) without rejecting register changes within a plateau.
     pub fn vgpr_limited_waves(self, vgpr_count: u32, wavefront_size: u32) -> u32 {
-        let (capacity, granule) = match (self, wavefront_size) {
-            (Self::Gfx1151, 32) => (1536_u32, 24_u32),
-            (Self::Gfx1151, 64) => (768_u32, 12_u32),
+        let (capacity, granule, maximum_waves) = match (self, wavefront_size) {
+            (Self::Gfx1151, 32) => (1536_u32, 24_u32, 16_u32),
+            (Self::Gfx1151, 64) => (768_u32, 12_u32, 8_u32),
             _ => return 0,
         };
         if vgpr_count == 0 {
-            return self.max_waves_per_simd();
+            return maximum_waves;
         }
         let allocated = vgpr_count.div_ceil(granule) * granule;
-        (capacity / allocated).min(self.max_waves_per_simd())
+        (capacity / allocated).min(maximum_waves)
     }
 }
 
@@ -208,6 +208,8 @@ mod tests {
         assert_eq!(profile.vgpr_limited_waves(96, 32), 16);
         assert_eq!(profile.vgpr_limited_waves(97, 32), 12);
         assert_eq!(profile.vgpr_limited_waves(120, 32), 12);
+        assert_eq!(profile.vgpr_limited_waves(96, 64), 8);
+        assert_eq!(profile.vgpr_limited_waves(97, 64), 7);
     }
 
     #[test]

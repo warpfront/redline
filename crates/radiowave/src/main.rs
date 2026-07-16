@@ -348,6 +348,7 @@ fn assess(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
     let mut kernel = None;
     let mut incumbent_vgprs = None;
     let mut incumbent_wavefront = 32;
+    let mut required_wavefront = None;
     let mut hipcc = env::var_os("HIPCC")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("hipcc"));
@@ -362,7 +363,15 @@ fn assess(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
                 incumbent_vgprs = Some(next_parse(&mut iter, "--incumbent-vgprs")?)
             }
             Some("--incumbent-wavefront") => {
-                incumbent_wavefront = next_parse(&mut iter, "--incumbent-wavefront")?
+                incumbent_wavefront = parse_wavefront(&next(&mut iter, "--incumbent-wavefront")?)?
+            }
+            Some("--required-wavefront") => {
+                let value = next(&mut iter, "--required-wavefront")?;
+                required_wavefront = Some(match parse_wavefront(&value)? {
+                    32 => Wavefront::Wave32,
+                    64 => Wavefront::Wave64,
+                    _ => unreachable!("parse_wavefront accepts only 32 or 64"),
+                });
             }
             Some("--hipcc") => hipcc = PathBuf::from(next(&mut iter, "--hipcc")?),
             Some("--out") => output = Some(PathBuf::from(next(&mut iter, "--out")?)),
@@ -385,7 +394,11 @@ fn assess(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
         vgpr_count: incumbent_vgprs,
         ..KernelReport::default()
     };
-    let assessment = ResourceContract::new(profile).assess(&inspection, &kernel, &incumbent);
+    let mut contract = ResourceContract::new(profile);
+    if let Some(wavefront) = required_wavefront {
+        contract = contract.require_wavefront(wavefront);
+    }
+    let assessment = contract.assess(&inspection, &kernel, &incumbent);
     let encoded = serde_json::to_string_pretty(&assessment)? + "\n";
     if let Some(path) = output {
         std::fs::write(&path, encoded.as_bytes())?;
@@ -763,8 +776,20 @@ fn usage() {
          radiowave recipes builtin [--output CATALOG.json]\n\
          radiowave recipes select --arch TARGET --kernel NAME [--family FAMILY] [--tag TAG] [--catalog CATALOG.json] [--candidates]\n\
          radiowave recipes ingest [--catalog CATALOG.json] --ledger WIN_ROWS.jsonl --output CATALOG.json\n\
-         radiowave assess --input KERNEL.hsaco --arch gfx1151 --kernel SYMBOL --incumbent-vgprs N [--out assessment.json]\n\
+         radiowave assess --input KERNEL.hsaco --arch gfx1151 --kernel SYMBOL --incumbent-vgprs N [--incumbent-wavefront 32|64] [--required-wavefront 32|64] [--out assessment.json]\n\
          radiowave campaign init|record|promote|status ...\n\
          radiowave header"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wavefront_cli_parser_accepts_only_32_or_64() {
+        assert_eq!(parse_wavefront(&OsString::from("32")).unwrap(), 32);
+        assert_eq!(parse_wavefront(&OsString::from("64")).unwrap(), 64);
+        assert!(parse_wavefront(&OsString::from("16")).is_err());
+    }
 }

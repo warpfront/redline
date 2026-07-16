@@ -195,6 +195,16 @@ the gfx1151 bundle target, ELF machine id `0x04a`, ISA `{11,5,1}`, wave32, no
 register spills or scratch, no lower VGPR occupancy class than the incumbent,
 and no more than 32 static memory-clause instructions.  In particular, a
 gfx1100 or generic gfx11 object cannot satisfy the gfx1151 contract.
+The default remains wave32. A target whose incumbent is already wave64 may use
+`ResourceContract::require_wavefront(Wavefront::Wave64)` for that assessment;
+the override fails closed when the incumbent is not wave64 and does not alter
+the default used by any other gfx1151 target.
+
+```bash
+radiowave assess --input router.hsaco --arch gfx1151 --kernel router \
+  --incumbent-vgprs 80 --incumbent-wavefront 64 --required-wavefront 64 \
+  --out router-resources.json
+```
 
 `CampaignLedger` persists a campaign as append-only JSONL.  The default policy
 allows three completed, distinct code-object batteries per target, requires an
