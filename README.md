@@ -54,12 +54,17 @@ matrix, Redline/HIP/Vulkan, 3 warmups, 7 samples, and CPU-oracle correctness
 gating. **All 720 rows matched; zero were rejected.**
 
 <img width="1693" height="929" alt="image" src="https://github.com/user-attachments/assets/3b9bc818-9131-4967-a431-8958efc6eef7" />
-**Benchmark Reports**
-
-- 📄 **RX 9070 XT (gfx1201)** — [`REPORT`](examples/hipfire-6409/results/gfx1201/2026-07-23-rocm714-three-way/REPORT.md)
-- 📄 **RX 7900 XTX (gfx1100)** — [`REPORT`](examples/hipfire-6409/results/gfx1100/2026-07-23-rocm714-three-way/REPORT.md)
-- 📄 **Strix Halo (gfx1151)** — [`REPORT`](examples/hipfire-6409/results/gfx1151/2026-07-23-rocm714-three-way/REPORT.md)
-
+<p align="center">
+  <a href="examples/hipfire-6409/results/gfx1201/2026-07-23-rocm714-three-way/REPORT.md">
+    <img alt="RX 9070 XT Report" src="https://img.shields.io/badge/RX%209070%20XT-gfx1201%20Report-red?style=for-the-badge">
+  </a>
+  <a href="examples/hipfire-6409/results/gfx1100/2026-07-23-rocm714-three-way/REPORT.md">
+    <img alt="RX 7900 XTX Report" src="https://img.shields.io/badge/RX%207900%20XTX-gfx1100%20Report-red?style=for-the-badge">
+  </a>
+  <a href="examples/hipfire-6409/results/gfx1151/2026-07-23-rocm714-three-way/REPORT.md">
+    <img alt="Strix Halo Report" src="https://img.shields.io/badge/Strix%20Halo-gfx1151%20Report-red?style=for-the-badge">
+  </a>
+</p>
 Median speedup is backend time divided by Redline time. On gfx1100, `auto` is
 capped at Q2: clean explicit-Q3 and Q4 controls both reproduced retained-PM4
 timeouts in adjacent memory-waitcnt rows. Those queue counts remain diagnostic
