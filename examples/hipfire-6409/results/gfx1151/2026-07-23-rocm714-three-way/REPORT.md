@@ -88,21 +88,10 @@ Correctness-gated result: **Redline wins 185/240 rows (77.08%)**.
 | RL / hip | 233 | 7 | 0 | 97.08 | 0.3730 | 240 |
 | RL / vulkan | 185 | 55 | 0 | 77.08 | 0.7721 | 240 |
 
-## Pinned hipEngine-harness comparison
-
-The `hipengine` profile covers the same benchmark row set as pinned HipEngine `f2c3ad6`: family, operation, shape/sweep axes, repetition count, and serial/independent mode. Those rows deliberately run through Hipfire's existing Radiowave-tuned launch policy; wave size, workgroup geometry, source variant, ABI, and machine code remain optimization variables rather than parity constraints. HipEngine has 212 three-way matched core rows because its HIP independent sampler path rejects 12 rows; its 16 dispatch controls are reported separately. Hipfire executes and correctness-gates all 240 rows across four backends.
-
-| Harness | Comparison | Wins | Losses | Win % | Median ratio | N |
-|---|---|---:|---:|---:|---:|---:|
-| hipEngine core | RL / vulkan | 197 | 27 | 87.95 | 0.4798 | 224 |
-| hipEngine core | RL / hip | 160 | 64 | 71.43 | 0.8555 | 224 |
-| hipEngine dispatch | RL / vulkan | 0 | 0 | 0.00 | 0.0000 | 0 |
-| hipEngine dispatch | RL / hip | 0 | 0 | 0.00 | 0.0000 | 0 |
-
 ## Harness verdict
 
-This tuning smoke intentionally measures only `redline` versus `hip` versus `vulkan`. It uses the `hipengine_f2c` matrix, `radiowave_tuned` wave policy, and `default` scheduler profile. Every ranked row passed both CPU oracles. Redline beats Vulkan in 185/240 rows; final promotion still requires a full four-backend certification run.
+This artifact is a complete correctness-gated comparison of the selected backends: `redline`, `hip`, `vulkan`. It uses the `hipengine_f2c` matrix, `radiowave_tuned` wave policy, and `default` scheduler profile. Every ranked row passed both CPU oracles. Redline beats Vulkan in 185/240 rows. This artifact does not measure HipGraph.
 
 ## Interpretation guardrails
 
-HIP, HipGraph, and Redline load the identical selected hipcc code object for each row; their differences isolate launch/submission and dependency handling. Vulkan uses matched GLSL compiled by the Mesa stack, so Vulkan-only wins can still include compiler scheduling and ISA differences. The `hipengine_f2c` profile matches HipEngine's row coverage while intentionally retaining Hipfire/Radiowave's tuned wave, workgroup, and source-variant choices. This artifact records the `radiowave_tuned` wave policy and `default` scheduler profile as controlled HIP compilation/launch factors. Every completion timestamp necessarily proves the measured work finished. All placement counts exclude any row where one of the four outputs failed the CPU oracle.
+Every selected HIP-stack backend (Redline and direct HIP) loads exactly the same Radiowave-produced hipcc code object selected by the recorded wave, recipe, and scheduler policies. Vulkan runs matched GLSL algorithms compiled for RADV. Their shared code object isolates launch/submission and dependency handling within the selected HIP-stack columns. The `hipengine_f2c` profile matches HipEngine's row coverage while intentionally retaining Hipfire/Radiowave's tuned wave, workgroup, and source-variant choices. This artifact records the `radiowave_tuned` wave policy and `default` scheduler profile as controlled HIP compilation/launch factors. Every completion timestamp necessarily proves the measured work finished. All placement counts exclude any row where one of the 3 selected backend outputs failed the CPU oracle.

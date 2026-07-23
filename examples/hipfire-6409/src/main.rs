@@ -747,6 +747,28 @@ fn render_console_summary(artifact: &Artifact) -> String {
     )
 }
 
+fn selected_code_identity(active_backends: &[&str]) -> String {
+    let labels = active_backends
+        .iter()
+        .filter_map(|backend| match *backend {
+            "hip" => Some("direct HIP"),
+            "hipgraph" => Some("HipGraph"),
+            "redline" => Some("Redline"),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let scope = match labels.as_slice() {
+        [] => "none".to_owned(),
+        [only] => (*only).to_owned(),
+        [first, second] => format!("{first} and {second}"),
+        [first, middle @ .., last] => format!("{first}, {}, and {last}", middle.join(", ")),
+    };
+    format!(
+        "Every selected HIP-stack backend ({scope}) loads exactly the same Radiowave-produced hipcc code object selected by the recorded wave, recipe, and scheduler policies. Vulkan runs matched GLSL algorithms compiled for RADV."
+    )
+}
+
+
 fn render_report(artifact: &Artifact) -> String {
     let s = &artifact.summary;
     let active_backends = artifact.config["backends"]
@@ -853,9 +875,12 @@ fn render_report(artifact: &Artifact) -> String {
             p["bench_n"].as_u64().unwrap_or(0),
         ));
     }
-    if let Some(baseline) = &artifact.hipengine_baseline {
-        out.push_str("\n## Pinned hipEngine-harness comparison\n\n");
-        out.push_str("The `hipengine` profile covers the same benchmark row set as pinned HipEngine `f2c3ad6`: family, operation, shape/sweep axes, repetition count, and serial/independent mode. Those rows deliberately run through Hipfire's existing Radiowave-tuned launch policy; wave size, workgroup geometry, source variant, ABI, and machine code remain optimization variables rather than parity constraints. HipEngine has 212 three-way matched core rows because its HIP independent sampler path rejects 12 rows; its 16 dispatch controls are reported separately. Hipfire executes and correctness-gates all 240 rows across four backends.\n\n");
+    if let (Some("gfx1201"), Some(baseline)) = (
+        artifact.environment["hip_arch"].as_str(),
+        artifact.hipengine_baseline.as_ref(),
+    ) {
+        out.push_str("\n## Pinned gfx1201 HipEngine-harness comparison\n\n");
+        out.push_str("This historical gfx1201 control covers the same HipEngine `f2c3ad6` family, operation, shape/sweep, repetition-count, and timing-mode matrix. It is a separate retained harness result, not a row source for the current artifact. Wave size, workgroup geometry, source variant, ABI, and machine code remain optimization variables rather than parity constraints.\n\n");
         out.push_str("| Harness | Comparison | Wins | Losses | Win % | Median ratio | N |\n|---|---|---:|---:|---:|---:|---:|\n");
         for other in ["vulkan", "hip"] {
             let key = format!("redline_over_{other}");
@@ -908,17 +933,27 @@ fn render_report(artifact: &Artifact) -> String {
         ));
     } else {
         out.push_str(&format!(
-            "This tuning smoke intentionally measures only `{}`. It uses the `{}` matrix, `{}` wave policy, and `{}` scheduler profile.{} Every ranked row passed both CPU oracles. Redline beats Vulkan in {}/{} rows; final promotion still requires a full four-backend certification run.\n",
-            active_backends.join("` versus `"),
+            "This artifact is a complete correctness-gated comparison of the selected backends: `{}`. It uses the `{}` matrix, `{}` wave policy, and `{}` scheduler profile.{} Every ranked row passed both CPU oracles. Redline beats Vulkan in {}/{} rows.{}\n",
+            active_backends.join("`, `"),
             matrix_profile,
             wave_policy,
             scheduler_profile,
             if includes_aggressive { " The optional aggressive single-kernel extension removes dependency fences from Redline's timed tape." } else { "" },
             rl_vk["wins"].as_u64().unwrap_or(0), rl_vk["bench_n"].as_u64().unwrap_or(0),
+            if active_backends.contains(&"hipgraph") { "" } else { " This artifact does not measure HipGraph." },
         ));
     }
     out.push_str("\n## Interpretation guardrails\n\n");
-    out.push_str(&format!("HIP, HipGraph, and Redline load the identical selected hipcc code object for each row; their differences isolate launch/submission and dependency handling. Vulkan uses matched GLSL compiled by the Mesa stack, so Vulkan-only wins can still include compiler scheduling and ISA differences. The `{matrix_profile}` profile matches HipEngine's row coverage while intentionally retaining Hipfire/Radiowave's tuned wave, workgroup, and source-variant choices. This artifact records the `{wave_policy}` wave policy and `{scheduler_profile}` scheduler profile as controlled HIP compilation/launch factors. Every completion timestamp necessarily proves the measured work finished. All placement counts exclude any row where one of the four outputs failed the CPU oracle.\n"));
+    out.push_str(&selected_code_identity(&active_backends));
+    if active_backends
+        .iter()
+        .filter(|backend| matches!(**backend, "hip" | "hipgraph" | "redline"))
+        .count()
+        > 1
+    {
+        out.push_str(" Their shared code object isolates launch/submission and dependency handling within the selected HIP-stack columns.");
+    }
+    out.push_str(&format!(" The `{matrix_profile}` profile matches HipEngine's row coverage while intentionally retaining Hipfire/Radiowave's tuned wave, workgroup, and source-variant choices. This artifact records the `{wave_policy}` wave policy and `{scheduler_profile}` scheduler profile as controlled HIP compilation/launch factors. Every completion timestamp necessarily proves the measured work finished. All placement counts exclude any row where one of the {} selected backend outputs failed the CPU oracle.\n", active_backends.len()));
     out
 }
 
@@ -1346,4 +1381,53 @@ mod tests {
         let err = parse_partition_policy("equal:0").unwrap_err().to_string();
         assert!(err.contains("invalid partition policy equal:0"), "{err}");
     }
+    fn report_artifact(hip_arch: &str, backends: &[&str]) -> Artifact {
+        Artifact {
+            schema_version: 2,
+            kind: "test",
+            generated_unix_seconds: 0,
+            methodology: json!({}),
+            environment: json!({"hip_arch": hip_arch}),
+            config: json!({
+                "backends": backends,
+                "wave_policy": "radiowave_tuned",
+                "scheduler_profile": "default",
+                "matrix_profile": "hipengine_f2c",
+                "include_aggressive_extension": false
+            }),
+            rows: Vec::new(),
+            summary: json!({
+                "redline_wins": 1,
+                "matched_rows": 1,
+                "redline_win_percent": 100.0,
+                "redline_losses": [],
+                "placements": {
+                    "redline": {"first": 1, "second": 0, "third": 0, "fourth": 0, "win_percent": 100.0, "bench_n": 1},
+                    "hip": {"first": 0, "second": 1, "third": 0, "fourth": 0, "win_percent": 0.0, "bench_n": 1},
+                    "vulkan": {"first": 0, "second": 0, "third": 1, "fourth": 0, "win_percent": 0.0, "bench_n": 1}
+                },
+                "pairwise": {
+                    "redline_over_hip": {"wins": 1, "losses": 0, "ties": 0, "win_percent": 100.0, "median_ratio": 0.5, "bench_n": 1},
+                    "redline_over_vulkan": {"wins": 1, "losses": 0, "ties": 0, "win_percent": 100.0, "median_ratio": 0.5, "bench_n": 1}
+                }
+            }),
+            hipengine_baseline: Some(json!({})),
+        }
+    }
+
+    #[test]
+    fn three_way_report_names_only_measured_backends() {
+        let report = render_report(&report_artifact(
+            "gfx1100",
+            &["redline", "hip", "vulkan"],
+        ));
+        assert!(report.contains("does not measure HipGraph"), "{report}");
+        assert!(!report.contains("four-backend certification"), "{report}");
+        assert!(!report.contains("four outputs"), "{report}");
+        assert!(
+            !report.contains("Pinned hipEngine-harness comparison"),
+            "{report}"
+        );
+    }
+
 }
