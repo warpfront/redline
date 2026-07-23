@@ -60,6 +60,16 @@ use crate::{
     Access, BeginReplay, CompiledPlan, DispatchBackend, DispatchRequest, EndReplay, KernelArg,
     LaneId, NodeId, ReplayBindingError, ReplayBindings, ReplayMode, ReplayToken, ResourceId,
 };
+use crate::batch_mem::BatchMemPlan;
+use crate::ffi_batch_mem::{
+    self, BatchMemSymbols, HIP_MEM_BATCH_FLAGS_NONE, HipMemLocation,
+};
+use crate::ffi_execution_ctx::{
+    self, ExecutionCtxSymbols, HIP_DEV_RESOURCE_TYPE_SM, HipDevResource,
+    HipDevResourceDesc, HipDevSmResourceGroupParams, HipExecutionCtx,
+};
+use crate::partition::{self, PartitionPolicy};
+
 
 type HipErrorCode = c_int;
 type HipFunction = *mut c_void;
@@ -110,11 +120,17 @@ pub enum HipBackendMode {
 }
 
 /// Construction parameters for a HIP replay backend.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HipBackendConfig {
     device_ordinal: i32,
     worker_count: NonZeroUsize,
     mode: HipBackendMode,
+    /// CU partition policy for green-context worker binding.
+    ///
+    /// [`PartitionPolicy::None`] keeps the legacy full-device stream path.
+    /// Any other policy loads HIP 7.14 execution-context symbols and binds
+    /// each worker stream to its own green context.
+    partition_policy: PartitionPolicy,
 }
 
 impl HipBackendConfig {
@@ -128,6 +144,7 @@ impl HipBackendConfig {
             device_ordinal,
             worker_count,
             mode: HipBackendMode::MultiStream,
+            partition_policy: PartitionPolicy::None,
         }
     }
 
@@ -141,14 +158,25 @@ impl HipBackendConfig {
             device_ordinal,
             worker_count: NonZeroUsize::MIN,
             mode: HipBackendMode::SerialFallback,
+            partition_policy: PartitionPolicy::None,
         }
     }
 
-    pub fn device_ordinal(self) -> i32 {
+    /// Bind worker streams to green-context CU partitions (ROCm >= 7.14).
+    ///
+    /// [`PartitionPolicy::None`] is a no-op relative to the legacy path.
+    /// Non-`None` policies require a partition count that matches
+    /// [`Self::worker_count`].
+    pub fn partition_policy(mut self, policy: PartitionPolicy) -> Self {
+        self.partition_policy = policy;
+        self
+    }
+
+    pub fn device_ordinal(&self) -> i32 {
         self.device_ordinal
     }
 
-    pub fn mode(self) -> HipBackendMode {
+    pub fn mode(&self) -> HipBackendMode {
         self.mode
     }
 
@@ -158,8 +186,13 @@ impl HipBackendConfig {
     /// the pre-existing `GPU_MAX_HW_QUEUES` environment variable. Serial
     /// fallback always returns one and has no environment requirement. Neither
     /// mode proves that a stream receives a distinct hardware queue.
-    pub fn worker_count(self) -> NonZeroUsize {
+    pub fn worker_count(&self) -> NonZeroUsize {
         self.worker_count
+    }
+
+    /// CU partition policy applied at [`HipMultiStreamBackend::load`].
+    pub fn get_partition_policy(&self) -> &PartitionPolicy {
+        &self.partition_policy
     }
 }
 
@@ -282,6 +315,7 @@ fn open_hip_library() -> Result<Library, HipBackendError> {
     const CANDIDATES: &[&str] = &[
         "libamdhip64.so",
         "libamdhip64.so.7",
+        "/opt/rocm/core/lib/libamdhip64.so",
         "/opt/rocm/lib/libamdhip64.so",
     ];
     let mut failures = Vec::new();
@@ -337,6 +371,35 @@ impl Stream {
         })
     }
 
+    /// Create a nonblocking stream bound to a green / execution context.
+    fn create_from_execution_ctx(
+        fns: &Arc<HipFns>,
+        symbols: &ExecutionCtxSymbols,
+        ctx: HipExecutionCtx,
+    ) -> Result<Self, HipBackendError> {
+        let mut raw = ptr::null_mut();
+        // SAFETY: `raw` is a valid output location; `ctx` is a live green
+        // context for this device; flags/priority match hip_runtime_api.h.
+        unsafe {
+            fns.check(
+                "hipExecutionCtxStreamCreate",
+                (symbols.execution_ctx_stream_create)(
+                    &mut raw,
+                    ctx,
+                    HIP_STREAM_NON_BLOCKING,
+                    0,
+                ),
+            )?;
+        }
+        let raw = NonNull::new(raw).ok_or(HipBackendError::NullHandle {
+            operation: "hipExecutionCtxStreamCreate",
+        })?;
+        Ok(Self {
+            fns: Arc::clone(fns),
+            raw,
+        })
+    }
+
     fn wait(&self, event: &Event) -> Result<(), HipBackendError> {
         // SAFETY: both handles are live and belong to this HIP runtime/device.
         unsafe {
@@ -368,6 +431,39 @@ impl Drop for Stream {
             let _ = (self.fns.stream_synchronize)(self.raw.as_ptr());
             let _ = (self.fns.stream_destroy)(self.raw.as_ptr());
         }
+    }
+}
+
+/// RAII owner for a green execution context created by this backend.
+///
+/// Streams bound to the context must be destroyed first. Rust drops struct
+/// fields in **declaration** order, so `workers` is declared before
+/// `execution_contexts` on [`HipMultiStreamBackend`] (streams drop first).
+/// Fallible-path locals drop in **reverse** declaration order — see
+/// [`create_partitioned_workers`].
+struct OwnedExecutionCtx {
+    symbols: Arc<ExecutionCtxSymbols>,
+    raw: HipExecutionCtx,
+}
+
+impl OwnedExecutionCtx {
+    fn raw(&self) -> HipExecutionCtx {
+        self.raw
+    }
+}
+
+impl Drop for OwnedExecutionCtx {
+    fn drop(&mut self) {
+        if self.raw.0.is_null() {
+            return;
+        }
+        // SAFETY: this object uniquely owns the context returned by
+        // `hipGreenCtxCreate`. Streams that referenced it have already been
+        // dropped (field order). Drop cannot report the destroy error.
+        unsafe {
+            let _ = (self.symbols.execution_ctx_destroy)(self.raw);
+        }
+        self.raw.0 = ptr::null_mut();
     }
 }
 
@@ -500,6 +596,8 @@ pub struct PreparedHipPlan {
     terminal_slot_by_lane: Vec<Option<usize>>,
     event_slot_count: usize,
     stats: PreparedHipPlanStats,
+    /// Optional batch prefetch/discard plan executed around serialized replay.
+    batch_mem_plan: Option<BatchMemPlan>,
 }
 
 impl PreparedHipPlan {
@@ -507,13 +605,48 @@ impl PreparedHipPlan {
         self.stats
     }
 
+    /// Attach a validated batch memory plan for prefetch-before / discard-after
+    /// semantics around [`HipMultiStreamBackend::replay_serialized_batch`].
+    ///
+    /// An empty plan ([`BatchMemPlan::is_noop`]) is treated as a no-op.
+    pub fn with_batch_mem_plan(mut self, plan: BatchMemPlan) -> Self {
+        self.batch_mem_plan = Some(plan);
+        self
+    }
+
+    /// Optional batch-mem plan attached via [`Self::with_batch_mem_plan`].
+    pub fn batch_mem_plan(&self) -> Option<&BatchMemPlan> {
+        self.batch_mem_plan.as_ref()
+    }
+
     /// Predict the command counts for a serialized GPU batch.
     ///
-    /// The successful execution path always has exactly one host
-    /// synchronization, regardless of token count. Error recovery may perform
+    /// The successful path always performs one host synchronization on the
+    /// coordinator join event. A non-empty discard plan adds one host
+    /// synchronization per used worker lane after discard is enqueued (each
+    /// lane that may hold discard work is drained). Error recovery may perform
     /// extra stream drains and is intentionally excluded.
     pub fn batch_stats(&self, token_count: NonZeroUsize) -> Result<HipBatchStats, HipBackendError> {
-        calculate_batch_stats(self.stats, self.event_slot_count, token_count)
+        // Discard is drained on every plan-used lane after enqueue.
+        let extra_host_syncs = if self
+            .batch_mem_plan
+            .as_ref()
+            .is_some_and(|plan| plan.has_discard())
+        {
+            self.terminal_slot_by_lane
+                .iter()
+                .filter(|slot| slot.is_some())
+                .count()
+                .max(1)
+        } else {
+            0
+        };
+        calculate_batch_stats(
+            self.stats,
+            self.event_slot_count,
+            token_count,
+            extra_host_syncs,
+        )
     }
 }
 
@@ -542,12 +675,24 @@ pub struct HipBatchCompletion {
 ///
 /// The backend supports [`ReplayMode::TokenLatency`] only. It owns streams and
 /// events, but borrows registered `hipFunction_t` handles and device pointers.
+/// When a non-`None` partition policy is configured it also owns per-worker
+/// green execution contexts (destroyed after their streams).
 pub struct HipMultiStreamBackend {
     backend_id: u64,
     mode: HipBackendMode,
     fns: Arc<HipFns>,
+    /// Lazily loaded when a non-empty batch-mem plan is first executed.
+    batch_mem_symbols: Option<Arc<BatchMemSymbols>>,
+    /// Device ordinal selected at load (needed for prefetch location).
+    device_ordinal: i32,
     coordinator: Stream,
+    // DROP ORDER (struct fields): Rust drops fields in *declaration* order.
+    // Streams must die before their green contexts, so `workers` is declared
+    // before `execution_contexts`. Do not "fix" this back.
+    /// Worker streams; destroyed before green contexts (declaration drop order).
     workers: Vec<Stream>,
+    /// Green contexts; must outlive their streams and drop only after them.
+    execution_contexts: Vec<OwnedExecutionCtx>,
     kernels: HashMap<String, NonNull<c_void>>,
     resources: HashMap<ResourceId, ResourceBinding>,
     available_events: Vec<Rc<Event>>,
@@ -566,29 +711,50 @@ impl HipMultiStreamBackend {
     /// one worker and does not require or mutate that environment variable.
     /// The caller must arrange any multi-stream setting before HIP
     /// initialization. This function never calls `std::env::set_var`.
+    ///
+    /// When `config.partition_policy` is not [`PartitionPolicy::None`], the
+    /// backend loads HIP 7.14 execution-context symbols, validates the
+    /// partition against the device SM/CU resource, creates one green context
+    /// per worker, and binds each worker stream with
+    /// `hipExecutionCtxStreamCreate`. Missing 7.14 symbols hard-fail.
     pub fn load(config: HipBackendConfig) -> Result<Self, HipBackendError> {
         let configured_hw_queues = match config.mode() {
             HipBackendMode::MultiStream => {
-                validate_backend_config(config, env::var_os("GPU_MAX_HW_QUEUES").as_deref())?
+                validate_backend_config(&config, env::var_os("GPU_MAX_HW_QUEUES").as_deref())?
             }
-            HipBackendMode::SerialFallback => validate_backend_config(config, None)?,
+            HipBackendMode::SerialFallback => validate_backend_config(&config, None)?,
         };
         let backend_id = NEXT_HIP_BACKEND_ID.fetch_add(1, Ordering::Relaxed);
         assert!(
             backend_id != u64::MAX,
             "HIP backend identity space exhausted"
         );
-        let fns = HipFns::load(config.device_ordinal())?;
+        let device_ordinal = config.device_ordinal();
+        let fns = HipFns::load(device_ordinal)?;
         let coordinator = Stream::create(&fns)?;
-        let workers = (0..config.worker_count().get())
-            .map(|_| Stream::create(&fns))
-            .collect::<Result<Vec<_>, _>>()?;
+
+        let (workers, execution_contexts) = if matches!(
+            config.get_partition_policy(),
+            PartitionPolicy::None
+        ) {
+            // Byte-identical legacy path: plain nonblocking worker streams.
+            let workers = (0..config.worker_count().get())
+                .map(|_| Stream::create(&fns))
+                .collect::<Result<Vec<_>, _>>()?;
+            (workers, Vec::new())
+        } else {
+            create_partitioned_workers(&fns, device_ordinal, &config)?
+        };
+
         Ok(Self {
             backend_id,
             mode: config.mode(),
             fns,
+            batch_mem_symbols: None,
+            device_ordinal,
             coordinator,
             workers,
+            execution_contexts,
             kernels: HashMap::new(),
             resources: HashMap::new(),
             available_events: Vec::new(),
@@ -605,6 +771,13 @@ impl HipMultiStreamBackend {
 
     pub fn mode(&self) -> HipBackendMode {
         self.mode
+    }
+
+    /// Number of green execution contexts owned by this backend.
+    ///
+    /// Zero when `partition_policy` was [`PartitionPolicy::None`] at load.
+    pub fn green_context_count(&self) -> usize {
+        self.execution_contexts.len()
     }
 
     /// Effective hardware-queue limit used for validation.
@@ -700,6 +873,7 @@ impl HipMultiStreamBackend {
             terminal_slot_by_lane: lowered.terminal_slot_by_lane,
             event_slot_count: lowered.event_slot_count,
             stats: lowered.stats,
+            batch_mem_plan: None,
         })
     }
 
@@ -710,6 +884,13 @@ impl HipMultiStreamBackend {
     /// tails; its own prior tail is ordered by stream FIFO. The host waits only
     /// on the final coordinator join event. This serializes tokens without a
     /// host round-trip between them while preserving intra-token lane overlap.
+    ///
+    /// When a non-empty [`BatchMemPlan`] is attached via
+    /// [`PreparedHipPlan::with_batch_mem_plan`], fixture ranges are prefetched
+    /// only on lanes the plan actually uses, and the coordinator waits every
+    /// enqueued prefetch event before the first dispatch. Discard is enqueued
+    /// after the final coordinator join wait and drained on **every** used
+    /// worker lane (plus any discard-only lane that carried a discard enqueue).
     pub fn replay_serialized_batch(
         &mut self,
         prepared: &mut PreparedHipPlan,
@@ -742,9 +923,25 @@ impl HipMultiStreamBackend {
         let mut events = self.acquire_events(total_events)?;
         let joined = events.pop().expect("one coordinator event was requested");
 
+        // Clone the optional plan so the submit closure can mutably borrow
+        // `prepared.dispatches` without overlapping the plan borrow.
+        let batch_mem = prepared
+            .batch_mem_plan
+            .as_ref()
+            .filter(|plan| !plan.is_noop())
+            .cloned();
+        if batch_mem.is_some() {
+            self.ensure_batch_mem_symbols()?;
+        }
+
         self.batch_active = Some(first_token);
         let mut submitted = false;
         let submit_result = (|| {
+            if let Some(plan) = batch_mem.as_ref() {
+                submitted = true;
+                self.enqueue_prefetch_batch(plan, &prepared.terminal_slot_by_lane)?;
+            }
+
             for token_index in 0..token_count.get() {
                 let current_bank = token_index * prepared.event_slot_count;
                 for dispatch in &mut prepared.dispatches {
@@ -809,6 +1006,10 @@ impl HipMultiStreamBackend {
             submitted = true;
             joined.record(&self.coordinator)?;
             joined.synchronize()?;
+
+            if let Some(plan) = batch_mem.as_ref() {
+                self.enqueue_discard_batch(plan, &prepared.terminal_slot_by_lane)?;
+            }
             Ok(())
         })();
 
@@ -825,6 +1026,138 @@ impl HipMultiStreamBackend {
             }
             Err(cause) => Err(self.recover_batch_failure(cause, submitted, events, joined)),
         }
+    }
+
+    fn ensure_batch_mem_symbols(&mut self) -> Result<(), HipBackendError> {
+        if self.batch_mem_symbols.is_some() {
+            return Ok(());
+        }
+        let symbols = ffi_batch_mem::load_batch_mem_symbols().map_err(map_batch_mem_load_error)?;
+        self.batch_mem_symbols = Some(symbols);
+        Ok(())
+    }
+
+    fn plan_used_lanes(&self, terminal_slot_by_lane: &[Option<usize>]) -> Vec<usize> {
+        terminal_slot_by_lane
+            .iter()
+            .enumerate()
+            .filter_map(|(lane, slot)| slot.map(|_| lane))
+            .filter(|&lane| lane < self.workers.len())
+            .collect()
+    }
+
+    /// Prefetch only on plan-used lanes; coordinator waits every prefetch event
+    /// before dispatch begins so unused-backend workers stay idle and used
+    /// lanes cannot race ahead of migration.
+    fn enqueue_prefetch_batch(
+        &self,
+        plan: &BatchMemPlan,
+        terminal_slot_by_lane: &[Option<usize>],
+    ) -> Result<(), HipBackendError> {
+        if plan.prefetch().is_empty() {
+            return Ok(());
+        }
+        let symbols = self
+            .batch_mem_symbols
+            .as_ref()
+            .expect("batch-mem symbols loaded before enqueue");
+        let lanes = self.plan_used_lanes(terminal_slot_by_lane);
+        if lanes.is_empty() {
+            return Ok(());
+        }
+        let mut ptrs: Vec<*mut c_void> = plan
+            .prefetch()
+            .iter()
+            .map(|range| range.device_ptr() as usize as *mut c_void)
+            .collect();
+        let mut sizes: Vec<usize> = plan.prefetch().iter().map(|range| range.size()).collect();
+        let mut locs = vec![HipMemLocation::device(self.device_ordinal)];
+        let mut loc_idxs = vec![0usize; plan.prefetch().len()];
+        let mut prefetch_events = Vec::with_capacity(lanes.len());
+        for &lane in &lanes {
+            let worker = &self.workers[lane];
+            // SAFETY: pointers/sizes describe the caller-validated fixture ranges;
+            // stream is a live plan-used worker; flags are required zero.
+            unsafe {
+                self.fns.check(
+                    "hipMemPrefetchBatchAsync",
+                    (symbols.mem_prefetch_batch_async)(
+                        ptrs.as_mut_ptr(),
+                        sizes.as_mut_ptr(),
+                        ptrs.len(),
+                        locs.as_mut_ptr(),
+                        loc_idxs.as_mut_ptr(),
+                        locs.len(),
+                        HIP_MEM_BATCH_FLAGS_NONE,
+                        worker.raw.as_ptr(),
+                    ),
+                )?;
+            }
+            let event = Event::create(&self.fns)?;
+            event.record(worker)?;
+            prefetch_events.push(event);
+        }
+        // Coordinator gates dispatch start on every enqueued prefetch.
+        for event in &prefetch_events {
+            self.coordinator.wait(event)?;
+        }
+        // Make the coordinator fence visible to each used worker before kernels.
+        let gate = Event::create(&self.fns)?;
+        gate.record(&self.coordinator)?;
+        for &lane in &lanes {
+            self.workers[lane].wait(&gate)?;
+        }
+        Ok(())
+    }
+
+    /// Enqueue discard after the joined fence, then host-drain **every**
+    /// plan-used lane so discard cannot race with backend teardown/reuse.
+    fn enqueue_discard_batch(
+        &self,
+        plan: &BatchMemPlan,
+        terminal_slot_by_lane: &[Option<usize>],
+    ) -> Result<(), HipBackendError> {
+        if plan.discard().is_empty() {
+            return Ok(());
+        }
+        let symbols = self
+            .batch_mem_symbols
+            .as_ref()
+            .expect("batch-mem symbols loaded before enqueue");
+        let mut lanes = self.plan_used_lanes(terminal_slot_by_lane);
+        if lanes.is_empty() {
+            // Degenerate empty plan lane set: fall back to worker 0 only.
+            lanes.push(0);
+        }
+        let mut ptrs: Vec<*mut c_void> = plan
+            .discard()
+            .iter()
+            .map(|range| range.device_ptr() as usize as *mut c_void)
+            .collect();
+        let mut sizes: Vec<usize> = plan.discard().iter().map(|range| range.size()).collect();
+        // One discard enqueue is enough (ranges are global); place it on the
+        // first used lane. Completion is still waited on every used lane.
+        let stream = self.workers[lanes[0]].raw.as_ptr();
+        // SAFETY: pointers/sizes describe the caller-validated fixture ranges;
+        // stream is a live worker; flags are required zero. Called only after
+        // joined.synchronize so prior worker work has completed.
+        unsafe {
+            self.fns.check(
+                "hipMemDiscardBatchAsync",
+                (symbols.mem_discard_batch_async)(
+                    ptrs.as_mut_ptr(),
+                    sizes.as_mut_ptr(),
+                    ptrs.len(),
+                    HIP_MEM_BATCH_FLAGS_NONE,
+                    stream,
+                ),
+            )?;
+        }
+        // Finding: discard waits all (used) lanes' completion, not only lane 0.
+        for &lane in &lanes {
+            self.workers[lane].synchronize()?;
+        }
+        Ok(())
     }
 
     /// Register a borrowed `hipFunction_t` under a plan kernel key.
@@ -1227,9 +1560,12 @@ fn calculate_batch_stats(
     plan: PreparedHipPlanStats,
     event_slot_count: usize,
     token_count: NonZeroUsize,
+    extra_host_syncs: usize,
 ) -> Result<HipBatchStats, HipBackendError> {
     let count = token_count.get();
     let boundaries = count - 1;
+    // Base: joined.synchronize(). Extra: one synchronize per used lane after discard.
+    let host_synchronizations = 1 + extra_host_syncs;
     Ok(HipBatchStats {
         token_count: count,
         kernel_launches: checked_product(plan.dispatches, count)?,
@@ -1238,7 +1574,7 @@ fn calculate_batch_stats(
         token_boundary_waits: checked_product(plan.token_boundary_waits_per_boundary, boundaries)?,
         coordinator_waits: plan.terminal_lane_tails,
         coordinator_join_records: 1,
-        host_synchronizations: 1,
+        host_synchronizations,
     })
 }
 
@@ -1405,7 +1741,7 @@ impl DispatchBackend for HipMultiStreamBackend {
 }
 
 fn validate_backend_config(
-    config: HipBackendConfig,
+    config: &HipBackendConfig,
     hardware_queue_environment: Option<&OsStr>,
 ) -> Result<usize, HipBackendError> {
     if config.mode() == HipBackendMode::SerialFallback {
@@ -1414,6 +1750,195 @@ fn validate_backend_config(
     }
 
     validate_hw_queue_environment(config.worker_count(), hardware_queue_environment)
+}
+
+/// Create one green context + bound stream per validated CU partition.
+///
+/// Device CU count comes from `hipDeviceGetDevResource` with the SM resource
+/// type (`HipDevSmResource::sm_count`). Equal partitions use
+/// `hipDevSmResourceSplitByCount`; explicit unequal slices use
+/// `hipDevSmResourceSplit` with per-group SM counts.
+fn create_partitioned_workers(
+    fns: &Arc<HipFns>,
+    device_ordinal: i32,
+    config: &HipBackendConfig,
+) -> Result<(Vec<Stream>, Vec<OwnedExecutionCtx>), HipBackendError> {
+    let symbols =
+        ffi_execution_ctx::load_execution_ctx_symbols().map_err(map_execution_ctx_load_error)?;
+
+    let mut device_resource = HipDevResource::default();
+    // SAFETY: `device_resource` is a valid writable hipDevResource; type is SM.
+    unsafe {
+        fns.check(
+            "hipDeviceGetDevResource",
+            (symbols.device_get_dev_resource)(
+                device_ordinal,
+                &mut device_resource,
+                HIP_DEV_RESOURCE_TYPE_SM,
+            ),
+        )?;
+    }
+    // SAFETY: hipDeviceGetDevResource with SM type fills the sm union arm.
+    let device_cu_count = unsafe { device_resource.payload.sm.sm_count };
+
+    let partitions = partition::validate(config.get_partition_policy(), device_cu_count)
+        .map_err(HipBackendError::InvalidPartition)?;
+
+    let worker_count = config.worker_count().get();
+    if partitions.len() != worker_count {
+        return Err(HipBackendError::PartitionWorkerMismatch {
+            partitions: partitions.len(),
+            workers: worker_count,
+        });
+    }
+
+    let resources = match config.get_partition_policy() {
+        PartitionPolicy::None => unreachable!("caller filters PartitionPolicy::None"),
+        PartitionPolicy::Equal(_) => {
+            let min_count = partitions[0].cu_count;
+            let mut results = vec![HipDevResource::default(); worker_count];
+            let mut nb_groups = c_uint::try_from(worker_count).map_err(|_| {
+                HipBackendError::InvalidConfig {
+                    detail: format!("worker count {worker_count} exceeds u32"),
+                }
+            })?;
+            let mut remainder = HipDevResource::default();
+            // SAFETY: result buffer has nb_groups slots; input is the device SM
+            // resource; remainder is a valid out-parameter.
+            unsafe {
+                fns.check(
+                    "hipDevSmResourceSplitByCount",
+                    (symbols.dev_sm_resource_split_by_count)(
+                        results.as_mut_ptr(),
+                        &mut nb_groups,
+                        &device_resource,
+                        &mut remainder,
+                        0,
+                        min_count,
+                    ),
+                )?;
+            }
+            if usize::try_from(nb_groups).unwrap_or(usize::MAX) != worker_count {
+                return Err(HipBackendError::InvalidConfig {
+                    detail: format!(
+                        "hipDevSmResourceSplitByCount returned {nb_groups} groups, expected {worker_count}"
+                    ),
+                });
+            }
+            results
+        }
+        PartitionPolicy::Explicit(_) => {
+            let mut results = vec![HipDevResource::default(); worker_count];
+            let mut remainder = HipDevResource::default();
+            let mut group_params: Vec<HipDevSmResourceGroupParams> = partitions
+                .iter()
+                .map(|part| HipDevSmResourceGroupParams {
+                    sm_count: part.cu_count,
+                    coscheduled_sm_count: 0,
+                    preferred_coscheduled_sm_count: 0,
+                    flags: ffi_execution_ctx::HIP_DEV_SM_RESOURCE_GROUP_DEFAULT,
+                    reserved: [0; 12],
+                })
+                .collect();
+            let nb_groups = c_uint::try_from(worker_count).map_err(|_| {
+                HipBackendError::InvalidConfig {
+                    detail: format!("worker count {worker_count} exceeds u32"),
+                }
+            })?;
+            // SAFETY: result/group_params lengths match nb_groups; input is the
+            // device SM resource; remainder is a valid out-parameter.
+            unsafe {
+                fns.check(
+                    "hipDevSmResourceSplit",
+                    (symbols.dev_sm_resource_split)(
+                        results.as_mut_ptr(),
+                        nb_groups,
+                        &device_resource,
+                        &mut remainder,
+                        0,
+                        group_params.as_mut_ptr(),
+                    ),
+                )?;
+            }
+            results
+        }
+    };
+
+    // DROP ORDER (locals): Rust drops locals in *reverse* declaration order.
+    // On a mid-loop failure, streams must die before contexts, so `contexts`
+    // is declared before `workers` (workers drop first). Opposite of the
+    // HipMultiStreamBackend struct-field rule above — do not unify them.
+    let mut contexts = Vec::with_capacity(worker_count);
+    let mut workers = Vec::with_capacity(worker_count);
+    for resource in resources {
+        let ctx = green_ctx_from_resource(fns, &symbols, device_ordinal, resource)?;
+        let stream = Stream::create_from_execution_ctx(fns, &symbols, ctx.raw())?;
+        contexts.push(ctx);
+        workers.push(stream);
+    }
+    Ok((workers, contexts))
+}
+
+fn green_ctx_from_resource(
+    fns: &Arc<HipFns>,
+    symbols: &Arc<ExecutionCtxSymbols>,
+    device_ordinal: i32,
+    mut resource: HipDevResource,
+) -> Result<OwnedExecutionCtx, HipBackendError> {
+    let mut desc = HipDevResourceDesc(ptr::null_mut());
+    // SAFETY: desc/resource are valid out/in locations for one SM resource.
+    unsafe {
+        fns.check(
+            "hipDevResourceGenerateDesc",
+            (symbols.dev_resource_generate_desc)(&mut desc, &mut resource, 1),
+        )?;
+    }
+    if desc.0.is_null() {
+        return Err(HipBackendError::NullHandle {
+            operation: "hipDevResourceGenerateDesc",
+        });
+    }
+    let mut ctx = HipExecutionCtx(ptr::null_mut());
+    // SAFETY: desc was just generated; device_ordinal is the loaded device.
+    unsafe {
+        fns.check(
+            "hipGreenCtxCreate",
+            (symbols.green_ctx_create)(&mut ctx, desc, device_ordinal, 0),
+        )?;
+    }
+    if ctx.0.is_null() {
+        return Err(HipBackendError::NullHandle {
+            operation: "hipGreenCtxCreate",
+        });
+    }
+    Ok(OwnedExecutionCtx {
+        symbols: Arc::clone(symbols),
+        raw: ctx,
+    })
+}
+
+fn map_execution_ctx_load_error(error: ffi_execution_ctx::LoadError) -> HipBackendError {
+    match error {
+        ffi_execution_ctx::LoadError::Library { candidates, detail } => {
+            HipBackendError::LibraryLoad { candidates, detail }
+        }
+        ffi_execution_ctx::LoadError::Symbol(missing) => HipBackendError::Symbol {
+            symbol: missing.0,
+            detail: missing.to_string(),
+        },
+    }
+}
+
+fn map_batch_mem_load_error(error: ffi_batch_mem::LoadError) -> HipBackendError {
+    match error {
+        ffi_batch_mem::LoadError::Library { candidates, detail } => {
+            HipBackendError::LibraryLoad { candidates, detail }
+        }
+        ffi_batch_mem::LoadError::Symbol(missing) => HipBackendError::Symbol {
+            symbol: missing.0,
+            detail: missing.to_string(),
+        },
+    }
 }
 
 fn validate_hw_queue_environment(
@@ -1696,6 +2221,14 @@ pub enum HipBackendError {
         replay: ReplayToken,
         signal: ReplayToken,
     },
+    #[error("invalid HIP backend partition policy: {0}")]
+    InvalidPartition(#[source] partition::PartitionError),
+    #[error(
+        "partition policy produced {partitions} slices but backend worker_count is {workers}"
+    )]
+    PartitionWorkerMismatch { partitions: usize, workers: usize },
+    #[error("invalid HIP backend configuration: {detail}")]
+    InvalidConfig { detail: String },
 }
 
 fn validate_bindings(
@@ -1733,12 +2266,12 @@ mod tests {
         assert_eq!(config.device_ordinal(), 3);
         assert_eq!(config.mode(), HipBackendMode::SerialFallback);
         assert_eq!(config.worker_count(), NonZeroUsize::MIN);
-        assert_eq!(validate_backend_config(config, None).unwrap(), 1);
+        assert_eq!(validate_backend_config(&config, None).unwrap(), 1);
 
         // A serial fallback does not inherit validation failures from an
         // embedding process's unrelated queue setting either.
         assert_eq!(
-            validate_backend_config(config, Some(OsStr::new("not-a-number"))).unwrap(),
+            validate_backend_config(&config, Some(OsStr::new("not-a-number"))).unwrap(),
             1
         );
     }
@@ -1749,13 +2282,13 @@ mod tests {
         let config = HipBackendConfig::new(0, required);
         assert_eq!(config.mode(), HipBackendMode::MultiStream);
         assert!(matches!(
-            validate_backend_config(config, None),
+            validate_backend_config(&config, None),
             Err(HipBackendError::MissingHardwareQueueEnvironment {
                 required: missing
             }) if missing == required
         ));
         assert_eq!(
-            validate_backend_config(config, Some(OsStr::new("4"))).unwrap(),
+            validate_backend_config(&config, Some(OsStr::new("4"))).unwrap(),
             4
         );
     }
@@ -1780,6 +2313,7 @@ mod tests {
             lowered.stats,
             lowered.event_slot_count,
             NonZeroUsize::new(5).unwrap(),
+            0,
         )
         .unwrap();
         assert_eq!(batch.kernel_launches, 15);
@@ -1855,6 +2389,7 @@ mod tests {
             lowered.stats,
             lowered.event_slot_count,
             NonZeroUsize::new(3).unwrap(),
+            0,
         )
         .unwrap();
         assert_eq!(batch.kernel_launches, 24);
@@ -1877,7 +2412,7 @@ mod tests {
             token_boundary_waits_per_boundary: 0,
         };
         assert!(matches!(
-            calculate_batch_stats(shape, 1, NonZeroUsize::new(2).unwrap()),
+            calculate_batch_stats(shape, 1, NonZeroUsize::new(2).unwrap(), 0),
             Err(HipBackendError::BatchSizeOverflow)
         ));
     }

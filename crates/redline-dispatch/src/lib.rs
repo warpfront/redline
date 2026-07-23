@@ -37,6 +37,12 @@
 //! ```
 
 pub mod aql;
+pub mod batch_mem;
+pub mod ffi_batch_mem;
+pub mod ffi_execution_ctx;
+pub mod ffi_library;
+pub mod partition;
+
 mod backend;
 mod bindings;
 pub mod hip;

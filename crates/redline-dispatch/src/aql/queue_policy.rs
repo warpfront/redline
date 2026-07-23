@@ -4,6 +4,9 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::partition::{self, CuPartition, PartitionError, PartitionPolicy};
+use redline_rocr::{GpuDevice, QueueSet, RuntimeError};
+
 /// Public-queue fan-out policy for independent retained work.
 ///
 /// `Auto` is deliberately conservative on unmeasured architectures. The
@@ -63,6 +66,71 @@ fn automatic_lane_limit(architecture: &str) -> usize {
     }
 }
 
+/// Pack a contiguous CU slice into a bool mask for `hsa_amd_queue_cu_set_mask`.
+///
+/// Bits `cu_offset .. cu_offset+cu_count` are true; the vector length is the
+/// device CU count so the HSA bit-vector covers the full agent.
+pub fn cu_mask_for_partition(device_cu_count: u32, part: CuPartition) -> Vec<bool> {
+    let len = device_cu_count as usize;
+    let start = part.cu_offset as usize;
+    let end = start.saturating_add(part.cu_count as usize);
+    let mut mask = vec![false; len];
+    let end = end.min(len);
+    let start = start.min(end);
+    for slot in mask.iter_mut().take(end).skip(start) {
+        *slot = true;
+    }
+    mask
+}
+
+/// Failures while materializing a CU-partitioned [`QueueSet`].
+#[derive(Debug, thiserror::Error)]
+pub enum PartitionedQueueError {
+    #[error(transparent)]
+    Partition(#[from] PartitionError),
+    #[error(transparent)]
+    Runtime(#[from] RuntimeError),
+    #[error(
+        "partition policy produced {partitions} CU slices but queue creation requested {queues} lanes"
+    )]
+    LaneCountMismatch { partitions: usize, queues: usize },
+}
+
+/// Create `queue_count` public queues, optionally CU-masked from `policy`.
+///
+/// When `policy` is `None` or [`PartitionPolicy::None`], this is byte-equivalent
+/// to [`QueueSet::create`] (no CU mask API is invoked). Any other policy is
+/// validated against `GpuDevice::compute_unit_count()` and each lane receives
+/// `create_with_cu_mask` covering its [`CuPartition`] slice. If the validated
+/// partition count differs from `queue_count`, returns
+/// [`PartitionedQueueError::LaneCountMismatch`].
+pub fn create_queue_set(
+    device: &GpuDevice,
+    queue_count: usize,
+    queue_size: u32,
+    policy: Option<&PartitionPolicy>,
+) -> Result<QueueSet, PartitionedQueueError> {
+    let Some(policy) = policy else {
+        return Ok(QueueSet::create(device, queue_count, queue_size)?);
+    };
+    if matches!(policy, PartitionPolicy::None) {
+        return Ok(QueueSet::create(device, queue_count, queue_size)?);
+    }
+    let device_cu_count = device.compute_unit_count()?;
+    let partitions = partition::validate(policy, device_cu_count)?;
+    if partitions.len() != queue_count {
+        return Err(PartitionedQueueError::LaneCountMismatch {
+            partitions: partitions.len(),
+            queues: queue_count,
+        });
+    }
+    let masks = partitions
+        .into_iter()
+        .map(|part| cu_mask_for_partition(device_cu_count, part))
+        .collect::<Vec<_>>();
+    Ok(QueueSet::create_with_cu_masks(device, queue_size, &masks)?)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueuePolicyParseError(String);
 
@@ -120,5 +188,43 @@ mod tests {
         assert_eq!("2".parse(), Ok(QueuePolicy::Two));
         assert_eq!("4".parse(), Ok(QueuePolicy::Four));
         assert!("8".parse::<QueuePolicy>().is_err());
+    }
+
+    #[test]
+    fn cu_mask_for_partition_sets_contiguous_bits() {
+        let mask = cu_mask_for_partition(
+            8,
+            CuPartition {
+                index: 1,
+                cu_offset: 2,
+                cu_count: 3,
+            },
+        );
+        assert_eq!(
+            mask,
+            vec![false, false, true, true, true, false, false, false]
+        );
+    }
+
+    #[test]
+    fn equal_halves_cover_full_device_without_overlap() {
+        let parts = partition::validate(
+            &PartitionPolicy::Equal(std::num::NonZeroUsize::new(2).unwrap()),
+            64,
+        )
+        .unwrap();
+        assert_eq!(parts.len(), 2);
+        let left = cu_mask_for_partition(64, parts[0]);
+        let right = cu_mask_for_partition(64, parts[1]);
+        assert_eq!(left.iter().filter(|&&b| b).count(), 32);
+        assert_eq!(right.iter().filter(|&&b| b).count(), 32);
+        assert!(left.iter().zip(right.iter()).all(|(a, b)| !(*a && *b)));
+        assert_eq!(
+            left.iter()
+                .zip(right.iter())
+                .filter(|(a, b)| **a || **b)
+                .count(),
+            64
+        );
     }
 }

@@ -18,7 +18,20 @@ MANIFEST_TOOL = ROOT / "examples/hipengine-6409/hsaco_manifest.py"
 CAPI_INCLUDE = ROOT / "crates/redline-capi/include"
 CAPI_LIB = ROOT / "target/release"
 RADIOWAVE_BIN = ROOT / "target/release/radiowave"
-BUNDLER = Path("/opt/rocm/llvm/bin/clang-offload-bundler")
+BUNDLER = Path(
+    os.environ.get("REDLINE_CLANG_OFFLOAD_BUNDLER")
+    or next(
+        (
+            candidate
+            for candidate in (
+                "/opt/rocm/llvm/bin/clang-offload-bundler",           # classic ROCm
+                "/opt/rocm/core/lib/llvm/bin/clang-offload-bundler",  # TheRock 7.14
+            )
+            if Path(candidate).exists()
+        ),
+        "/opt/rocm/llvm/bin/clang-offload-bundler",
+    )
+)
 
 
 def output_path(args: list[str]) -> Path | None:

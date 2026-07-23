@@ -58,6 +58,7 @@ pub fn load_symbols() -> Result<Arc<Symbols>, LoadError> {
     const CANDIDATES: &[&str] = &[
         "libhsa-runtime64.so",
         "libhsa-runtime64.so.1",
+        "/opt/rocm/core/lib/libhsa-runtime64.so",
         "/opt/rocm/lib/libhsa-runtime64.so",
     ];
     let mut failures = Vec::new();

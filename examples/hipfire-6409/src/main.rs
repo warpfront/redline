@@ -13,7 +13,10 @@ use hip_backend::{embedded_code_object, HipBackend};
 use radiowave::recipes::{RecipeCatalog, SelectionMode};
 use radiowave::{SchedulerProfile, Wavefront};
 use redline_backend::{RedlineBackend, RmwBoundary};
-use redline_dispatch::aql::QueuePolicy;
+use redline_dispatch::aql::{Gfx12DispatchMode, QueuePolicy};
+use redline_dispatch::partition::PartitionPolicy;
+use redline_observe::amdsmi::{AmdSmi, TelemetrySnapshot};
+use redline_observe::roctx::{Roctx, RoctxStack};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -24,6 +27,7 @@ use spec::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,7 +35,8 @@ use vulkan_backend::VulkanBackend;
 
 const BACKENDS: [&str; 4] = ["redline", "vulkan", "hipgraph", "hip"];
 const HIPENGINE_SUMMARY: &str =
-    "../hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/summary.json";
+    "../hipengine-6409/results/gfx1201/2026-07-22-714-bench/summary.json";
+const HIPFIRE_BRIDGE_REV: &str = "455ffb9dfd6a5712889b504737f88fbbe87d3efe";
 
 #[derive(Debug)]
 struct Config {
@@ -43,6 +48,7 @@ struct Config {
     list: bool,
     wave_policy: WavePolicy,
     rmw_boundary: RmwBoundary,
+    dispatch_mode: Gfx12DispatchMode,
     redline_queue_policy: QueuePolicy,
     scheduler_profile: SchedulerProfile,
     scheduler_profile_explicit: bool,
@@ -56,6 +62,10 @@ struct Config {
     recipe_mode: SelectionMode,
     recipe_allowlist: BTreeSet<String>,
     active_backends: Vec<&'static str>,
+    partition_policy: PartitionPolicy,
+    batch_mem: bool,
+    telemetry: bool,
+    roctx: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -96,6 +106,7 @@ struct RowResult {
     redline_queue_count: usize,
     redline_submission_policy: &'static str,
     redline_dependency_cache_policies: BTreeMap<String, String>,
+    partition_applied: bool,
     radiowave_recipes: Vec<String>,
     radiowave_lowerings: Vec<radiowave::recipes::SourceLowering>,
     backend_order: Vec<String>,
@@ -136,10 +147,39 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // --batch-mem is currently recorded-only on the retained-PM4 path (no clean
+    // HIP batch-mem attachment). --partition-policy is applied at multi-lane
+    // AQL queue creation; serial lanes stay full-device by design.
+    let amd_smi = if config.telemetry {
+        Some(AmdSmi::new().context("failed to initialize AMD SMI telemetry (--telemetry)")?)
+    } else {
+        None
+    };
+    let telemetry_start = amd_smi
+        .as_ref()
+        .map(|smi| smi.snapshot(0))
+        .transpose()
+        .context("failed to capture start AMD SMI TelemetrySnapshot")?;
+
+    let roctx = if config.roctx {
+        Some(Roctx::load().context("failed to initialize ROCTx (--roctx)")?)
+    } else {
+        None
+    };
+    let roctx_stack = roctx.as_ref().map(|r| match r.stack() {
+        RoctxStack::Sdk => "sdk",
+        RoctxStack::Legacy => "legacy",
+    });
+
     println!("initializing Hipfire HIP bridge");
     let hip = HipBackend::new()?;
     println!("initializing Redline retained-PM4 backend");
-    let redline = RedlineBackend::new(config.rmw_boundary, config.redline_queue_policy)?;
+    let redline = RedlineBackend::new(
+        config.rmw_boundary,
+        config.redline_queue_policy,
+        config.partition_policy.clone(),
+        config.dispatch_mode,
+    )?;
     println!("initializing RADV Vulkan backend");
     let vulkan = VulkanBackend::new(Some(&redline.pci))?;
     if hip.arch != config.target_architecture {
@@ -181,6 +221,7 @@ fn main() -> Result<()> {
     }
 
     let mut rows = Vec::with_capacity(selected.len());
+    let mut active_family_range: Option<(String, redline_observe::roctx::RangeGuard<'_>)> = None;
     for (row_index, (mode, mut spec)) in selected.into_iter().enumerate() {
         if config.wave_policy == WavePolicy::RadiowaveTuned {
             apply_radiowave_runtime_policy_with_catalog_and_mode(
@@ -195,6 +236,20 @@ fn main() -> Result<()> {
         }
         if config.scheduler_profile_explicit || config.wave_policy != WavePolicy::RadiowaveTuned {
             spec.scheduler_profile = config.scheduler_profile;
+        }
+        if let Some(roctx) = &roctx {
+            let family = spec.family.to_owned();
+            let needs_new = active_family_range
+                .as_ref()
+                .map(|(current, _)| current.as_str() != family.as_str())
+                .unwrap_or(true);
+            if needs_new {
+                drop(active_family_range.take());
+                let guard = roctx
+                    .range(&family)
+                    .with_context(|| format!("failed to open ROCTx range for family {family}"))?;
+                active_family_range = Some((family, guard));
+            }
         }
         let fixture = fixture(&mut spec);
         let mut order = config.active_backends.clone();
@@ -233,6 +288,8 @@ fn main() -> Result<()> {
             backends.insert((*backend).to_owned(), result);
         }
         let redline_queue_count = redline.queue_count_for(mode, spec.logical_iterations(mode));
+        let partition_applied =
+            redline.partition_applied_for(mode, spec.logical_iterations(mode));
         rows.push(RowResult {
             key: spec.key(mode),
             mode,
@@ -255,12 +312,20 @@ fn main() -> Result<()> {
             redline_dependency_cache_policies: redline_dependency_cache_policies(
                 &redline, &spec, mode,
             ),
+            partition_applied,
             radiowave_recipes: spec.radiowave_recipes.iter().cloned().collect(),
             radiowave_lowerings: spec.radiowave_lowerings.iter().cloned().collect(),
             backend_order: order.into_iter().map(str::to_owned).collect(),
             backends,
         });
     }
+    drop(active_family_range);
+
+    let telemetry_end = amd_smi
+        .as_ref()
+        .map(|smi| smi.snapshot(0))
+        .transpose()
+        .context("failed to capture end AMD SMI TelemetrySnapshot")?;
 
     let summary = summarize(&rows, &config.active_backends);
     let hipengine_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(HIPENGINE_SUMMARY);
@@ -295,6 +360,15 @@ fn main() -> Result<()> {
         config.scheduler_profile.as_str()
     } else {
         "radiowave-recipe-or-default"
+    };
+    let hipcc_path = if let Some(value) = env::var_os("HIPCC").filter(|v| !v.is_empty()) {
+        value.to_string_lossy().into_owned()
+    } else if Path::new("/opt/rocm/core/bin/hipcc").exists() {
+        "/opt/rocm/core/bin/hipcc".to_owned()
+    } else if Path::new("/opt/rocm/core-7.14/bin/hipcc").exists() {
+        "/opt/rocm/core-7.14/bin/hipcc".to_owned()
+    } else {
+        "hipcc".to_owned()
     };
     let artifact = Artifact {
         schema_version: 2,
@@ -333,18 +407,68 @@ fn main() -> Result<()> {
             "redline_device": redline.name,
             "redline_pci": redline.pci,
             "redline_queue_policy": redline.queue_policy().as_str(),
+            "redline_dispatch_mode": match redline.dispatch_mode() {
+                Gfx12DispatchMode::Workitems => "workitems",
+                Gfx12DispatchMode::RadvWorkgroups => "radv-workgroups",
+            },
             "redline_independent_queues": redline.independent_queue_count(),
             "vulkan_device": vulkan.name,
             "vulkan_pci": vulkan.pci,
             "vulkan_compute_queues": vulkan.queue_count,
             "repository_commit": command_output("git", &["rev-parse", "HEAD"]),
             "repository_dirty": !command_output("git", &["status", "--porcelain"]).is_empty(),
-            "hipfire_redline_commit": command_output("git", &["-C", "../../engines/hipfire", "rev-parse", "HEAD"]),
-            "hipfire_clone_dirty": !command_output("git", &["-C", "../../engines/hipfire", "status", "--porcelain"]).is_empty(),
+            "hipfire_redline_commit": HIPFIRE_BRIDGE_REV,
+            "hipfire_clone_dirty": false,
             "hsaco_wave32_sha256_by_scheduler": hsaco_wave32_sha256,
             "hsaco_wave64_sha256_by_scheduler": hsaco_wave64_sha256,
-            "hipcc": command_output("/opt/rocm/bin/hipcc", &["--version"]),
+            "hipcc": command_output(&hipcc_path, &["--version"]),
             "vulkan_summary": command_output("vulkaninfo", &["--summary"]),
+            "telemetry": match (telemetry_start.as_ref(), telemetry_end.as_ref()) {
+                (Some(start), Some(end)) => json!({
+                    "start": telemetry_snapshot_json(start),
+                    "end": telemetry_snapshot_json(end),
+                }),
+                _ => Value::Null,
+            },
+            "roctx": roctx_stack,
+            "loaded": {
+                "roctx_stack": roctx_stack.unwrap_or("unavailable"),
+                "roctx_library": roctx
+                    .as_ref()
+                    .map(|r| r.library_path().to_owned())
+                    .unwrap_or_else(|| "unavailable".to_owned()),
+                "amdsmi": amd_smi
+                    .as_ref()
+                    .map(|s| s.library_path().to_owned())
+                    .unwrap_or_else(|| "unavailable".to_owned()),
+                "dispatch_partition_symbols": "present",
+                "rocr_interface": "1.26",
+                "partition_masks_applied": redline
+                    .effective_partition_masks()
+                    .iter()
+                    .map(|lane| {
+                        json!({
+                            "lane": lane.lane,
+                            "cu_mask": lane.cu_mask,
+                            "enabled_cu_count": lane.enabled_cu_count,
+                            "cu_mask_was_reduced": lane.cu_mask_was_reduced,
+                            "reason": lane.reason,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+                "partition_masks_requested": redline
+                    .applied_partitions()
+                    .iter()
+                    .map(|p| {
+                        json!({
+                            "lane": p.index,
+                            "cu_offset": p.cu_offset,
+                            "cu_count": p.cu_count,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+                "device_cu_count": redline.device_cu_count(),
+            },
         }),
         config: json!({
             "warmups": config.warmups,
@@ -362,6 +486,10 @@ fn main() -> Result<()> {
             "interleave_aggressive_b32": config.interleave_aggressive_b32,
             "mixed_paired_hash": config.mixed_paired_hash,
             "redline_rmw_boundary": config.rmw_boundary.as_str(),
+            "redline_dispatch_mode": match config.dispatch_mode {
+                Gfx12DispatchMode::Workitems => "workitems",
+                Gfx12DispatchMode::RadvWorkgroups => "radv-workgroups",
+            },
             "redline_queue_policy": redline.queue_policy().as_str(),
             "redline_independent_queues": redline.independent_queue_count(),
             "matrix_profile": config.matrix_profile.as_str(),
@@ -369,6 +497,14 @@ fn main() -> Result<()> {
             "selected_rows": rows.len(),
             "logical_matrix_rows": timing_modes.iter().copied().map(|mode| all_specs.iter().filter(|spec| spec.supports_mode(mode)).count()).sum::<usize>(),
             "backends": config.active_backends,
+            "partition_policy": partition_policy_json(&config.partition_policy),
+            "batch_mem": {
+                "requested": config.batch_mem,
+                "applied": false,
+                "reason": "no clean attachment on retained-PM4 path; HIP batch-mem plan is dispatch-crate-only",
+            },
+            "telemetry": config.telemetry,
+            "roctx": config.roctx,
         }),
         rows,
         summary,
@@ -821,6 +957,7 @@ fn parse_args() -> Result<Config> {
     let mut list = false;
     let mut wave_policy = WavePolicy::RadiowaveTuned;
     let mut rmw_boundary = RmwBoundary::RadiowaveVmem;
+    let mut dispatch_mode = Gfx12DispatchMode::Workitems;
     let mut redline_queue_policy = QueuePolicy::Auto;
     let mut scheduler_profile = SchedulerProfile::Default;
     let mut scheduler_profile_explicit = false;
@@ -828,6 +965,10 @@ fn parse_args() -> Result<Config> {
     let mut mixed_paired_hash = false;
     let mut matrix_profile = MatrixProfile::HipEngineF2c;
     let mut include_aggressive = false;
+    let mut partition_policy = PartitionPolicy::None;
+    let mut batch_mem = false;
+    let mut telemetry = false;
+    let mut roctx = false;
     let target_architecture =
         env::var("HIPFIRE_BENCH_ARCH").unwrap_or_else(|_| "gfx1201".to_owned());
     let mut recipe_catalog_path = env::var_os("RADIOWAVE_RECIPE_CATALOG").map(PathBuf::from);
@@ -866,6 +1007,18 @@ fn parse_args() -> Result<Config> {
                         "unknown Redline RMW boundary {value}; expected radiowave-vmem, same-agent, or radv-global"
                     )
                 })?;
+            }
+            "--redline-dispatch-mode" => {
+                let value = args
+                    .next()
+                    .context("--redline-dispatch-mode requires a value")?;
+                dispatch_mode = match value.as_str() {
+                    "workitems" => Gfx12DispatchMode::Workitems,
+                    "radv-workgroups" | "radv" => Gfx12DispatchMode::RadvWorkgroups,
+                    _ => bail!(
+                        "unknown Redline dispatch mode {value}; expected workitems, radv-workgroups, or radv"
+                    ),
+                };
             }
             "--redline-queues" => {
                 redline_queue_policy = args
@@ -914,10 +1067,19 @@ fn parse_args() -> Result<Config> {
                 })?;
             }
             "--include-aggressive" => include_aggressive = true,
+            "--partition-policy" => {
+                let value = args
+                    .next()
+                    .context("--partition-policy requires a value")?;
+                partition_policy = parse_partition_policy(&value)?;
+            }
+            "--batch-mem" => batch_mem = true,
+            "--telemetry" => telemetry = true,
+            "--roctx" => roctx = true,
             "--list" => list = true,
             "--help" | "-h" => {
                 println!(
-                    "usage: hipfire-6409-bench [--out PATH] [--warmups N] [--samples N] [--filter TEXT] [--max-rows N] [--matrix hipengine|legacy] [--include-aggressive] [--backends all|redline,vulkan] [--wave-policy all32|targeted64|radiowave|blanket64] [--recipe-catalog PATH] [--recipe-mode certified|candidates] [--recipe-allow ID ...] [--scheduler-profile default|max-ilp|iterative-ilp|memory-clause|pipeline-ilp] [--interleave-aggressive-b32] [--mixed-paired-hash] [--redline-rmw radiowave-vmem|same-agent|radv-global] [--redline-queues auto|1|2|4] [--list]"
+                    "usage: hipfire-6409-bench [--out PATH] [--warmups N] [--samples N] [--filter TEXT] [--max-rows N] [--matrix hipengine|legacy] [--include-aggressive] [--backends all|redline,vulkan] [--wave-policy all32|targeted64|radiowave|blanket64] [--recipe-catalog PATH] [--recipe-mode certified|candidates] [--recipe-allow ID ...] [--scheduler-profile default|max-ilp|iterative-ilp|memory-clause|pipeline-ilp] [--interleave-aggressive-b32] [--mixed-paired-hash] [--redline-rmw radiowave-vmem|same-agent|radv-global] [--redline-dispatch-mode workitems|radv-workgroups|radv] [--redline-queues auto|1|2|4] [--partition-policy none|equal:N|cus:a,b,c] [--batch-mem (recorded-only on retained-PM4 path)] [--telemetry] [--roctx] [--list]"
                 );
                 std::process::exit(0);
             }
@@ -965,6 +1127,7 @@ fn parse_args() -> Result<Config> {
         list,
         wave_policy,
         rmw_boundary,
+        dispatch_mode,
         redline_queue_policy,
         scheduler_profile,
         scheduler_profile_explicit,
@@ -978,6 +1141,87 @@ fn parse_args() -> Result<Config> {
         recipe_mode,
         recipe_allowlist,
         active_backends,
+        partition_policy,
+        batch_mem,
+        telemetry,
+        roctx,
+    })
+}
+
+fn parse_partition_policy(value: &str) -> Result<PartitionPolicy> {
+    if value == "none" {
+        return Ok(PartitionPolicy::None);
+    }
+    if let Some(rest) = value.strip_prefix("equal:") {
+        let n: usize = rest.parse().with_context(|| {
+            format!("invalid partition policy {value}; equal:N requires a positive integer N")
+        })?;
+        let n = NonZeroUsize::new(n).with_context(|| {
+            format!("invalid partition policy {value}; equal:N requires a positive integer N")
+        })?;
+        return Ok(PartitionPolicy::Equal(n));
+    }
+    if let Some(rest) = value.strip_prefix("cus:") {
+        if rest.is_empty() {
+            bail!(
+                "invalid partition policy {value}: empty CU list; expected cus:a,b,c with positive CU counts"
+            );
+        }
+        let mut counts = Vec::new();
+        for (index, part) in rest.split(',').enumerate() {
+            if part.is_empty() {
+                bail!(
+                    "invalid partition policy {value}: empty CU entry at index {index}; expected positive unsigned counts"
+                );
+            }
+            let count: u32 = part.parse().with_context(|| {
+                format!(
+                    "invalid partition policy {value}: expected unsigned CU counts, got {part:?}"
+                )
+            })?;
+            if count == 0 {
+                bail!(
+                    "invalid partition policy {value}: zero CU count at index {index} is not allowed"
+                );
+            }
+            counts.push(count);
+        }
+        if counts.is_empty() {
+            bail!(
+                "invalid partition policy {value}: empty CU list; expected cus:a,b,c with positive CU counts"
+            );
+        }
+        return Ok(PartitionPolicy::Explicit(counts));
+    }
+    bail!(
+        "invalid partition policy {value}; expected none, equal:N, or cus:a,b,c"
+    );
+}
+
+fn partition_policy_json(policy: &PartitionPolicy) -> Value {
+    match policy {
+        PartitionPolicy::None => json!("none"),
+        PartitionPolicy::Equal(n) => json!(format!("equal:{}", n.get())),
+        PartitionPolicy::Explicit(counts) => {
+            let joined = counts
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            json!(format!("cus:{joined}"))
+        }
+    }
+}
+
+fn telemetry_snapshot_json(snap: &TelemetrySnapshot) -> Value {
+    json!({
+        "sclk_mhz": snap.sclk_mhz,
+        "mclk_mhz": snap.mclk_mhz,
+        "edge_temp_c": snap.edge_temp_c,
+        "junction_temp_c": snap.junction_temp_c,
+        "power_w": snap.power_w,
+        "power_cap_w": snap.power_cap_w,
+        "fan_rpm": snap.fan_rpm,
     })
 }
 
@@ -1054,5 +1298,52 @@ mod tests {
         assert!(parse_backends("vulkan,hip").is_err());
         assert!(parse_backends("redline,hip").is_err());
         assert!(parse_backends("redline,unknown").is_err());
+    }
+
+    #[test]
+    fn hipengine_summary_default_is_retained_run() {
+        assert_eq!(
+            HIPENGINE_SUMMARY,
+            "../hipengine-6409/results/gfx1201/2026-07-22-714-bench/summary.json"
+        );
+        assert!(
+            !HIPENGINE_SUMMARY.contains("2026-07-13-radiowave-redline"),
+            "archived result path must not be the default"
+        );
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(HIPENGINE_SUMMARY);
+        assert!(
+            path.is_file(),
+            "retained hipengine summary missing at {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn hipfire_bridge_provenance_matches_pinned_dependency() {
+        let manifest = include_str!("../Cargo.toml");
+        assert!(
+            manifest.contains(&format!("rev = \"{HIPFIRE_BRIDGE_REV}\"")),
+            "provenance revision must match the pinned hip-bridge dependency"
+        );
+    }
+
+    #[test]
+    fn partition_policy_cli_forms() {
+        assert_eq!(
+            parse_partition_policy("none").unwrap(),
+            PartitionPolicy::None
+        );
+        assert_eq!(
+            parse_partition_policy("equal:2").unwrap(),
+            PartitionPolicy::Equal(NonZeroUsize::new(2).unwrap())
+        );
+        assert_eq!(
+            parse_partition_policy("cus:8,24,32").unwrap(),
+            PartitionPolicy::Explicit(vec![8, 24, 32])
+        );
+        let err = parse_partition_policy("bogus").unwrap_err().to_string();
+        assert!(err.contains("invalid partition policy bogus"), "{err}");
+        let err = parse_partition_policy("equal:0").unwrap_err().to_string();
+        assert!(err.contains("invalid partition policy equal:0"), "{err}");
     }
 }

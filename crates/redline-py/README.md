@@ -39,4 +39,30 @@ consumer's cache classification. VMEM-only consumers get Redline's minimal
 vector/L1 acquire; missing manifests or ambiguous kernels automatically retain
 the generic scalar/vector/L1 boundary.
 
+## Per-token decode: build once, patch, replay
+
+The retained IB is the whole point for autoregressive decode — build it **once**,
+then every token patch only the scalar/pointer that changed (position, KV-cache
+slot, ...) in place and replay. No IB rebuild, one doorbell per token. A leading
+same-agent cache acquire is emitted so each replay re-reads the mutated kernargs.
+
+```python
+gpu = rl.Gpu(0)
+mod = gpu.load_module(open("acc.hsaco", "rb").read(), None)
+acc = gpu.alloc(4)
+# acc_k(unsigned* acc, unsigned val): acc@0 (8B), val@8 (4B)
+kernarg = acc.address().to_bytes(8, "little") + (0).to_bytes(4, "little")
+ib = gpu.build(mod, [("acc_k.kd", (1, 1, 1), (1, 1, 1), 0, kernarg, True)])
+
+for token in range(1, T + 1):
+    ib.set_kernargs(0, token.to_bytes(4, "little"), byte_offset=8)  # patch val
+    ib.replay()
+```
+
+`set_kernargs(dispatch_index, data, byte_offset=0)` overwrites the retained
+kernarg segment of one dispatch (in `build` record order) in place; the PM4
+packet keeps the same address, so no rebuild is needed. See
+[`examples/decode_kernargs.py`](examples/decode_kernargs.py) for a
+correctness-gated run. The C-ABI mirror is `rl_pm4_ib_set_kernargs`.
+
 Licensed under Apache-2.0. "Redline" is a trademark of Kaden Schutt.

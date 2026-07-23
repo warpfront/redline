@@ -9,10 +9,12 @@ use radiowave::{
     CodeObjectCertification, CodeObjectInspection, MutableReadCache, SchedulerProfile, Wavefront,
 };
 use redline_dispatch::aql::{
-    load_symbols, Executable, Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, GpuDevice,
-    GpuMultiQueueTiming, GpuSelector, KernargBuffer, KernargPool, Kernel, LaunchGeometry,
-    MultiQueuePm4Ib, QueuePolicy, Runtime, SingleQueuePm4Ib,
+    create_queue_set, load_symbols, Executable, Gfx10Pm4CommandBuffer, Gfx12DispatchMode,
+    Gfx12KernelImage, Gfx12Pm4CommandBuffer, GpuDevice, GpuMultiQueueTiming, GpuSelector,
+    KernargBuffer, KernargPool, Kernel, LaunchGeometry, MultiQueuePm4Ib, QueuePolicy, Runtime,
+    SingleQueuePm4Ib,
 };
+use redline_dispatch::partition::{self, CuPartition, PartitionPolicy};
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -56,6 +58,21 @@ impl RmwBoundary {
     }
 }
 
+/// Effective per-lane CU mask after partitioned queue creation.
+#[derive(Clone, Debug)]
+pub struct EffectiveLaneCuMask {
+    pub lane: u32,
+    /// Effective affinity from [`redline_rocr::AqlQueue::cu_mask`] (one bool
+    /// per device CU). That API returns the post-set cache after a successful
+    /// `create_with_cu_mask`, not the raw partition config and not the stale
+    /// ROCr get-mask all-CU vector. `None` only when probe create/read failed.
+    pub cu_mask: Option<Vec<bool>>,
+    pub enabled_cu_count: Option<u32>,
+    pub cu_mask_was_reduced: Option<bool>,
+    /// Populated only when `cu_mask` is `None`.
+    pub reason: Option<String>,
+}
+
 pub struct RedlineBackend {
     _runtime: Runtime,
     device: GpuDevice,
@@ -64,9 +81,16 @@ pub struct RedlineBackend {
     pm4_family: Pm4Family,
     queue_policy: QueuePolicy,
     independent_queue_count: usize,
+    partition_policy: PartitionPolicy,
+    /// Validated CU slices from `partition_policy` (empty when policy is None).
+    applied_partitions: Vec<CuPartition>,
+    /// Effective CU masks from a post-create `AqlQueue::cu_mask` probe.
+    effective_partition_masks: Vec<EffectiveLaneCuMask>,
+    device_cu_count: u32,
     pub name: String,
     pub pci: String,
     pub rmw_boundary: RmwBoundary,
+    dispatch_mode: Gfx12DispatchMode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,13 +169,41 @@ impl RdnaPm4Commands {
         kernel: &Kernel,
         geometry: LaunchGeometry,
         kernarg_address: *mut c_void,
+        mode: Gfx12DispatchMode,
     ) -> Result<()> {
         match self {
             Self::Legacy(commands) => {
+                let _ = mode;
                 commands.dispatch(kernel, geometry, 0, kernarg_address)?;
             }
             Self::Gfx12(commands) => {
-                commands.dispatch(kernel, geometry, 0, kernarg_address)?;
+                // Mirror Gfx12Pm4CommandBuffer::dispatch, then select initiator/dims.
+                const ENABLE_SGPR_KERNARG_SEGMENT_PTR: u16 = 1 << 3;
+                let image = Gfx12KernelImage::from_hsa(kernel)?;
+                let pm4 = kernel
+                    .pm4_metadata()
+                    .context("missing kernel PM4 descriptor for Gfx12 dispatch")?;
+                let needs_kernarg =
+                    pm4.kernel_code_properties & ENABLE_SGPR_KERNARG_SEGMENT_PTR != 0;
+                if needs_kernarg && kernarg_address.is_null() {
+                    anyhow::bail!("null kernarg address for Gfx12 dispatch");
+                }
+                let mut user_sgprs = [0_u32; 2];
+                let user_sgprs = if needs_kernarg {
+                    let address = kernarg_address as usize as u64;
+                    user_sgprs[0] = address as u32;
+                    user_sgprs[1] = (address >> 32) as u32;
+                    &user_sgprs[..]
+                } else {
+                    &[]
+                };
+                commands.dispatch_image_with_mode(
+                    &image,
+                    geometry,
+                    0,
+                    user_sgprs,
+                    mode,
+                )?;
             }
         }
         Ok(())
@@ -167,13 +219,56 @@ struct ProfileExecutables {
 }
 
 impl RedlineBackend {
-    pub fn new(rmw_boundary: RmwBoundary, queue_policy: QueuePolicy) -> Result<Self> {
+    pub fn new(
+        rmw_boundary: RmwBoundary,
+        queue_policy: QueuePolicy,
+        partition_policy: PartitionPolicy,
+        dispatch_mode: Gfx12DispatchMode,
+    ) -> Result<Self> {
         let runtime = Runtime::initialize(load_symbols()?).context("initialize public ROCr")?;
         let device = runtime.select_gpu(GpuSelector::Ordinal(0))?;
         let name = device.name().to_owned();
         let independent_queue_count = queue_policy.resolve(&name, usize::MAX);
         let pm4_family = Pm4Family::from_device(&name)?;
         let pci = device.pci_bus_id().to_string();
+
+        // Fail closed on topology mismatch before any row runs. Serial /
+        // single-lane IBs intentionally stay full-device; that is observable
+        // via partition_applied and the notice below, not a silent downgrade
+        // of an invalid multi-lane policy.
+        let (applied_partitions, device_cu_count, effective_partition_masks) =
+            if !matches!(partition_policy, PartitionPolicy::None) {
+                let device_cu_count = device.compute_unit_count().with_context(|| {
+                    format!("query compute unit count for partition policy on {name}")
+                })?;
+                let partitions =
+                    partition::validate(&partition_policy, device_cu_count).with_context(|| {
+                        format!(
+                            "invalid partition policy configuration for device {name} ({device_cu_count} CUs)"
+                        )
+                    })?;
+                if independent_queue_count <= 1 {
+                    anyhow::bail!(
+                        "partition policy configuration error: policy requires multi-queue lanes but queue policy resolved to {independent_queue_count} independent queue(s) on {name}"
+                    );
+                }
+                if partitions.len() != independent_queue_count {
+                    anyhow::bail!(
+                        "partition policy configuration error: policy produces {} CU slices but independent queue count is {independent_queue_count} on {name}",
+                        partitions.len()
+                    );
+                }
+                eprintln!(
+                    "note: --partition-policy applies only to multi-lane independent retained-PM4 IBs; serial and single-lane rows intentionally stay full-device (see per-row partition_applied)"
+                );
+                let effective =
+                    Self::probe_effective_partition_masks(&device, &partitions, &partition_policy);
+                (partitions, device_cu_count, effective)
+            } else {
+                let device_cu_count = device.compute_unit_count().unwrap_or(0);
+                (Vec::new(), device_cu_count, Vec::new())
+            };
+
         let mut profiles = Vec::with_capacity(SchedulerProfile::ALL.len());
         for scheduler_profile in SchedulerProfile::ALL {
             let wave32 = embedded_code_object(scheduler_profile, Wavefront::Wave32);
@@ -205,9 +300,14 @@ impl RedlineBackend {
             pm4_family,
             queue_policy,
             independent_queue_count,
+            partition_policy,
+            applied_partitions,
+            effective_partition_masks,
+            device_cu_count,
             name,
             pci,
             rmw_boundary,
+            dispatch_mode,
         })
     }
 
@@ -295,7 +395,7 @@ impl RedlineBackend {
                     [spec.grid_groups * spec.block, 1, 1],
                     [spec.block as u16, 1, 1],
                 )?;
-                lane_commands.dispatch(&kernel, geometry, karg_address)?;
+                lane_commands.dispatch(&kernel, geometry, karg_address, self.dispatch_mode)?;
 
                 if let Some(second) = spec.second_kernel {
                     self.dependency_boundary(
@@ -325,7 +425,7 @@ impl RedlineBackend {
                         [spec.second_grid_groups * spec.stage_block(true), 1, 1],
                         [spec.stage_block(true) as u16, 1, 1],
                     )?;
-                    lane_commands.dispatch(&kernel, geometry, karg_address)?;
+                    lane_commands.dispatch(&kernel, geometry, karg_address, self.dispatch_mode)?;
                 }
                 if mode == TimingMode::SerialLatency && operation + 1 < iterations {
                     self.dependency_boundary(
@@ -375,8 +475,102 @@ impl RedlineBackend {
         self.queue_policy
     }
 
+    pub fn dispatch_mode(&self) -> Gfx12DispatchMode {
+        self.dispatch_mode
+    }
+
     pub fn independent_queue_count(&self) -> usize {
         self.independent_queue_count
+    }
+
+    /// True when this row's retained multi-lane IB will install CU masks from
+    /// the configured partition policy. Serial and single-lane rows stay
+    /// full-device by design.
+    pub fn partition_applied_for(&self, mode: TimingMode, iterations: usize) -> bool {
+        let lane_count = self.queue_count_for(mode, iterations);
+        self.partition_for_lanes(lane_count).is_some()
+    }
+
+    /// Validated CU slices from the configured partition policy (empty when
+    /// policy is [`PartitionPolicy::None`]). Requested topology only — see
+    /// [`Self::effective_partition_masks`] for HSA-reported affinity.
+    pub fn applied_partitions(&self) -> &[CuPartition] {
+        &self.applied_partitions
+    }
+
+    /// Effective per-lane CU masks after partitioned queue creation.
+    ///
+    /// Populated at backend init via a throwaway `create_queue_set` +
+    /// `AqlQueue::cu_mask` / `cu_mask_was_reduced` probe (post-set effective
+    /// affinity, not the partition config copy). Failed lanes carry
+    /// `cu_mask: None` and a reason.
+    pub fn effective_partition_masks(&self) -> &[EffectiveLaneCuMask] {
+        &self.effective_partition_masks
+    }
+
+    /// Device CU count used when validating/applying the partition policy.
+    pub fn device_cu_count(&self) -> u32 {
+        self.device_cu_count
+    }
+
+    /// Create partitioned queues, read each lane's effective CU mask, then drop.
+    fn probe_effective_partition_masks(
+        device: &GpuDevice,
+        partitions: &[CuPartition],
+        policy: &PartitionPolicy,
+    ) -> Vec<EffectiveLaneCuMask> {
+        let queue_size = *device.queue_size_range().start();
+        let queue_count = partitions.len();
+        let queues = match create_queue_set(device, queue_count, queue_size, Some(policy)) {
+            Ok(queues) => queues,
+            Err(error) => {
+                return partitions
+                    .iter()
+                    .map(|part| EffectiveLaneCuMask {
+                        lane: part.index,
+                        cu_mask: None,
+                        enabled_cu_count: None,
+                        cu_mask_was_reduced: None,
+                        reason: Some(format!("partitioned queue create failed: {error}")),
+                    })
+                    .collect();
+            }
+        };
+        (0..queue_count)
+            .map(|lane| {
+                let part_index = partitions
+                    .get(lane)
+                    .map(|part| part.index)
+                    .unwrap_or(lane as u32);
+                let reduced = queues.cu_mask_was_reduced(lane);
+                match queues.cu_mask(lane, device) {
+                    Some(Ok(mask)) => {
+                        let enabled_cu_count = mask.iter().filter(|&&bit| bit).count() as u32;
+                        EffectiveLaneCuMask {
+                            lane: part_index,
+                            cu_mask: Some(mask),
+                            enabled_cu_count: Some(enabled_cu_count),
+                            cu_mask_was_reduced: reduced,
+                            reason: None,
+                        }
+                    }
+                    Some(Err(error)) => EffectiveLaneCuMask {
+                        lane: part_index,
+                        cu_mask: None,
+                        enabled_cu_count: None,
+                        cu_mask_was_reduced: reduced,
+                        reason: Some(format!("cu_mask read-back failed: {error}")),
+                    },
+                    None => EffectiveLaneCuMask {
+                        lane: part_index,
+                        cu_mask: None,
+                        enabled_cu_count: None,
+                        cu_mask_was_reduced: reduced,
+                        reason: Some(format!("queue lane {lane} missing after create")),
+                    },
+                }
+            })
+            .collect()
     }
 
     pub fn dependency_policy_name(
@@ -434,25 +628,68 @@ impl RedlineBackend {
         }
     }
 
+    /// CU partition applies only when the retained IB owns multiple queues and
+    /// the policy carves the same number of slices. Serial / ownership IBs stay
+    /// on the full device so single-lane paths do not silently bind one half.
+    fn partition_for_lanes(&self, lane_count: usize) -> Option<&PartitionPolicy> {
+        if lane_count <= 1 || matches!(self.partition_policy, PartitionPolicy::None) {
+            None
+        } else {
+            Some(&self.partition_policy)
+        }
+    }
+
     fn create_ib(&self, commands: &RdnaPm4Commands, profiled: bool) -> Result<SingleQueuePm4Ib> {
+        // Ownership and serial IBs are always one queue on the full device.
+        let partition = None;
         match (self.pm4_family, commands, profiled) {
             (Pm4Family::Gfx10, RdnaPm4Commands::Legacy(commands), false) => Ok(
-                SingleQueuePm4Ib::create_gfx10(&self.device, &self.pool, commands)?,
+                SingleQueuePm4Ib::create_gfx10_with_partition(
+                    &self.device,
+                    &self.pool,
+                    commands,
+                    partition,
+                )?,
             ),
             (Pm4Family::Gfx10, RdnaPm4Commands::Legacy(commands), true) => Ok(
-                SingleQueuePm4Ib::create_profiled_gfx10(&self.device, &self.pool, commands)?,
+                SingleQueuePm4Ib::create_profiled_gfx10_with_partition(
+                    &self.device,
+                    &self.pool,
+                    commands,
+                    partition,
+                )?,
             ),
             (Pm4Family::Gfx11, RdnaPm4Commands::Legacy(commands), false) => Ok(
-                SingleQueuePm4Ib::create_gfx11(&self.device, &self.pool, commands)?,
+                SingleQueuePm4Ib::create_gfx11_with_partition(
+                    &self.device,
+                    &self.pool,
+                    commands,
+                    partition,
+                )?,
             ),
             (Pm4Family::Gfx11, RdnaPm4Commands::Legacy(commands), true) => Ok(
-                SingleQueuePm4Ib::create_profiled_gfx11(&self.device, &self.pool, commands)?,
+                SingleQueuePm4Ib::create_profiled_gfx11_with_partition(
+                    &self.device,
+                    &self.pool,
+                    commands,
+                    partition,
+                )?,
             ),
             (Pm4Family::Gfx12, RdnaPm4Commands::Gfx12(commands), false) => Ok(
-                SingleQueuePm4Ib::create(&self.device, &self.pool, commands)?,
+                SingleQueuePm4Ib::create_with_partition(
+                    &self.device,
+                    &self.pool,
+                    commands,
+                    partition,
+                )?,
             ),
             (Pm4Family::Gfx12, RdnaPm4Commands::Gfx12(commands), true) => Ok(
-                SingleQueuePm4Ib::create_profiled(&self.device, &self.pool, commands)?,
+                SingleQueuePm4Ib::create_profiled_with_partition(
+                    &self.device,
+                    &self.pool,
+                    commands,
+                    partition,
+                )?,
             ),
             _ => anyhow::bail!("PM4 command family does not match selected device"),
         }
@@ -468,6 +705,7 @@ impl RedlineBackend {
                 self.create_ib(&commands[0], true)?,
             ));
         }
+        let partition = self.partition_for_lanes(commands.len());
         match self.pm4_family {
             Pm4Family::Gfx10 | Pm4Family::Gfx11 => {
                 let encoded = commands
@@ -480,12 +718,18 @@ impl RedlineBackend {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let ib = match self.pm4_family {
-                    Pm4Family::Gfx10 => {
-                        MultiQueuePm4Ib::create_profiled_gfx10(&self.device, &self.pool, &encoded)?
-                    }
-                    Pm4Family::Gfx11 => {
-                        MultiQueuePm4Ib::create_profiled_gfx11(&self.device, &self.pool, &encoded)?
-                    }
+                    Pm4Family::Gfx10 => MultiQueuePm4Ib::create_profiled_gfx10_with_partition(
+                        &self.device,
+                        &self.pool,
+                        &encoded,
+                        partition,
+                    )?,
+                    Pm4Family::Gfx11 => MultiQueuePm4Ib::create_profiled_gfx11_with_partition(
+                        &self.device,
+                        &self.pool,
+                        &encoded,
+                        partition,
+                    )?,
                     Pm4Family::Gfx12 => unreachable!(),
                 };
                 Ok(ProfiledPm4Replay::Multi(ib))
@@ -500,11 +744,14 @@ impl RedlineBackend {
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok(ProfiledPm4Replay::Multi(MultiQueuePm4Ib::create_profiled(
-                    &self.device,
-                    &self.pool,
-                    &encoded,
-                )?))
+                Ok(ProfiledPm4Replay::Multi(
+                    MultiQueuePm4Ib::create_profiled_with_partition(
+                        &self.device,
+                        &self.pool,
+                        &encoded,
+                        partition,
+                    )?,
+                ))
             }
         }
     }
@@ -653,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn embedded_manifest_certifies_all_explicit_vmem_consumers() {
+    fn embedded_manifest_drives_fail_closed_cache_boundaries() {
         for scheduler_profile in SchedulerProfile::ALL {
             for wavefront in [Wavefront::Wave32, Wavefront::Wave64] {
                 let embedded = embedded_code_object(scheduler_profile, wavefront);
@@ -664,10 +911,13 @@ mod tests {
                     scheduler_profile,
                 )
                 .unwrap();
-                assert!(inspection
-                    .kernel("memory_gather")
-                    .unwrap()
-                    .certifies_vmem_only_rmw());
+                assert_eq!(
+                    inspection
+                        .kernel("memory_gather")
+                        .unwrap()
+                        .mutable_read_cache,
+                    MutableReadCache::ScalarOrUnknown
+                );
                 assert!(inspection
                     .kernel("dispatch_tiny")
                     .unwrap()

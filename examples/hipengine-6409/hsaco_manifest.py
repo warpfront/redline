@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -81,7 +82,21 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("hsaco", type=Path)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--readobj", default="/opt/rocm/llvm/bin/llvm-readobj")
+    parser.add_argument(
+        "--readobj",
+        default=shutil.which("llvm-readobj")
+        or next(
+            (
+                candidate
+                for candidate in (
+                    "/opt/rocm/llvm/bin/llvm-readobj",
+                    "/opt/rocm/core/lib/llvm/bin/llvm-readobj",
+                )
+                if Path(candidate).exists()
+            ),
+            "/opt/rocm/llvm/bin/llvm-readobj",
+        ),
+    )
     args = parser.parse_args()
     kernels = parse_kernels(metadata_text(args.hsaco, args.readobj))
     args.out.write_text(json.dumps({"kernels": kernels}, indent=2) + "\n")

@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
+[package]
+name = "redline-hipgraph"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "hipGraph-compatible ABI backed by redline PM4 replay"
+
+[lib]
+name = "redline_hipgraph"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+python = ["dep:pyo3"]
+
+[dependencies]
+libc = "0.2"
+pyo3 = { version = "0.24", optional = true, features = ["extension-module", "abi3-py38"] }
+redline-dispatch = { path = "../redline-dispatch" }
+redline-rocr = { path = "../redline-rocr" }

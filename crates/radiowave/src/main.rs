@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
 
 use radiowave::{
-    ArchProfile, CampaignLedger, CampaignStarted, CandidateSubmission, CandidateVerdict,
-    CompileRequest, Compiler, Inspector, KernelReport, ResourceAssessment, ResourceContract,
-    SchedulerProfile, Wavefront, support_header_path,
+    resolve_hipcc, ArchProfile, CampaignLedger, CampaignStarted, CandidateSubmission,
+    CandidateVerdict, CompileRequest, Compiler, Inspector, KernelReport, ResourceAssessment,
+    ResourceContract, SchedulerProfile, Wavefront, support_header_path,
 };
 use std::env;
 use std::error::Error;
@@ -39,7 +39,7 @@ fn compile(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
     let mut arch = env::var("RADIOWAVE_ARCH").ok();
     let mut wavefront = Wavefront::Wave32;
     let mut scheduler_profile = SchedulerProfile::Default;
-    let mut hipcc = env::var_os("HIPCC").map(PathBuf::from);
+    let mut hipcc = env::var_os("HIPCC").filter(|v| !v.is_empty()).map(PathBuf::from);
     let mut manifest = None;
     let mut defines = Vec::new();
     let mut extra_args = Vec::new();
@@ -115,9 +115,7 @@ fn compile(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
 fn inspect(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
     let mut input = None;
     let mut arch = env::var("RADIOWAVE_ARCH").ok();
-    let mut hipcc = env::var_os("HIPCC")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("hipcc"));
+    let mut hipcc = resolve_hipcc();
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.to_str() {
@@ -349,9 +347,7 @@ fn assess(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
     let mut incumbent_vgprs = None;
     let mut incumbent_wavefront = 32;
     let mut required_wavefront = None;
-    let mut hipcc = env::var_os("HIPCC")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("hipcc"));
+    let mut hipcc = resolve_hipcc();
     let mut output = None;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {

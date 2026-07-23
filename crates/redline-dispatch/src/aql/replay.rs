@@ -18,6 +18,9 @@ use redline_rocr::{
     RuntimeError,
 };
 
+use super::queue_policy::create_queue_set;
+use crate::partition::PartitionPolicy;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QuiescenceTransition {
     Completed,
@@ -68,9 +71,27 @@ impl SingleQueuePm4Ib {
         pool: &KernargPool,
         commands: &Gfx12Pm4CommandBuffer,
     ) -> Result<Self, ReplayError> {
+        Self::create_with_partition(device, pool, commands, None)
+    }
+
+    /// Create a retained GFX12 IB, optionally CU-masking the single queue.
+    pub fn create_with_partition(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx12Pm4CommandBuffer,
+        partition_policy: Option<&PartitionPolicy>,
+    ) -> Result<Self, ReplayError> {
         ensure_device_family(device, "gfx12")?;
         let bytes = commands.as_bytes();
-        Self::create_encoded(device, pool, &bytes, commands.len_dwords(), None, None)
+        Self::create_encoded(
+            device,
+            pool,
+            &bytes,
+            commands.len_dwords(),
+            None,
+            None,
+            partition_policy,
+        )
     }
 
     /// Create a retained GFX10 IB. Unlike the GFX12 constructor this accepts
@@ -81,9 +102,26 @@ impl SingleQueuePm4Ib {
         pool: &KernargPool,
         commands: &Gfx10Pm4CommandBuffer,
     ) -> Result<Self, ReplayError> {
+        Self::create_gfx10_with_partition(device, pool, commands, None)
+    }
+
+    pub fn create_gfx10_with_partition(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx10Pm4CommandBuffer,
+        partition_policy: Option<&PartitionPolicy>,
+    ) -> Result<Self, ReplayError> {
         ensure_device_family(device, "gfx10")?;
         let bytes = commands.as_bytes();
-        Self::create_encoded(device, pool, &bytes, commands.len_dwords(), None, None)
+        Self::create_encoded(
+            device,
+            pool,
+            &bytes,
+            commands.len_dwords(),
+            None,
+            None,
+            partition_policy,
+        )
     }
 
     /// Create a retained GFX11 IB using the shared GFX10/GFX11 register map.
@@ -92,9 +130,26 @@ impl SingleQueuePm4Ib {
         pool: &KernargPool,
         commands: &Gfx10Pm4CommandBuffer,
     ) -> Result<Self, ReplayError> {
+        Self::create_gfx11_with_partition(device, pool, commands, None)
+    }
+
+    pub fn create_gfx11_with_partition(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx10Pm4CommandBuffer,
+        partition_policy: Option<&PartitionPolicy>,
+    ) -> Result<Self, ReplayError> {
         ensure_device_family(device, "gfx11")?;
         let bytes = commands.as_bytes();
-        Self::create_encoded(device, pool, &bytes, commands.len_dwords(), None, None)
+        Self::create_encoded(
+            device,
+            pool,
+            &bytes,
+            commands.len_dwords(),
+            None,
+            None,
+            partition_policy,
+        )
     }
 
     /// Create a profiled retained GFX10 IB.
@@ -103,7 +158,16 @@ impl SingleQueuePm4Ib {
         pool: &KernargPool,
         commands: &Gfx10Pm4CommandBuffer,
     ) -> Result<Self, ReplayError> {
-        Self::create_profiled_legacy(device, pool, commands, "gfx10")
+        Self::create_profiled_legacy(device, pool, commands, "gfx10", None)
+    }
+
+    pub fn create_profiled_gfx10_with_partition(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx10Pm4CommandBuffer,
+        partition_policy: Option<&PartitionPolicy>,
+    ) -> Result<Self, ReplayError> {
+        Self::create_profiled_legacy(device, pool, commands, "gfx10", partition_policy)
     }
 
     /// Create a profiled retained GFX11 IB using the shared legacy map.
@@ -112,7 +176,16 @@ impl SingleQueuePm4Ib {
         pool: &KernargPool,
         commands: &Gfx10Pm4CommandBuffer,
     ) -> Result<Self, ReplayError> {
-        Self::create_profiled_legacy(device, pool, commands, "gfx11")
+        Self::create_profiled_legacy(device, pool, commands, "gfx11", None)
+    }
+
+    pub fn create_profiled_gfx11_with_partition(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx10Pm4CommandBuffer,
+        partition_policy: Option<&PartitionPolicy>,
+    ) -> Result<Self, ReplayError> {
+        Self::create_profiled_legacy(device, pool, commands, "gfx11", partition_policy)
     }
 
     /// Create a retained IB whose one vendor-AQL completion signal carries
@@ -121,6 +194,15 @@ impl SingleQueuePm4Ib {
         device: &GpuDevice,
         pool: &KernargPool,
         commands: &Gfx12Pm4CommandBuffer,
+    ) -> Result<Self, ReplayError> {
+        Self::create_profiled_with_partition(device, pool, commands, None)
+    }
+
+    pub fn create_profiled_with_partition(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &Gfx12Pm4CommandBuffer,
+        partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
         ensure_device_family(device, "gfx12")?;
         if commands.is_empty() {
@@ -139,6 +221,7 @@ impl SingleQueuePm4Ib {
             timed_commands.len_dwords(),
             Some(timestamps),
             Some(frequency_hz),
+            partition_policy,
         )
     }
 
@@ -147,6 +230,7 @@ impl SingleQueuePm4Ib {
         pool: &KernargPool,
         commands: &Gfx10Pm4CommandBuffer,
         family: &'static str,
+        partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
         ensure_device_family(device, family)?;
         if commands.is_empty() {
@@ -165,6 +249,7 @@ impl SingleQueuePm4Ib {
             timed_commands.len_dwords(),
             Some(timestamps),
             Some(frequency_hz),
+            partition_policy,
         )
     }
 
@@ -175,6 +260,7 @@ impl SingleQueuePm4Ib {
         dwords: u32,
         timestamps: Option<KernargBuffer>,
         timestamp_frequency_hz: Option<u64>,
+        partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
         if dwords == 0 {
             return Err(ReplayError::EmptyGraph);
@@ -185,7 +271,7 @@ impl SingleQueuePm4Ib {
         let packet =
             PacketImage::pm4_indirect_buffer(indirect.address(), dwords, completion.raw())?;
         let queue_size = *device.queue_size_range().start();
-        let queues = QueueSet::create(device, 1, queue_size)?;
+        let queues = create_queue_set(device, 1, queue_size, partition_policy)?;
         Ok(Self {
             queues,
             completion,
@@ -349,8 +435,17 @@ impl MultiQueuePm4Ib {
         pool: &KernargPool,
         commands: &[Gfx12Pm4CommandBuffer],
     ) -> Result<Self, ReplayError> {
+        Self::create_with_partition(device, pool, commands, None)
+    }
+
+    pub fn create_with_partition(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[Gfx12Pm4CommandBuffer],
+        partition_policy: Option<&PartitionPolicy>,
+    ) -> Result<Self, ReplayError> {
         ensure_device_family(device, "gfx12")?;
-        Self::create_unprofiled_encoded(device, pool, commands, |commands| {
+        Self::create_unprofiled_encoded(device, pool, commands, partition_policy, |commands| {
             (commands.as_bytes(), commands.len_dwords())
         })
     }
@@ -361,8 +456,17 @@ impl MultiQueuePm4Ib {
         pool: &KernargPool,
         commands: &[Gfx10Pm4CommandBuffer],
     ) -> Result<Self, ReplayError> {
+        Self::create_gfx10_with_partition(device, pool, commands, None)
+    }
+
+    pub fn create_gfx10_with_partition(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[Gfx10Pm4CommandBuffer],
+        partition_policy: Option<&PartitionPolicy>,
+    ) -> Result<Self, ReplayError> {
         ensure_device_family(device, "gfx10")?;
-        Self::create_unprofiled_encoded(device, pool, commands, |commands| {
+        Self::create_unprofiled_encoded(device, pool, commands, partition_policy, |commands| {
             (commands.as_bytes(), commands.len_dwords())
         })
     }
@@ -373,8 +477,17 @@ impl MultiQueuePm4Ib {
         pool: &KernargPool,
         commands: &[Gfx10Pm4CommandBuffer],
     ) -> Result<Self, ReplayError> {
+        Self::create_gfx11_with_partition(device, pool, commands, None)
+    }
+
+    pub fn create_gfx11_with_partition(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[Gfx10Pm4CommandBuffer],
+        partition_policy: Option<&PartitionPolicy>,
+    ) -> Result<Self, ReplayError> {
         ensure_device_family(device, "gfx11")?;
-        Self::create_unprofiled_encoded(device, pool, commands, |commands| {
+        Self::create_unprofiled_encoded(device, pool, commands, partition_policy, |commands| {
             (commands.as_bytes(), commands.len_dwords())
         })
     }
@@ -385,14 +498,29 @@ impl MultiQueuePm4Ib {
         pool: &KernargPool,
         commands: &[Gfx12Pm4CommandBuffer],
     ) -> Result<Self, ReplayError> {
+        Self::create_profiled_with_partition(device, pool, commands, None)
+    }
+
+    pub fn create_profiled_with_partition(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[Gfx12Pm4CommandBuffer],
+        partition_policy: Option<&PartitionPolicy>,
+    ) -> Result<Self, ReplayError> {
         ensure_device_family(device, "gfx12")?;
         if commands.iter().any(Gfx12Pm4CommandBuffer::is_empty) {
             return Err(ReplayError::EmptyGraph);
         }
-        Self::create_profiled_encoded(device, pool, commands, |commands, start, end| {
-            let timed = commands.with_gpu_timestamps(start, end);
-            (timed.as_bytes(), timed.len_dwords())
-        })
+        Self::create_profiled_encoded(
+            device,
+            pool,
+            commands,
+            partition_policy,
+            |commands, start, end| {
+                let timed = commands.with_gpu_timestamps(start, end);
+                (timed.as_bytes(), timed.len_dwords())
+            },
+        )
     }
 
     /// Create profiled retained GFX10 IBs, one per queue lane.
@@ -401,14 +529,29 @@ impl MultiQueuePm4Ib {
         pool: &KernargPool,
         commands: &[Gfx10Pm4CommandBuffer],
     ) -> Result<Self, ReplayError> {
+        Self::create_profiled_gfx10_with_partition(device, pool, commands, None)
+    }
+
+    pub fn create_profiled_gfx10_with_partition(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[Gfx10Pm4CommandBuffer],
+        partition_policy: Option<&PartitionPolicy>,
+    ) -> Result<Self, ReplayError> {
         ensure_device_family(device, "gfx10")?;
         if commands.iter().any(Gfx10Pm4CommandBuffer::is_empty) {
             return Err(ReplayError::EmptyGraph);
         }
-        Self::create_profiled_encoded(device, pool, commands, |commands, start, end| {
-            let timed = commands.with_gpu_timestamps(start, end);
-            (timed.as_bytes(), timed.len_dwords())
-        })
+        Self::create_profiled_encoded(
+            device,
+            pool,
+            commands,
+            partition_policy,
+            |commands, start, end| {
+                let timed = commands.with_gpu_timestamps(start, end);
+                (timed.as_bytes(), timed.len_dwords())
+            },
+        )
     }
 
     /// Create profiled retained GFX11 IBs using the legacy register map, one
@@ -418,20 +561,36 @@ impl MultiQueuePm4Ib {
         pool: &KernargPool,
         commands: &[Gfx10Pm4CommandBuffer],
     ) -> Result<Self, ReplayError> {
+        Self::create_profiled_gfx11_with_partition(device, pool, commands, None)
+    }
+
+    pub fn create_profiled_gfx11_with_partition(
+        device: &GpuDevice,
+        pool: &KernargPool,
+        commands: &[Gfx10Pm4CommandBuffer],
+        partition_policy: Option<&PartitionPolicy>,
+    ) -> Result<Self, ReplayError> {
         ensure_device_family(device, "gfx11")?;
         if commands.iter().any(Gfx10Pm4CommandBuffer::is_empty) {
             return Err(ReplayError::EmptyGraph);
         }
-        Self::create_profiled_encoded(device, pool, commands, |commands, start, end| {
-            let timed = commands.with_gpu_timestamps(start, end);
-            (timed.as_bytes(), timed.len_dwords())
-        })
+        Self::create_profiled_encoded(
+            device,
+            pool,
+            commands,
+            partition_policy,
+            |commands, start, end| {
+                let timed = commands.with_gpu_timestamps(start, end);
+                (timed.as_bytes(), timed.len_dwords())
+            },
+        )
     }
 
     fn create_profiled_encoded<C>(
         device: &GpuDevice,
         pool: &KernargPool,
         commands: &[C],
+        partition_policy: Option<&PartitionPolicy>,
         encode: impl Fn(&C, u64, u64) -> (Vec<u8>, u32),
     ) -> Result<Self, ReplayError> {
         if commands.is_empty() {
@@ -454,6 +613,7 @@ impl MultiQueuePm4Ib {
             encoded,
             Some(timestamps),
             Some(timestamp_frequency_hz),
+            partition_policy,
         )
     }
 
@@ -461,10 +621,11 @@ impl MultiQueuePm4Ib {
         device: &GpuDevice,
         pool: &KernargPool,
         commands: &[C],
+        partition_policy: Option<&PartitionPolicy>,
         encode: impl Fn(&C) -> (Vec<u8>, u32),
     ) -> Result<Self, ReplayError> {
         let encoded = commands.iter().map(encode).collect::<Vec<_>>();
-        Self::create_encoded(device, pool, encoded, None, None)
+        Self::create_encoded(device, pool, encoded, None, None, partition_policy)
     }
 
     fn create_encoded(
@@ -473,6 +634,7 @@ impl MultiQueuePm4Ib {
         encoded: Vec<(Vec<u8>, u32)>,
         timestamps: Option<Vec<KernargBuffer>>,
         timestamp_frequency_hz: Option<u64>,
+        partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
         if encoded.is_empty() || encoded.iter().any(|(_, dwords)| *dwords == 0) {
             return Err(ReplayError::EmptyGraph);
@@ -491,7 +653,7 @@ impl MultiQueuePm4Ib {
             batches.push(vec![packet]);
         }
         let queue_size = *device.queue_size_range().start();
-        let queues = QueueSet::create(device, batches.len(), queue_size)?;
+        let queues = create_queue_set(device, batches.len(), queue_size, partition_policy)?;
         Ok(Self {
             queues,
             completions,
@@ -2870,6 +3032,7 @@ fn validate_nodes(
 pub enum ReplayError {
     Runtime(RuntimeError),
     Packet(PacketError),
+    PartitionedQueue(super::queue_policy::PartitionedQueueError),
     EmptyGraph,
     EmptyPhaseSet,
     EmptyTokenBatch,
@@ -2939,6 +3102,12 @@ impl From<RuntimeError> for ReplayError {
     }
 }
 
+impl From<super::queue_policy::PartitionedQueueError> for ReplayError {
+    fn from(value: super::queue_policy::PartitionedQueueError) -> Self {
+        Self::PartitionedQueue(value)
+    }
+}
+
 impl From<PacketError> for ReplayError {
     fn from(value: PacketError) -> Self {
         Self::Packet(value)
@@ -2950,6 +3119,7 @@ impl fmt::Display for ReplayError {
         match self {
             Self::Runtime(error) => error.fmt(f),
             Self::Packet(error) => error.fmt(f),
+            Self::PartitionedQueue(error) => error.fmt(f),
             Self::EmptyGraph => write!(f, "cannot record an empty AQL graph"),
             Self::EmptyPhaseSet => write!(f, "two-queue replay requires at least one phase"),
             Self::EmptyTokenBatch => {

@@ -38,6 +38,39 @@ pub const AGENT_INFO_DEVICE: u32 = 17;
 pub const AMD_AGENT_INFO_BDFID: u32 = 0xA006;
 pub const AMD_AGENT_INFO_DOMAIN: u32 = 0xA00F;
 pub const AMD_AGENT_INFO_TIMESTAMP_FREQUENCY: u32 = 0xA016;
+pub const AMD_AGENT_INFO_COMPUTE_UNIT_COUNT: u32 = 0xA002;
+pub const AMD_AGENT_INFO_COOPERATIVE_COMPUTE_UNIT_COUNT: u32 = 0xA014;
+
+/// `hsa_signal_condition_t` values (hsa.h).
+pub const SIGNAL_CONDITION_EQ: u32 = 0;
+pub const SIGNAL_CONDITION_NE: u32 = 1;
+pub const SIGNAL_CONDITION_LT: u32 = 2;
+pub const SIGNAL_CONDITION_GTE: u32 = 3;
+
+/// `hsa_wait_state_t` values (hsa.h).
+pub const WAIT_STATE_BLOCKED: u32 = 0;
+pub const WAIT_STATE_ACTIVE: u32 = 1;
+
+/// `hsa_amd_queue_priority_t` values (hsa_ext_amd.h).
+pub const QUEUE_PRIORITY_LOW: u32 = 0;
+pub const QUEUE_PRIORITY_NORMAL: u32 = 1;
+pub const QUEUE_PRIORITY_HIGH: u32 = 2;
+
+/// `hsa_queue_info_attribute_t` values (hsa_ext_amd.h).
+pub const QUEUE_INFO_AGENT: u32 = 0;
+pub const QUEUE_INFO_DOORBELL_ID: u32 = 1;
+pub const QUEUE_INFO_USE_COUNT: u32 = 2;
+pub const QUEUE_INFO_HW_ID: u32 = 3;
+pub const QUEUE_INFO_PREFETCH_METADATA_DISPATCH_PKT_VERSION_MAJOR: u32 = 4;
+pub const QUEUE_INFO_PREFETCH_METADATA_DISPATCH_PKT_VERSION_MINOR: u32 = 5;
+pub const QUEUE_INFO_PREFETCH_METADATA_BARRIER_PKT_VERSION_MAJOR: u32 = 6;
+pub const QUEUE_INFO_PREFETCH_METADATA_BARRIER_PKT_VERSION_MINOR: u32 = 7;
+pub const QUEUE_INFO_PREFETCH_METADATA_RING_BUFFER: u32 = 8;
+pub const QUEUE_INFO_PROPERTIES: u32 = 9;
+pub const QUEUE_INFO_VM_FAULT_STATUS: u32 = 10;
+pub const QUEUE_INFO_VM_FAULT_ADDRESS: u32 = 11;
+pub const QUEUE_INFO_VM_FAULT_REASON: u32 = 12;
+
 
 pub const PROFILE_BASE: u32 = 0;
 pub const PROFILE_FULL: u32 = 1;
@@ -135,6 +168,26 @@ pub struct ProfilingDispatchTime {
     pub end: u64,
 }
 
+/// Fixed-width stand-in for `hsa_signal_condition_t` (C enum, 4 bytes).
+pub type SignalCondition = u32;
+
+/// Fixed-width stand-in for `hsa_wait_state_t` (C enum, 4 bytes).
+pub type WaitState = u32;
+
+/// Fixed-width stand-in for `hsa_amd_queue_priority_t` (C enum, 4 bytes).
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct QueuePriority(pub u32);
+
+/// Fixed-width stand-in for `hsa_queue_info_attribute_t` (C enum, 4 bytes).
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct QueueInfoAttribute(pub u32);
+
+/// Fixed-width stand-in for `hsa_queue_type_t` (C enum, 4 bytes).
+pub type QueueType = u32;
+
+
 pub type AgentCallback = unsafe extern "C" fn(Agent, *mut c_void) -> Status;
 pub type MemoryPoolCallback = unsafe extern "C" fn(MemoryPool, *mut c_void) -> Status;
 pub type QueueErrorCallback = unsafe extern "C" fn(Status, *mut Queue, *mut c_void);
@@ -202,6 +255,61 @@ pub type ExecutableGetSymbolByNameFn =
 pub type ExecutableSymbolGetInfoFn =
     unsafe extern "C" fn(ExecutableSymbol, u32, *mut c_void) -> Status;
 
+// ROCm 7.14 / HSA_AMD_INTERFACE_VERSION 1.26 entry points (hsa_ext_amd.h).
+pub type QueueCuSetMaskFn =
+    unsafe extern "C" fn(*const Queue, u32, *const u32) -> Status;
+pub type QueueCuGetMaskFn = unsafe extern "C" fn(*const Queue, u32, *mut u32) -> Status;
+pub type QueueSetPriorityFn = unsafe extern "C" fn(*mut Queue, QueuePriority) -> Status;
+pub type CountedQueueAcquireFn = unsafe extern "C" fn(
+    Agent,
+    QueueType,
+    QueuePriority,
+    Option<QueueErrorCallback>,
+    *mut c_void,
+    u64,
+    *mut *mut Queue,
+) -> Status;
+pub type CountedQueueReleaseFn = unsafe extern "C" fn(*mut Queue) -> Status;
+pub type QueueGetInfoFn =
+    unsafe extern "C" fn(*mut Queue, QueueInfoAttribute, *mut c_void) -> Status;
+pub type SignalWaitAllFn = unsafe extern "C" fn(
+    u32,
+    *mut Signal,
+    *mut SignalCondition,
+    *mut SignalValue,
+    u64,
+    WaitState,
+    *mut SignalValue,
+) -> u32;
+pub type SignalWaitAnyFn = unsafe extern "C" fn(
+    u32,
+    *mut Signal,
+    *mut SignalCondition,
+    *mut SignalValue,
+    u64,
+    WaitState,
+    *mut SignalValue,
+) -> u32;
+pub type SvmPrefetchAsyncFn = unsafe extern "C" fn(
+    *mut c_void,
+    usize,
+    Agent,
+    u32,
+    *const Signal,
+    Signal,
+) -> Status;
+pub type SvmDiscardBatchAsyncFn = unsafe extern "C" fn(
+    *mut *mut c_void,
+    *mut usize,
+    u32,
+    u32,
+    *const Signal,
+    Signal,
+) -> Status;
+pub type ProfilingConvertTickToSystemDomainFn =
+    unsafe extern "C" fn(Agent, u64, *mut u64) -> Status;
+
+
 /// Dynamically resolved public ROCr entry points.
 ///
 /// The `keepalive` object normally contains an `Arc<libloading::Library>`.
@@ -243,6 +351,19 @@ pub struct Symbols {
     pub executable_freeze: ExecutableFreezeFn,
     pub executable_get_symbol_by_name: ExecutableGetSymbolByNameFn,
     pub executable_symbol_get_info: ExecutableSymbolGetInfoFn,
+    // ROCm >= 7.14 / interface 1.26
+    pub queue_cu_set_mask: QueueCuSetMaskFn,
+    pub queue_cu_get_mask: QueueCuGetMaskFn,
+    pub queue_set_priority: QueueSetPriorityFn,
+    pub counted_queue_acquire: CountedQueueAcquireFn,
+    pub counted_queue_release: CountedQueueReleaseFn,
+    pub queue_get_info: QueueGetInfoFn,
+    pub signal_wait_all: SignalWaitAllFn,
+    pub signal_wait_any: SignalWaitAnyFn,
+    pub svm_prefetch_async: SvmPrefetchAsyncFn,
+    pub svm_discard_batch_async: SvmDiscardBatchAsyncFn,
+    pub profiling_convert_tick_to_system_domain: ProfilingConvertTickToSystemDomainFn,
+
 }
 
 impl fmt::Debug for Symbols {
@@ -271,13 +392,31 @@ impl Symbols {
                     .expect("symbol name has one trailing NUL");
                 let pointer = resolve(name);
                 if pointer.is_null() {
-                    return Err(MissingSymbol($name));
+                    return Err(MissingSymbol {
+                        name: $name,
+                        requires_rocm_714: false,
+                    });
+                }
+                // SAFETY: guaranteed by this function's contract. The macro
+                // names a concrete function-pointer type, which is pointer-sized.
+                unsafe { std::mem::transmute::<*const c_void, $ty>(pointer) }
+            }};
+            (@rocm714 $name:literal, $ty:ty) => {{
+                let name = CStr::from_bytes_with_nul(concat!($name, "\0").as_bytes())
+                    .expect("symbol name has one trailing NUL");
+                let pointer = resolve(name);
+                if pointer.is_null() {
+                    return Err(MissingSymbol {
+                        name: $name,
+                        requires_rocm_714: true,
+                    });
                 }
                 // SAFETY: guaranteed by this function's contract. The macro
                 // names a concrete function-pointer type, which is pointer-sized.
                 unsafe { std::mem::transmute::<*const c_void, $ty>(pointer) }
             }};
         }
+
 
         Ok(Arc::new(Self {
             _keepalive: keepalive,
@@ -351,16 +490,64 @@ impl Symbols {
                 "hsa_executable_symbol_get_info",
                 ExecutableSymbolGetInfoFn
             ),
+            queue_cu_set_mask: symbol!(
+                @rocm714 "hsa_amd_queue_cu_set_mask",
+                QueueCuSetMaskFn
+            ),
+            queue_cu_get_mask: symbol!(
+                @rocm714 "hsa_amd_queue_cu_get_mask",
+                QueueCuGetMaskFn
+            ),
+            queue_set_priority: symbol!(
+                @rocm714 "hsa_amd_queue_set_priority",
+                QueueSetPriorityFn
+            ),
+            counted_queue_acquire: symbol!(
+                @rocm714 "hsa_amd_counted_queue_acquire",
+                CountedQueueAcquireFn
+            ),
+            counted_queue_release: symbol!(
+                @rocm714 "hsa_amd_counted_queue_release",
+                CountedQueueReleaseFn
+            ),
+            queue_get_info: symbol!(@rocm714 "hsa_amd_queue_get_info", QueueGetInfoFn),
+            signal_wait_all: symbol!(@rocm714 "hsa_amd_signal_wait_all", SignalWaitAllFn),
+            signal_wait_any: symbol!(@rocm714 "hsa_amd_signal_wait_any", SignalWaitAnyFn),
+            svm_prefetch_async: symbol!(
+                @rocm714 "hsa_amd_svm_prefetch_async",
+                SvmPrefetchAsyncFn
+            ),
+            svm_discard_batch_async: symbol!(
+                @rocm714 "hsa_amd_svm_discard_batch_async",
+                SvmDiscardBatchAsyncFn
+            ),
+            profiling_convert_tick_to_system_domain: symbol!(
+                @rocm714 "hsa_amd_profiling_convert_tick_to_system_domain",
+                ProfilingConvertTickToSystemDomainFn
+            ),
+
         }))
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MissingSymbol(pub &'static str);
+pub struct MissingSymbol {
+    pub name: &'static str,
+    /// When true, the symbol is part of the ROCm >= 7.14 / interface-1.26 surface.
+    pub requires_rocm_714: bool,
+}
 
 impl fmt::Display for MissingSymbol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "libhsa-runtime64 is missing {}", self.0)
+        if self.requires_rocm_714 {
+            write!(
+                f,
+                "libhsa-runtime64 is missing {} (requires ROCm >= 7.14)",
+                self.name
+            )
+        } else {
+            write!(f, "libhsa-runtime64 is missing {}", self.name)
+        }
     }
 }
 
@@ -374,4 +561,69 @@ const _: () = {
     assert!(std::mem::size_of::<Queue>() == 40);
     assert!(std::mem::align_of::<Queue>() == 8);
     assert!(std::mem::size_of::<ProfilingDispatchTime>() == 16);
+    // ROCm 7.14 / interface 1.26 fixed-width enum stand-ins (C enums → int).
+    assert!(std::mem::size_of::<QueuePriority>() == 4);
+    assert!(std::mem::align_of::<QueuePriority>() == 4);
+    assert!(std::mem::size_of::<QueueInfoAttribute>() == 4);
+    assert!(std::mem::align_of::<QueueInfoAttribute>() == 4);
+    assert!(std::mem::size_of::<SignalCondition>() == 4);
+    assert!(std::mem::size_of::<WaitState>() == 4);
+    assert!(std::mem::size_of::<QueueType>() == 4);
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ptr;
+    use std::sync::Arc;
+
+    #[test]
+    fn missing_rocm714_symbol_names_requirement() {
+        let err = MissingSymbol {
+            name: "hsa_amd_queue_cu_set_mask",
+            requires_rocm_714: true,
+        };
+        let text = err.to_string();
+        assert!(text.contains("hsa_amd_queue_cu_set_mask"), "{text}");
+        assert!(text.contains("requires ROCm >= 7.14"), "{text}");
+    }
+
+    #[test]
+    fn null_resolver_fails_first_symbol_without_714_tag() {
+        let keepalive: Arc<dyn Send + Sync> = Arc::new(());
+        // SAFETY: resolver always returns null; no function pointers are formed.
+        let err = unsafe { Symbols::load(keepalive, |_| ptr::null()) }.unwrap_err();
+        assert_eq!(err.name, "hsa_init");
+        assert!(!err.requires_rocm_714);
+        assert!(!err.to_string().contains("requires ROCm >= 7.14"));
+    }
+
+    #[test]
+    fn null_after_legacy_symbols_tags_714_requirement() {
+        let keepalive: Arc<dyn Send + Sync> = Arc::new(());
+        // SAFETY: non-null pointers are never called; only used to pass null-checks.
+        let err = unsafe {
+            Symbols::load(keepalive, |name| {
+                let bytes = name.to_bytes();
+                if bytes.starts_with(b"hsa_amd_queue_cu_set_mask")
+                    || bytes.starts_with(b"hsa_amd_queue_cu_get_mask")
+                    || bytes.starts_with(b"hsa_amd_queue_set_priority")
+                    || bytes.starts_with(b"hsa_amd_counted_queue")
+                    || bytes.starts_with(b"hsa_amd_queue_get_info")
+                    || bytes.starts_with(b"hsa_amd_signal_wait_")
+                    || bytes.starts_with(b"hsa_amd_svm_")
+                    || bytes.starts_with(b"hsa_amd_profiling_convert_tick")
+                {
+                    ptr::null()
+                } else {
+                    // Any non-null stand-in; never invoked.
+                    1usize as *const c_void
+                }
+            })
+        }
+        .unwrap_err();
+        assert_eq!(err.name, "hsa_amd_queue_cu_set_mask");
+        assert!(err.requires_rocm_714);
+        assert!(err.to_string().contains("requires ROCm >= 7.14"));
+    }
+}

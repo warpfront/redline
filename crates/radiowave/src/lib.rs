@@ -6,10 +6,14 @@
 //! emitted code object, and records enough evidence to reproduce the build.
 
 mod arch;
+pub mod atomics;
 mod campaign;
 mod contracts;
 pub mod oracle;
+pub mod partition;
 pub mod recipes;
+pub mod recipes_fp8;
+pub mod toolchain;
 
 pub use arch::{ArchProfile, CodeObjectIdentity, IsaVersion};
 pub use campaign::{
@@ -55,6 +59,13 @@ pub enum Error {
     InvalidCertification(String),
     #[error("invalid Radiowave oracle input: {0}")]
     InvalidOracle(String),
+    /// Toolchain does not meet the ROCm 7.14 floor (HIP version gate).
+    #[error("HIP version {found} is below required >= {required} (ROCm 7.14 floor)")]
+    UnsupportedHipVersion { found: String, required: String },
+    /// Version banner lacked the AMD clang marker (generic upstream clang).
+    /// 7.14-only policy: radiowave requires amdclang / ROCm >= 7.14.
+    #[error("non-AMD clang toolchain (requires ROCm >= 7.14 / amdclang): {0}")]
+    NonAmdClang(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -144,6 +155,28 @@ impl SchedulerProfile {
     }
 }
 
+/// Resolve the hipcc binary for ROCm 7.14+ layouts.
+///
+/// Order: non-empty `$HIPCC`, `/opt/rocm/core/bin/hipcc`,
+/// `/opt/rocm/core-7.14/bin/hipcc`, then bare `"hipcc"` (PATH fallback).
+pub fn resolve_hipcc() -> PathBuf {
+    if let Some(value) = env::var_os("HIPCC") {
+        if !value.is_empty() {
+            return PathBuf::from(value);
+        }
+    }
+    for candidate in [
+        "/opt/rocm/core/bin/hipcc",
+        "/opt/rocm/core-7.14/bin/hipcc",
+    ] {
+        let path = PathBuf::from(candidate);
+        if path.exists() {
+            return path;
+        }
+    }
+    PathBuf::from("hipcc")
+}
+
 #[derive(Clone, Debug)]
 pub struct CompileRequest {
     pub source: PathBuf,
@@ -172,9 +205,7 @@ impl CompileRequest {
             output: output.into(),
             arch: arch.into(),
             wavefront: Wavefront::Wave32,
-            hipcc: env::var_os("HIPCC")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("hipcc")),
+            hipcc: resolve_hipcc(),
             working_directory: None,
             optimization_level: 3,
             fast_math: true,
@@ -472,7 +503,13 @@ impl Inspector {
                     .then(|| hipcc.parent()?.parent().map(Path::to_owned))
                     .flatten()
             })
-            .unwrap_or_else(|| PathBuf::from("/opt/rocm"));
+            .unwrap_or_else(|| {
+                if Path::new("/opt/rocm/core").is_dir() {
+                    PathBuf::from("/opt/rocm/core")
+                } else {
+                    PathBuf::from("/opt/rocm")
+                }
+            });
         Self {
             bundler: configured_tool("RADIOWAVE_BUNDLER", &root, "clang-offload-bundler"),
             readobj: configured_tool("RADIOWAVE_READOBJ", &root, "llvm-readobj"),

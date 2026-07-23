@@ -9,6 +9,13 @@ authors = ["Kaden Schutt"]
 repository = "https://github.com/Kaden-Schutt/redline"
 description = "Python bindings for redline-dispatch — a leaner, safer HipGraph"
 
+# Standalone workspace root. This crate is excluded from the redline workspace
+# and lives under a git worktree nested inside the main checkout. Without this
+# table cargo walks up past the worktree and resolves the main checkout as the
+# workspace root (which does not list this crate as a member), which breaks
+# `maturin build` / `cargo metadata` from inside the worktree.
+[workspace]
+
 [lib]
 name = "redline_dispatch"
 crate-type = ["cdylib"]

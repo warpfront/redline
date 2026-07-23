@@ -200,7 +200,7 @@ struct DeviceBuffer {
 #[pyclass(unsendable)]
 struct Pm4Ib {
     ib: SingleQueuePm4Ib,
-    _kernargs: Vec<KernargBuffer>,
+    kernargs: Vec<KernargBuffer>,
     _modules: Vec<Executable>,
 }
 
@@ -275,6 +275,11 @@ impl Gpu {
         // Match the certified Hipfire retained-tape policy: preserve SH-register
         // state within the IB and omit writes whose values have not changed.
         let mut cmd = Gfx12Pm4CommandBuffer::new_stateful();
+        // Leading same-agent acquire: invalidate scalar/vector read caches at the
+        // start of every replay, so in-place kernarg mutation (`set_kernargs`)
+        // between replays is observed fresh instead of read stale from the scalar
+        // cache. Required for the per-token decode update pattern.
+        cmd.acquire_inter_node_gfx12();
         let mut kernargs = Vec::with_capacity(dispatches.len());
         for (i, (symbol, grid, block, dyn_group, karg_bytes, serialize)) in
             dispatches.iter().enumerate()
@@ -316,7 +321,7 @@ impl Gpu {
         let ib = SingleQueuePm4Ib::create(&self.device, &self.pool, &cmd).map_err(to_py)?;
         Ok(Pm4Ib {
             ib,
-            _kernargs: kernargs,
+            kernargs,
             _modules: vec![module.executable.clone()],
         })
     }
@@ -420,6 +425,30 @@ impl Pm4Ib {
     fn replay(&mut self) -> PyResult<()> {
         // SAFETY: the IB owns its kernargs; device pointers in them must stay valid.
         unsafe { self.ib.replay_and_wait() }.map_err(to_py)?;
+        Ok(())
+    }
+
+    /// Overwrite the retained kernarg segment of dispatch `dispatch_index` (in
+    /// `Gpu.build` record order) with `data` at `byte_offset`, in place. The
+    /// next `replay()` observes the new values with no IB rebuild — the
+    /// per-token update path for a retained decode graph. Safe to call between
+    /// replays, which wait for wave retirement.
+    #[pyo3(signature = (dispatch_index, data, byte_offset=0))]
+    fn set_kernargs(
+        &mut self,
+        dispatch_index: usize,
+        data: &[u8],
+        byte_offset: usize,
+    ) -> PyResult<()> {
+        let buffer = self
+            .kernargs
+            .get_mut(dispatch_index)
+            .ok_or_else(|| PyValueError::new_err("dispatch_index out of range"))?;
+        let end = byte_offset
+            .checked_add(data.len())
+            .filter(|end| *end <= buffer.len())
+            .ok_or_else(|| PyValueError::new_err("kernarg write exceeds segment"))?;
+        buffer.as_mut_bytes()[byte_offset..end].copy_from_slice(data);
         Ok(())
     }
 }

@@ -68,6 +68,7 @@ fn find_glslc() -> PathBuf {
 
 fn build_hip_code_object(
     hipcc: &Path,
+    source: &Path,
     arch: &str,
     output: &Path,
     wave64: bool,
@@ -78,7 +79,7 @@ fn build_hip_code_object(
     } else {
         Wavefront::Wave32
     };
-    let mut request = CompileRequest::new("kernels/hipfire_6409.hip", output, arch)
+    let mut request = CompileRequest::new(source, output, arch)
         .wavefront(wavefront)
         .scheduler_profile(scheduler_profile)
         .hipcc(hipcc)
@@ -114,10 +115,32 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-env-changed=HIPCC");
     println!("cargo:rerun-if-env-changed=RADIOWAVE_HIP_ARGS");
     println!("cargo:rerun-if-env-changed=GLSLC");
+    println!("cargo:rerun-if-env-changed=HIPFIRE_KERNEL_SET");
 
     let out = PathBuf::from(env::var_os("OUT_DIR").context("OUT_DIR is unset")?);
     let arch = env::var("HIPFIRE_BENCH_ARCH").unwrap_or_else(|_| "gfx1201".to_owned());
-    let hipcc = PathBuf::from(env::var_os("HIPCC").unwrap_or_else(|| "hipcc".into()));
+    // In-house kernel set selection. Empty/"stock" uses the parity-locked source;
+    // "inhouse" uses the owned base copy; "<name>" uses kernels/hipfire-inhouse-<name>/.
+    // The Vulkan .comp reference is always the stock file so A/B isolates the HIP kernel.
+    let kernel_set = env::var("HIPFIRE_KERNEL_SET").unwrap_or_default();
+    let kernel_source = if kernel_set.is_empty() || kernel_set == "stock" {
+        "kernels/hipfire_6409.hip".to_string()
+    } else if kernel_set == "inhouse" {
+        "kernels/hipfire-inhouse/hipfire_6409.hip".to_string()
+    } else {
+        format!("kernels/hipfire-inhouse-{kernel_set}/hipfire_6409.hip")
+    };
+    println!("cargo:rerun-if-changed={kernel_source}");
+    let kernel_source = PathBuf::from(kernel_source);
+    let hipcc = if let Some(value) = env::var_os("HIPCC").filter(|v| !v.is_empty()) {
+        PathBuf::from(value)
+    } else if Path::new("/opt/rocm/core/bin/hipcc").exists() {
+        PathBuf::from("/opt/rocm/core/bin/hipcc")
+    } else if Path::new("/opt/rocm/core-7.14/bin/hipcc").exists() {
+        PathBuf::from("/opt/rocm/core-7.14/bin/hipcc")
+    } else {
+        PathBuf::from("hipcc")
+    };
     for wave64 in [false, true] {
         let width = if wave64 { 64 } else { 32 };
         for scheduler_profile in SchedulerProfile::ALL {
@@ -127,7 +150,7 @@ fn main() -> Result<()> {
                 format!("_{}", scheduler_profile.as_str())
             };
             let output = out.join(format!("hipfire_6409_wave{width}{suffix}.hsaco"));
-            build_hip_code_object(&hipcc, &arch, &output, wave64, scheduler_profile)?;
+            build_hip_code_object(&hipcc, &kernel_source, &arch, &output, wave64, scheduler_profile)?;
         }
     }
 

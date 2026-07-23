@@ -16,7 +16,7 @@ use thiserror::Error;
 
 pub const RECIPE_SCHEMA_VERSION: u32 = 1;
 pub const HIPFIRE_6409_EVIDENCE: &str =
-    "examples/hipfire-6409/results/gfx1201/2026-07-13-radiowave-all-losers/final-u8/aggregate.json";
+    "crates/radiowave/tests/artifacts/recipes/hipfire-6409-gfx1201-2026-07-13-radiowave-all-losers-final-u8-aggregate.json";
 pub const HIPX_PORTABILITY_EVIDENCE: &str =
     "crates/radiowave/tests/artifacts/hipx-portability-2026-07-14.json";
 
@@ -774,12 +774,12 @@ fn hipx_portability_evidence() -> Vec<RecipeEvidence> {
 fn hipx_wave64_promotion_evidence() -> Vec<RecipeEvidence> {
     [
         (
-            "examples/hipfire-6409/results/gfx1151/2026-07-14-radiowave-probe-wave64-vopd/results.json",
+            "crates/radiowave/tests/artifacts/recipes/hipfire-6409-gfx1151-2026-07-14-radiowave-probe-wave64-vopd-results.json",
             -12.11,
             "wave64 improved all 16 VOPD rows; median Redline duration fell 12.11%",
         ),
         (
-            "examples/hipfire-6409/results/gfx1151/2026-07-14-radiowave-probe-wave64-interleave/results.json",
+            "crates/radiowave/tests/artifacts/recipes/hipfire-6409-gfx1151-2026-07-14-radiowave-probe-wave64-interleave-results.json",
             -15.96,
             "wave64 improved all four interleave rows; median Redline duration fell 15.96%",
         ),
@@ -810,7 +810,7 @@ fn hipx_dequant_chunk16_promotion_evidence() -> Vec<RecipeEvidence> {
         verdict: EvidenceVerdict::Promoted,
         correctness_pass: true,
         artifact: format!(
-            "examples/hipfire-6409/results/{architecture}/2026-07-14-radiowave-probe-dequant-chunk16/results.json"
+            "crates/radiowave/tests/artifacts/recipes/hipfire-6409-{architecture}-2026-07-14-radiowave-probe-dequant-chunk16-results.json"
         ),
         samples_per_row: Some(7),
         throughput_delta_pct: None,
@@ -838,7 +838,7 @@ fn hipx_cache_vmem_promotion_evidence(family: &str) -> Vec<RecipeEvidence> {
                     verdict: EvidenceVerdict::Promoted,
                     correctness_pass: true,
                     artifact: format!(
-                        "examples/hipfire-6409/results/{architecture}/2026-07-14-{run}/candidate-{family}/results.json"
+                        "crates/radiowave/tests/artifacts/recipes/hipfire-6409-{architecture}-2026-07-14-{run}-candidate-{family}-results.json"
                     ),
                     samples_per_row: Some(7),
                     throughput_delta_pct: None,
@@ -865,7 +865,7 @@ fn hipx_dispatch_workgroup_promotion_evidence() -> Vec<RecipeEvidence> {
                 verdict: EvidenceVerdict::Promoted,
                 correctness_pass: true,
                 artifact: format!(
-                    "examples/hipfire-6409/results/{architecture}/2026-07-14-{run}/candidate/results.json"
+                    "crates/radiowave/tests/artifacts/recipes/hipfire-6409-{architecture}-2026-07-14-{run}-candidate-results.json"
                 ),
                 samples_per_row: Some(7),
                 throughput_delta_pct: None,
@@ -884,7 +884,7 @@ fn hipx_wave64_rejection_evidence(kernel: &str) -> Vec<RecipeEvidence> {
             verdict: EvidenceVerdict::Rejected,
             correctness_pass: false,
             artifact: format!(
-                "examples/hipfire-6409/results/{architecture}/2026-07-14-radiowave-candidate-discovery/results.json"
+                "crates/radiowave/tests/artifacts/recipes/hipfire-6409-{architecture}-2026-07-14-radiowave-candidate-discovery-results.json"
             ),
             samples_per_row: Some(3),
             throughput_delta_pct: None,
@@ -1104,5 +1104,134 @@ mod tests {
         let encoded = catalog.to_json_pretty().unwrap();
         let decoded = RecipeCatalog::from_json(&encoded).unwrap();
         assert_eq!(decoded, catalog);
+    }
+
+    #[test]
+    fn builtin_recipe_artifacts_are_tracked_fixtures() {
+        const ARCHIVE_SHA: &str =
+            "d4d0911e751e891b952f2983c0a78e05c304b854321ce5f438794ca7a8abda2b";
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("repository root");
+        let catalog = RecipeCatalog::builtin_hipfire_6409();
+        let mut failures = Vec::new();
+
+        for recipe in &catalog.recipes {
+            for evidence in &recipe.evidence {
+                let artifact = evidence.artifact.as_str();
+                let normalized = artifact.replace('\\', "/");
+                if normalized.contains("examples/") || normalized.contains("/results/") {
+                    failures.push(format!(
+                        "{}: artifact path still depends on examples/**/results: {artifact}",
+                        recipe.id
+                    ));
+                    continue;
+                }
+                let path = repo_root.join(artifact);
+                if !path.is_file() {
+                    failures.push(format!("{}: missing fixture {artifact}", recipe.id));
+                    continue;
+                }
+                // Compact provenance fixtures under recipes/; leave other tracked
+                // artifacts (e.g. hipx portability) as plain existence checks.
+                if !normalized.contains("/artifacts/recipes/") {
+                    continue;
+                }
+                let raw = match std::fs::read_to_string(&path) {
+                    Ok(raw) => raw,
+                    Err(err) => {
+                        failures.push(format!("{}: read {artifact}: {err}", recipe.id));
+                        continue;
+                    }
+                };
+                let value: serde_json::Value = match serde_json::from_str(&raw) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        failures.push(format!("{}: parse {artifact}: {err}", recipe.id));
+                        continue;
+                    }
+                };
+                let obj = match value.as_object() {
+                    Some(obj) => obj,
+                    None => {
+                        failures.push(format!("{}: {artifact} is not a JSON object", recipe.id));
+                        continue;
+                    }
+                };
+                let schema_version = obj.get("schema_version").and_then(|v| v.as_u64());
+                if schema_version != Some(1) {
+                    failures.push(format!(
+                        "{}: {artifact} schema_version must be 1, got {schema_version:?}",
+                        recipe.id
+                    ));
+                }
+                if obj.get("kind").and_then(|v| v.as_str()) != Some("radiowave_recipe_provenance")
+                {
+                    failures.push(format!(
+                        "{}: {artifact} kind must be radiowave_recipe_provenance",
+                        recipe.id
+                    ));
+                }
+                let original_path = obj
+                    .get("original_result_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if original_path.is_empty() {
+                    failures.push(format!(
+                        "{}: {artifact} missing original_result_path",
+                        recipe.id
+                    ));
+                }
+                let original_size = obj
+                    .get("original_byte_size")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                if original_size == 0 {
+                    failures.push(format!(
+                        "{}: {artifact} original_byte_size must be nonzero",
+                        recipe.id
+                    ));
+                }
+                for field in ["original_sha256", "external_archive_sha256"] {
+                    let hash = obj.get(field).and_then(|v| v.as_str()).unwrap_or("");
+                    if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                        failures.push(format!(
+                            "{}: {artifact} {field} must be 64-hex, got {hash:?}",
+                            recipe.id
+                        ));
+                    }
+                }
+                if obj.get("external_archive_sha256").and_then(|v| v.as_str()) != Some(ARCHIVE_SHA)
+                {
+                    failures.push(format!(
+                        "{}: {artifact} external_archive_sha256 mismatch",
+                        recipe.id
+                    ));
+                }
+                let note = obj.get("note").and_then(|v| v.as_str()).unwrap_or("");
+                if note.is_empty() {
+                    failures.push(format!("{}: {artifact} missing note", recipe.id));
+                }
+                // Compact records must not re-embed full result payloads.
+                if obj.contains_key("rows")
+                    || obj.contains_key("measurements")
+                    || obj.contains_key("results")
+                    || raw.len() > 4096
+                {
+                    failures.push(format!(
+                        "{}: {artifact} still looks like a raw result payload ({} bytes)",
+                        recipe.id,
+                        raw.len()
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "recipe artifact provenance contract failed:\n{}",
+            failures.join("\n")
+        );
     }
 }

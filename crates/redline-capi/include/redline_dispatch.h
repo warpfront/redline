@@ -183,6 +183,43 @@ int32_t rl_graph_kernel(struct RlGraph *g,
                         uint32_t *out_handle);
 
 /**
+ * Add a kernel node with the executable and packed kernarg bytes required by
+ * real PM4 replay. Grid dimensions are global work-item counts.
+ *
+ * # Safety
+ *
+ * Pointers must be valid for their stated lengths or null. `symbol` must be
+ * NUL-terminated. A null `kernarg` is accepted only when `kernarg_len == 0`.
+ */
+int32_t rl_graph_kernel_ex(struct RlGraph *g,
+                           const struct RlModule *module,
+                           const char *symbol,
+                           uint32_t grid_x,
+                           uint32_t grid_y,
+                           uint32_t grid_z,
+                           uint32_t block_x,
+                           uint32_t block_y,
+                           uint32_t block_z,
+                           uint32_t dyn_group_bytes,
+                           const uint8_t *kernarg,
+                           uintptr_t kernarg_len,
+                           const struct RlAccess *accesses,
+                           uintptr_t n_access,
+                           const uint32_t *deps,
+                           uintptr_t n_deps,
+                           uint32_t *out_handle);
+
+/**
+ * Add an edge from `from_handle` to `to_handle`; the destination will not run
+ * until the source has completed.
+ *
+ * # Safety
+ *
+ * `g` must be a live graph pointer or null.
+ */
+int32_t rl_graph_add_dependency(struct RlGraph *g, uint32_t from_handle, uint32_t to_handle);
+
+/**
  * Instantiate the captured graph into a replayable exec. Writes the exec
  * pointer to `out_exec`. Hazards are validated here; an unsafe graph returns
  * `RL_ERR_COMPILE`.
@@ -215,6 +252,30 @@ uintptr_t rl_graphexec_lane_count(const struct RlGraphExec *e);
  * `e` valid or null; `out32` must point to at least 32 writable bytes.
  */
 int32_t rl_graphexec_fingerprint(const struct RlGraphExec *e, uint8_t *out32);
+
+/**
+ * Lower this instantiated graph to one per-generation PM4 IB, submit it once,
+ * and wait for completion.
+ *
+ * # Safety
+ *
+ * `gpu` and `e` must be live pointers or null. Device pointers embedded in
+ * node kernargs must stay GPU-accessible through the call.
+ */
+int32_t rl_graphexec_launch(const struct RlGpu *gpu, const struct RlGraphExec *e);
+
+/**
+ * Replace the packed kernarg bytes bound to one instantiated node.
+ *
+ * # Safety
+ *
+ * `e` must be live and mutable. `kernarg` must be valid for `len` bytes; null
+ * is accepted only when `len == 0`.
+ */
+int32_t rl_graphexec_set_node_kernargs(struct RlGraphExec *e,
+                                       uint32_t node_handle,
+                                       const uint8_t *kernarg,
+                                       uintptr_t len);
 
 /**
  * Validate the plan by replaying it once against the in-process mock backend
@@ -364,7 +425,7 @@ int32_t rl_pm4_dispatch(struct RlPm4Builder *builder,
  * Insert a dependency boundary after the dispatches recorded so far: wait for
  * the writer to retire, then invalidate scalar/vector read caches so the next
  * dispatch sees its L2-committed output. Required for a non-atomic read-modify-
- * write chain (decode); still the minimal gfx12 fence (L2/MALL stays coherent).
+ * write chain (decode); still the minimal same-agent fence (L2/MALL stays coherent).
  *
  * # Safety
  * `builder` valid or null.
@@ -430,6 +491,31 @@ int32_t rl_pm4_replay(struct RlPm4Ib *ib);
  * valid writable pointer. Pointee lifetimes match [`rl_pm4_replay`].
  */
 int32_t rl_pm4_replay_profiled(struct RlPm4Ib *ib, double *out_gpu_us);
+
+/**
+ * Overwrite `len` bytes at `byte_offset` of the retained kernarg segment bound
+ * to dispatch `dispatch_index` (in `rl_pm4_dispatch` record order), in place.
+ *
+ * The PM4 packet keeps the same kernarg address, so the next [`rl_pm4_replay`]
+ * observes the new values with **no IB rebuild** — this is the per-token update
+ * path for a retained decode graph: build the IB once, then each token patch
+ * only the scalars/pointers that changed (position, KV-cache slot, ...) and
+ * replay. Between a completed replay and the next this is race-free, since
+ * [`rl_pm4_replay`] waits for wave retirement before returning.
+ *
+ * Returns `RL_OK`; `RL_ERR_NULL` (null `ib`, or null `kernarg` with `len > 0`);
+ * `RL_ERR_HANDLE` (`dispatch_index` past the recorded dispatch count); or
+ * `RL_ERR_RECORD` (`byte_offset + len` exceeds this dispatch's kernarg segment).
+ *
+ * # Safety
+ * `ib` from [`rl_pm4_finalize`], or null; `kernarg` valid for `len` bytes. Any
+ * device pointer written here must stay GPU-live through the next replay.
+ */
+int32_t rl_pm4_ib_set_kernargs(struct RlPm4Ib *ib,
+                               uintptr_t dispatch_index,
+                               uintptr_t byte_offset,
+                               const uint8_t *kernarg,
+                               uintptr_t len);
 
 /**
  * # Safety

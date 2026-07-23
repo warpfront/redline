@@ -731,7 +731,7 @@ fn hex_digest(bytes: &[u8]) -> String {
 
 fn parse_args() -> Result<Args> {
     let default_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../hipengine-6409/results/gfx1201/2026-07-13-radiowave-redline/build/redline");
+        .join("../hipengine-6409/.artifacts/redline");
     let mut parsed = Args {
         artifact_root: default_root,
         out: None,

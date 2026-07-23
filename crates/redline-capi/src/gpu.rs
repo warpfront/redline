@@ -3,9 +3,9 @@
 
 //! Real-GPU retained-PM4 replay over the C ABI.
 //!
-//! This is the fast path (a single retained GFX12 PM4 indirect buffer, replayed
+//! This is the fast path (a single retained PM4 indirect buffer, replayed
 //! with one doorbell — `SingleQueuePm4Ib`) exposed for an inference engine to
-//! drive with its *own* kernels and kernargs:
+//! drive with its *own* kernels and kernargs on gfx10, gfx11, and gfx12:
 //!
 //! 1. `rl_gpu_new(ordinal)` — bind a ROCr GPU (honours `ROCR_VISIBLE_DEVICES`).
 //! 2. `rl_gpu_load_module_radiowave(...)` — load a code object plus its hashed
@@ -30,25 +30,26 @@ use std::sync::Arc;
 
 use radiowave::{CodeObjectCertification, MutableReadCache, SchedulerProfile};
 use redline_dispatch::aql::{
-    Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargBuffer, KernargPool,
-    QueuePolicy, Runtime, SingleQueuePm4Ib, load_symbols,
+    Executable, Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargBuffer,
+    KernargPool, QueuePolicy, Runtime, SingleQueuePm4Ib, load_symbols,
 };
 
 use crate::{
-    RL_ERR_CERTIFICATION, RL_ERR_COMPILE, RL_ERR_NULL, RL_ERR_RECORD, RL_ERR_REPLAY, RL_ERR_UTF8,
+    RL_ERR_CERTIFICATION, RL_ERR_COMPILE, RL_ERR_HANDLE, RL_ERR_NULL, RL_ERR_RECORD, RL_ERR_REPLAY,
+    RL_ERR_UTF8,
     RL_OK,
 };
 
 /// A GPU binding: ROCr runtime + selected device + kernarg pool.
 pub struct RlGpu {
-    device: GpuDevice,
-    pool: KernargPool,
+    pub(crate) device: GpuDevice,
+    pub(crate) pool: KernargPool,
     _runtime: Runtime,
 }
 
 /// A loaded code object; kernels are looked up from it by symbol.
 pub struct RlModule {
-    executable: Executable,
+    pub(crate) executable: Executable,
     certification: Option<CodeObjectCertification>,
 }
 
@@ -101,16 +102,101 @@ impl From<RlQueuePolicy> for QueuePolicy {
 
 /// A builder accumulating dispatches into one PM4 command buffer.
 pub struct RlPm4Builder {
-    cmd: Gfx12Pm4CommandBuffer,
+    family: Pm4Family,
+    cmd: Pm4Commands,
     kernargs: Vec<KernargBuffer>,
     modules: Vec<Executable>,
     pool: KernargPool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Pm4Family {
+    Gfx10,
+    Gfx11,
+    Gfx12,
+}
+
+impl Pm4Family {
+    fn from_name(name: &str) -> Option<Self> {
+        if name.starts_with("gfx10") {
+            Some(Self::Gfx10)
+        } else if name.starts_with("gfx11") {
+            Some(Self::Gfx11)
+        } else if name.starts_with("gfx12") {
+            Some(Self::Gfx12)
+        } else {
+            None
+        }
+    }
+}
+
+enum Pm4Commands {
+    Legacy(Gfx10Pm4CommandBuffer),
+    Gfx12(Gfx12Pm4CommandBuffer),
+}
+
+impl Pm4Commands {
+    fn stateful_with_leading_acquire(family: Pm4Family) -> Self {
+        match family {
+            Pm4Family::Gfx10 | Pm4Family::Gfx11 => {
+                let mut commands = Gfx10Pm4CommandBuffer::new_stateful();
+                // Leading same-agent acquire: invalidate scalar/vector read
+                // caches at the start of every replay, so in-place kernarg
+                // mutation (rl_pm4_ib_set_kernargs) between replays is observed
+                // fresh instead of read stale from the scalar cache. Required
+                // for the per-token decode update pattern.
+                commands.acquire_system();
+                Self::Legacy(commands)
+            }
+            Pm4Family::Gfx12 => {
+                let mut commands = Gfx12Pm4CommandBuffer::new_stateful();
+                // Leading same-agent acquire: invalidate scalar/vector read
+                // caches at the start of every replay, so in-place kernarg
+                // mutation (rl_pm4_ib_set_kernargs) between replays is observed
+                // fresh instead of read stale from the scalar cache. Required
+                // for the per-token decode update pattern.
+                commands.acquire_inter_node_gfx12();
+                Self::Gfx12(commands)
+            }
+        }
+    }
+
+    fn dispatch(
+        &mut self,
+        kernel: &redline_dispatch::aql::Kernel,
+        geometry: redline_dispatch::aql::LaunchGeometry,
+        dynamic_group_bytes: u32,
+        kernarg_address: *mut std::ffi::c_void,
+    ) -> Result<(), ()> {
+        match self {
+            Self::Legacy(commands) => commands
+                .dispatch(kernel, geometry, dynamic_group_bytes, kernarg_address)
+                .map_err(|_| ()),
+            Self::Gfx12(commands) => commands
+                .dispatch(kernel, geometry, dynamic_group_bytes, kernarg_address)
+                .map_err(|_| ()),
+        }
+    }
+
+    fn dependency_rmw_same_agent(&mut self) {
+        match self {
+            Self::Legacy(commands) => commands.dependency_rmw_same_agent(),
+            Self::Gfx12(commands) => commands.dependency_rmw_same_agent_gfx12(),
+        }
+    }
+
+    fn dependency_rmw_vmem(&mut self) {
+        match self {
+            Self::Legacy(commands) => commands.dependency_rmw_vmem(),
+            Self::Gfx12(commands) => commands.dependency_rmw_hip_llvm_vmem_gfx12(),
+        }
+    }
+}
+
 /// A finalized, retained PM4 indirect buffer, replayable end to end.
 pub struct RlPm4Ib {
     ib: SingleQueuePm4Ib,
-    _kernargs: Vec<KernargBuffer>,
+    kernargs: Vec<KernargBuffer>,
     _modules: Vec<Executable>,
 }
 
@@ -360,10 +446,15 @@ pub unsafe extern "C" fn rl_pm4_builder_new(gpu: *const RlGpu) -> *mut RlPm4Buil
     let Some(gpu) = (unsafe { gpu.as_ref() }) else {
         return std::ptr::null_mut();
     };
+    let Some(family) = Pm4Family::from_name(gpu.device.name()) else {
+        return std::ptr::null_mut();
+    };
+    // Match the certified Hipfire retained-tape policy: preserve SH-register
+    // state within the IB and omit writes whose values have not changed.
+    let cmd = Pm4Commands::stateful_with_leading_acquire(family);
     Box::into_raw(Box::new(RlPm4Builder {
-        // Match the certified Hipfire retained-tape policy: preserve SH-register
-        // state within the IB and omit writes whose values have not changed.
-        cmd: Gfx12Pm4CommandBuffer::new_stateful(),
+        family,
+        cmd,
         kernargs: Vec::new(),
         modules: Vec::new(),
         pool: gpu.pool.clone(),
@@ -444,14 +535,14 @@ pub unsafe extern "C" fn rl_pm4_dispatch(
 /// Insert a dependency boundary after the dispatches recorded so far: wait for
 /// the writer to retire, then invalidate scalar/vector read caches so the next
 /// dispatch sees its L2-committed output. Required for a non-atomic read-modify-
-/// write chain (decode); still the minimal gfx12 fence (L2/MALL stays coherent).
+/// write chain (decode); still the minimal same-agent fence (L2/MALL stays coherent).
 ///
 /// # Safety
 /// `builder` valid or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rl_pm4_wait_idle(builder: *mut RlPm4Builder) {
     if let Some(builder) = unsafe { builder.as_mut() } {
-        builder.cmd.dependency_rmw_same_agent_gfx12();
+        builder.cmd.dependency_rmw_same_agent();
     }
 }
 
@@ -481,8 +572,8 @@ pub unsafe extern "C" fn rl_pm4_wait_rmw(
         return RL_ERR_UTF8;
     };
     match module_read_cache(module, consumer_symbol) {
-        MutableReadCache::VmemOnly => builder.cmd.dependency_rmw_hip_llvm_vmem_gfx12(),
-        MutableReadCache::ScalarOrUnknown => builder.cmd.dependency_rmw_same_agent_gfx12(),
+        MutableReadCache::VmemOnly => builder.cmd.dependency_rmw_vmem(),
+        MutableReadCache::ScalarOrUnknown => builder.cmd.dependency_rmw_same_agent(),
     }
     RL_OK
 }
@@ -514,17 +605,17 @@ pub unsafe extern "C" fn rl_pm4_finalize(
         return RL_ERR_NULL;
     }
     let builder = unsafe { Box::from_raw(builder) };
-    match SingleQueuePm4Ib::create(&gpu.device, &gpu.pool, &builder.cmd) {
+    match finalize_ib(gpu, builder.family, &builder.cmd, false) {
         Ok(ib) => {
             let boxed = Box::new(RlPm4Ib {
                 ib,
-                _kernargs: builder.kernargs,
+                kernargs: builder.kernargs,
                 _modules: builder.modules,
             });
             unsafe { *out = Box::into_raw(boxed) };
             RL_OK
         }
-        Err(_) => RL_ERR_COMPILE,
+        Err(()) => RL_ERR_COMPILE,
     }
 }
 
@@ -546,17 +637,46 @@ pub unsafe extern "C" fn rl_pm4_finalize_profiled(
         return RL_ERR_NULL;
     }
     let builder = unsafe { Box::from_raw(builder) };
-    match SingleQueuePm4Ib::create_profiled(&gpu.device, &gpu.pool, &builder.cmd) {
+    match finalize_ib(gpu, builder.family, &builder.cmd, true) {
         Ok(ib) => {
             let boxed = Box::new(RlPm4Ib {
                 ib,
-                _kernargs: builder.kernargs,
+                kernargs: builder.kernargs,
                 _modules: builder.modules,
             });
             unsafe { *out = Box::into_raw(boxed) };
             RL_OK
         }
-        Err(_) => RL_ERR_COMPILE,
+        Err(()) => RL_ERR_COMPILE,
+    }
+}
+
+fn finalize_ib(
+    gpu: &RlGpu,
+    family: Pm4Family,
+    commands: &Pm4Commands,
+    profiled: bool,
+) -> Result<SingleQueuePm4Ib, ()> {
+    match (family, commands, profiled) {
+        (Pm4Family::Gfx10, Pm4Commands::Legacy(commands), false) => {
+            SingleQueuePm4Ib::create_gfx10(&gpu.device, &gpu.pool, commands).map_err(|_| ())
+        }
+        (Pm4Family::Gfx10, Pm4Commands::Legacy(commands), true) => {
+            SingleQueuePm4Ib::create_profiled_gfx10(&gpu.device, &gpu.pool, commands).map_err(|_| ())
+        }
+        (Pm4Family::Gfx11, Pm4Commands::Legacy(commands), false) => {
+            SingleQueuePm4Ib::create_gfx11(&gpu.device, &gpu.pool, commands).map_err(|_| ())
+        }
+        (Pm4Family::Gfx11, Pm4Commands::Legacy(commands), true) => {
+            SingleQueuePm4Ib::create_profiled_gfx11(&gpu.device, &gpu.pool, commands).map_err(|_| ())
+        }
+        (Pm4Family::Gfx12, Pm4Commands::Gfx12(commands), false) => {
+            SingleQueuePm4Ib::create(&gpu.device, &gpu.pool, commands).map_err(|_| ())
+        }
+        (Pm4Family::Gfx12, Pm4Commands::Gfx12(commands), true) => {
+            SingleQueuePm4Ib::create_profiled(&gpu.device, &gpu.pool, commands).map_err(|_| ())
+        }
+        _ => unreachable!("PM4 command family is selected from the same device family"),
     }
 }
 
@@ -601,11 +721,114 @@ pub unsafe extern "C" fn rl_pm4_replay_profiled(ib: *mut RlPm4Ib, out_gpu_us: *m
     }
 }
 
+/// Overwrite `len` bytes at `byte_offset` of the retained kernarg segment bound
+/// to dispatch `dispatch_index` (in `rl_pm4_dispatch` record order), in place.
+///
+/// The PM4 packet keeps the same kernarg address, so the next [`rl_pm4_replay`]
+/// observes the new values with **no IB rebuild** — this is the per-token update
+/// path for a retained decode graph: build the IB once, then each token patch
+/// only the scalars/pointers that changed (position, KV-cache slot, ...) and
+/// replay. Between a completed replay and the next this is race-free, since
+/// [`rl_pm4_replay`] waits for wave retirement before returning.
+///
+/// Returns `RL_OK`; `RL_ERR_NULL` (null `ib`, or null `kernarg` with `len > 0`);
+/// `RL_ERR_HANDLE` (`dispatch_index` past the recorded dispatch count); or
+/// `RL_ERR_RECORD` (`byte_offset + len` exceeds this dispatch's kernarg segment).
+///
+/// # Safety
+/// `ib` from [`rl_pm4_finalize`], or null; `kernarg` valid for `len` bytes. Any
+/// device pointer written here must stay GPU-live through the next replay.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_pm4_ib_set_kernargs(
+    ib: *mut RlPm4Ib,
+    dispatch_index: usize,
+    byte_offset: usize,
+    kernarg: *const u8,
+    len: usize,
+) -> i32 {
+    let Some(ib) = (unsafe { ib.as_mut() }) else {
+        return RL_ERR_NULL;
+    };
+    let Some(buffer) = ib.kernargs.get_mut(dispatch_index) else {
+        return RL_ERR_HANDLE;
+    };
+    let Some(end) = byte_offset.checked_add(len) else {
+        return RL_ERR_RECORD;
+    };
+    if end > buffer.len() {
+        return RL_ERR_RECORD;
+    }
+    if len == 0 {
+        return RL_OK;
+    }
+    if kernarg.is_null() {
+        return RL_ERR_NULL;
+    }
+    // SAFETY: the caller guarantees `kernarg` is valid for `len` bytes.
+    let src = unsafe { std::slice::from_raw_parts(kernarg, len) };
+    buffer.as_mut_bytes()[byte_offset..end].copy_from_slice(src);
+    RL_OK
+}
+
 /// # Safety
 /// `ib` from [`rl_pm4_finalize`], or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rl_pm4_ib_free(ib: *mut RlPm4Ib) {
     if !ib.is_null() {
         drop(unsafe { Box::from_raw(ib) });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, Pm4Commands, Pm4Family};
+
+    #[test]
+    fn rdna_generations_select_their_pm4_family() {
+        assert_eq!(Pm4Family::from_name("gfx1010"), Some(Pm4Family::Gfx10));
+        assert_eq!(Pm4Family::from_name("gfx1100"), Some(Pm4Family::Gfx11));
+        assert_eq!(Pm4Family::from_name("gfx1151"), Some(Pm4Family::Gfx11));
+        assert_eq!(Pm4Family::from_name("gfx1201"), Some(Pm4Family::Gfx12));
+        assert_eq!(Pm4Family::from_name("gfx900"), None);
+    }
+
+    #[test]
+    fn command_buffer_variant_matches_family() {
+        assert!(matches!(
+            Pm4Commands::stateful_with_leading_acquire(Pm4Family::Gfx10),
+            Pm4Commands::Legacy(_)
+        ));
+        assert!(matches!(
+            Pm4Commands::stateful_with_leading_acquire(Pm4Family::Gfx11),
+            Pm4Commands::Legacy(_)
+        ));
+        assert!(matches!(
+            Pm4Commands::stateful_with_leading_acquire(Pm4Family::Gfx12),
+            Pm4Commands::Gfx12(_)
+        ));
+    }
+
+    #[test]
+    fn leading_acquire_matches_generation_policy() {
+        let mut expected_legacy = Gfx10Pm4CommandBuffer::new_stateful();
+        expected_legacy.acquire_system();
+        match Pm4Commands::stateful_with_leading_acquire(Pm4Family::Gfx10) {
+            Pm4Commands::Legacy(cmd) => assert_eq!(cmd.dwords(), expected_legacy.dwords()),
+            Pm4Commands::Gfx12(_) => panic!("gfx10 must use the legacy command buffer"),
+        }
+
+        let mut expected_gfx11 = Gfx10Pm4CommandBuffer::new_stateful();
+        expected_gfx11.acquire_system();
+        match Pm4Commands::stateful_with_leading_acquire(Pm4Family::Gfx11) {
+            Pm4Commands::Legacy(cmd) => assert_eq!(cmd.dwords(), expected_gfx11.dwords()),
+            Pm4Commands::Gfx12(_) => panic!("gfx11 must use the legacy command buffer"),
+        }
+
+        let mut expected_gfx12 = Gfx12Pm4CommandBuffer::new_stateful();
+        expected_gfx12.acquire_inter_node_gfx12();
+        match Pm4Commands::stateful_with_leading_acquire(Pm4Family::Gfx12) {
+            Pm4Commands::Gfx12(cmd) => assert_eq!(cmd.dwords(), expected_gfx12.dwords()),
+            Pm4Commands::Legacy(_) => panic!("gfx12 must use the gfx12 command buffer"),
+        }
     }
 }
