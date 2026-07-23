@@ -3,10 +3,10 @@
 
 # Redline
 
-**Retained GPU dispatch for ROCm/HIP.** Record a kernel DAG once, derive the
-minimal correct fences from declared memory access, and replay it as a single
-retained submission on the public ROCr/HSA ABI — instead of paying HIP's
-per-dispatch submission-and-fence floor on every launch.
+**Lightning-fast kernel dispatch for ROCm.** Record a kernel DAG once, derive
+only the required fences from declared memory access, and replay it as one
+retained submission over the public ROCr/HSA ABI — avoiding HIP's per-launch
+submission-and-fence floor.
 
 Redline targets the well-documented HIP dispatch-floor gap
 ([ROCm/ROCm#6409](https://github.com/ROCm/ROCm/issues/6409)): at tiny-dispatch
