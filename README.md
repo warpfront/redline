@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev> -->
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/db0984c5-c03c-4ee3-bc0d-a21b48e5898c" />
 
 # Redline
 
@@ -52,11 +53,12 @@ Current headline — clean, same-commit three-card comparison at
 matrix, Redline/HIP/Vulkan, 3 warmups, 7 samples, and CPU-oracle correctness
 gating. **All 720 rows matched; zero were rejected.**
 
-| GPU | Arch | Auto queues | Redline first | RL > HIP | Median speedup vs HIP | RL > Vulkan | Median speedup vs Vulkan | Report |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| AMD Radeon RX 9070 XT | gfx1201 | 2 | **187/240 (77.92%)** | 222/240 | **3.52×** | 187/240 | **1.32×** | [`REPORT`](examples/hipfire-6409/results/gfx1201/2026-07-23-rocm714-three-way/REPORT.md) |
-| AMD Radeon RX 7900 XTX | gfx1100 | 2 | **182/240 (75.83%)** | 227/240 | **2.34×** | 192/240 | **1.43×** | [`REPORT`](examples/hipfire-6409/results/gfx1100/2026-07-23-rocm714-three-way/REPORT.md) |
-| Radeon 8060S Graphics | gfx1151 | 4 | **185/240 (77.08%)** | 233/240 | **2.68×** | 185/240 | **1.30×** | [`REPORT`](examples/hipfire-6409/results/gfx1151/2026-07-23-rocm714-three-way/REPORT.md) |
+<img width="1693" height="929" alt="image" src="https://github.com/user-attachments/assets/3b9bc818-9131-4967-a431-8958efc6eef7" />
+**Benchmark Reports**
+
+- 📄 **RX 9070 XT (gfx1201)** — [`REPORT`](examples/hipfire-6409/results/gfx1201/2026-07-23-rocm714-three-way/REPORT.md)
+- 📄 **RX 7900 XTX (gfx1100)** — [`REPORT`](examples/hipfire-6409/results/gfx1100/2026-07-23-rocm714-three-way/REPORT.md)
+- 📄 **Strix Halo (gfx1151)** — [`REPORT`](examples/hipfire-6409/results/gfx1151/2026-07-23-rocm714-three-way/REPORT.md)
 
 Median speedup is backend time divided by Redline time. On gfx1100, `auto` is
 capped at Q2: clean explicit-Q3 and Q4 controls both reproduced retained-PM4
