@@ -227,7 +227,7 @@ impl Gpu {
         })
     }
 
-    /// Resolve `auto`, `1`, `2`, or `4` for this GPU and an independent phase.
+    /// Resolve `auto`, `1`, `2`, `3`, or `4` for this GPU and an independent phase.
     /// The returned lane count never exceeds `independent_width`.
     #[pyo3(signature = (independent_width, policy="auto"))]
     fn pm4_queue_count(&self, independent_width: usize, policy: &str) -> PyResult<usize> {

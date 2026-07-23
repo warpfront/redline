@@ -19,6 +19,7 @@ pub enum QueuePolicy {
     Auto = 0,
     One = 1,
     Two = 2,
+    Three = 3,
     Four = 4,
 }
 
@@ -28,6 +29,7 @@ impl QueuePolicy {
             Self::Auto => "auto",
             Self::One => "1",
             Self::Two => "2",
+            Self::Three => "3",
             Self::Four => "4",
         }
     }
@@ -37,6 +39,7 @@ impl QueuePolicy {
             Self::Auto => None,
             Self::One => Some(1),
             Self::Two => Some(2),
+            Self::Three => Some(3),
             Self::Four => Some(4),
         }
     }
@@ -138,7 +141,7 @@ impl fmt::Display for QueuePolicyParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "unknown queue policy {:?}; expected auto, 1, 2, or 4",
+            "unknown queue policy {:?}; expected auto, 1, 2, 3, or 4",
             self.0
         )
     }
@@ -154,6 +157,7 @@ impl FromStr for QueuePolicy {
             "auto" => Ok(Self::Auto),
             "1" | "one" => Ok(Self::One),
             "2" | "two" => Ok(Self::Two),
+            "3" | "three" => Ok(Self::Three),
             "4" | "four" => Ok(Self::Four),
             _ => Err(QueuePolicyParseError(value.to_owned())),
         }
@@ -178,6 +182,7 @@ mod tests {
     fn policy_never_exceeds_independent_width() {
         assert_eq!(QueuePolicy::Four.resolve("gfx1100", 2), 2);
         assert_eq!(QueuePolicy::Two.resolve("gfx1201", 1), 1);
+        assert_eq!(QueuePolicy::Three.resolve("gfx1100", 8), 3);
         assert_eq!(QueuePolicy::Auto.resolve("gfx1151", 0), 1);
     }
 
@@ -186,6 +191,7 @@ mod tests {
         assert_eq!("auto".parse(), Ok(QueuePolicy::Auto));
         assert_eq!("1".parse(), Ok(QueuePolicy::One));
         assert_eq!("2".parse(), Ok(QueuePolicy::Two));
+        assert_eq!("3".parse(), Ok(QueuePolicy::Three));
         assert_eq!("4".parse(), Ok(QueuePolicy::Four));
         assert!("8".parse::<QueuePolicy>().is_err());
     }
