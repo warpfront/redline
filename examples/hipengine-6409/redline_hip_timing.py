@@ -15,13 +15,16 @@ import json
 import os
 import time
 from collections import namedtuple
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 
 HipTimingSamples = namedtuple("HipTimingSamples", "gpu_sequence_us host_sequence_us")
 RL_OK = 0
+RL_ERR_COMPILE = -4
 HIP_GRAPH_NODE_KERNEL = 0
+RL_QUEUE_AUTO = 0
 
 
 class Dim3(ctypes.Structure):
@@ -37,6 +40,39 @@ class HipKernelNodeParams(ctypes.Structure):
         ("kernelParams", ctypes.POINTER(ctypes.c_void_p)),
         ("sharedMemBytes", ctypes.c_uint),
     ]
+
+
+@dataclass(frozen=True)
+class _RetainedIb:
+    """Single-queue or multi-queue retained PM4 handle."""
+
+    ptr: int
+    multi: bool
+
+    def free(self, lib: ctypes.CDLL) -> None:
+        handle = ctypes.c_void_p(self.ptr)
+        if self.multi:
+            lib.rl_pm4_multi_ib_free(handle)
+        else:
+            lib.rl_pm4_ib_free(handle)
+
+    def replay_profiled(self, lib: ctypes.CDLL, out_gpu_us: ctypes.c_double) -> int:
+        handle = ctypes.c_void_p(self.ptr)
+        if self.multi:
+            return int(lib.rl_pm4_replay_multi_profiled(handle, ctypes.byref(out_gpu_us)))
+        return int(lib.rl_pm4_replay_profiled(handle, ctypes.byref(out_gpu_us)))
+
+
+def _lane_plan(timing_mode: str, queue_cap: int, logical_iterations: int) -> list[int]:
+    """Map each logical iteration to one independent lane index."""
+    if queue_cap < 1 or logical_iterations < 1:
+        raise ValueError("queue_cap and logical_iterations must be positive")
+    if timing_mode == "serial_latency":
+        return [0] * logical_iterations
+    if timing_mode != "independent_throughput":
+        raise ValueError("invalid timing mode")
+    active = min(queue_cap, logical_iterations)
+    return [rep % active for rep in range(logical_iterations)]
 
 
 def _configure_hip(lib: ctypes.CDLL) -> None:
@@ -56,6 +92,8 @@ def _configure_redline(lib: ctypes.CDLL) -> None:
     vp = ctypes.c_void_p
     lib.rl_gpu_new.argtypes = [ctypes.c_int32]
     lib.rl_gpu_new.restype = vp
+    lib.rl_gpu_pm4_queue_count.argtypes = [vp, ctypes.c_int, ctypes.c_size_t]
+    lib.rl_gpu_pm4_queue_count.restype = ctypes.c_size_t
     lib.rl_gpu_load_module_radiowave.argtypes = [
         vp,
         ctypes.POINTER(ctypes.c_uint8),
@@ -69,6 +107,7 @@ def _configure_redline(lib: ctypes.CDLL) -> None:
     lib.rl_module_radiowave_certified.restype = ctypes.c_bool
     lib.rl_pm4_builder_new.argtypes = [vp]
     lib.rl_pm4_builder_new.restype = vp
+    lib.rl_pm4_builder_free.argtypes = [vp]
     lib.rl_pm4_dispatch.argtypes = [vp, vp, ctypes.c_char_p, *([ctypes.c_uint32] * 7), ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t]
     lib.rl_pm4_dispatch.restype = ctypes.c_int32
     lib.rl_pm4_wait_rmw.argtypes = [vp, vp, ctypes.c_char_p]
@@ -78,6 +117,18 @@ def _configure_redline(lib: ctypes.CDLL) -> None:
     lib.rl_pm4_replay_profiled.argtypes = [vp, ctypes.POINTER(ctypes.c_double)]
     lib.rl_pm4_replay_profiled.restype = ctypes.c_int32
     lib.rl_pm4_ib_free.argtypes = [vp]
+    lib.rl_pm4_finalize_multi_profiled.argtypes = [
+        vp,
+        ctypes.POINTER(vp),
+        ctypes.c_size_t,
+        ctypes.POINTER(vp),
+    ]
+    lib.rl_pm4_finalize_multi_profiled.restype = ctypes.c_int32
+    lib.rl_pm4_replay_multi_profiled.argtypes = [vp, ctypes.POINTER(ctypes.c_double)]
+    lib.rl_pm4_replay_multi_profiled.restype = ctypes.c_int32
+    lib.rl_pm4_multi_ib_lane_count.argtypes = [vp]
+    lib.rl_pm4_multi_ib_lane_count.restype = ctypes.c_size_t
+    lib.rl_pm4_multi_ib_free.argtypes = [vp]
 
 
 class _Context:
@@ -202,8 +253,19 @@ class HipSequenceTimer:
         self.runtime = runtime
         self.timing_mode = timing_mode
         self.capture_stream = runtime.stream_create(nonblocking=True)
-        self.workers = [self.capture_stream] * (1 if timing_mode == "serial_latency" else independent_streams)
-        self._ibs: dict[tuple[int, int], int] = {}
+        ctx = _context()
+        if timing_mode == "serial_latency":
+            self.resolved_lanes = 1
+        else:
+            resolved = int(
+                ctx.lib.rl_gpu_pm4_queue_count(
+                    ctx.gpu, RL_QUEUE_AUTO, max(1, int(independent_streams))
+                )
+            )
+            self.resolved_lanes = max(1, resolved)
+        # Launch APIs still receive capture-stream aliases; multi-queue is ROCr.
+        self.workers = [self.capture_stream] * self.resolved_lanes
+        self._ibs: dict[tuple[int, int], _RetainedIb] = {}
         self._preheated_ibs: set[int] = set()
 
     @property
@@ -219,13 +281,13 @@ class HipSequenceTimer:
     def close(self) -> None:
         ctx = _context()
         for ib in self._ibs.values():
-            ctx.lib.rl_pm4_ib_free(ctypes.c_void_p(ib))
+            ib.free(ctx.lib)
         self._ibs.clear()
         if self.capture_stream:
             self.runtime.stream_destroy(self.capture_stream)
             self.capture_stream = 0
 
-    def _graph(self, logical_iterations: int, launch: Callable[[int, int], None]) -> int:
+    def _graph(self, logical_iterations: int, launch: Callable[[int, int], None]) -> _RetainedIb:
         key = (logical_iterations, id(launch))
         if key in self._ibs:
             return self._ibs[key]
@@ -235,78 +297,179 @@ class HipSequenceTimer:
         graph = self.runtime.stream_end_capture(self.capture_stream)
         nodes = _topological_nodes(self.runtime, graph)
         if not nodes or len(nodes) % logical_iterations:
+            self.runtime.graph_destroy(graph)
             raise RuntimeError("captured graph does not have a fixed kernel count per iteration")
         per_iteration = len(nodes) // logical_iterations
         ctx = _context()
-        builder = ctx.lib.rl_pm4_builder_new(ctx.gpu)
-        if not builder:
-            raise RuntimeError("rl_pm4_builder_new failed")
-        for index, node in enumerate(nodes):
-            node_type = ctypes.c_int()
-            self.runtime.check(self.runtime.library.hipGraphNodeGetType(ctypes.c_void_p(node), ctypes.byref(node_type)))
-            if node_type.value != HIP_GRAPH_NODE_KERNEL:
-                raise RuntimeError("capture contains a non-kernel node")
-            params = HipKernelNodeParams()
-            self.runtime.check(self.runtime.library.hipGraphKernelNodeGetParams(ctypes.c_void_p(node), ctypes.byref(params)))
-            raw_name = self.runtime.library.hipKernelNameRefByPtr(params.func, ctypes.c_void_p(self.capture_stream))
-            if not raw_name:
-                raise RuntimeError("hipKernelNameRefByPtr failed")
-            module, spec = ctx.resolve(raw_name.decode())
-            dependency_before = index > 0 and (
-                self.timing_mode == "serial_latency" or index % per_iteration != 0
-            )
-            if dependency_before:
-                rc = ctx.lib.rl_pm4_wait_rmw(
-                    builder, ctypes.c_void_p(module), spec["symbol"].encode()
+        lane_of = _lane_plan(self.timing_mode, self.resolved_lanes, logical_iterations)
+        active_lanes = max(lane_of) + 1 if lane_of else 1
+
+        builders: list[int] = []
+        builders_owned = True
+        try:
+            for _ in range(active_lanes):
+                raw_builder = ctx.lib.rl_pm4_builder_new(ctx.gpu)
+                if not raw_builder:
+                    raise RuntimeError("rl_pm4_builder_new failed")
+                builders.append(int(raw_builder))
+
+            for index, node in enumerate(nodes):
+                node_type = ctypes.c_int()
+                self.runtime.check(
+                    self.runtime.library.hipGraphNodeGetType(
+                        ctypes.c_void_p(node), ctypes.byref(node_type)
+                    )
+                )
+                if node_type.value != HIP_GRAPH_NODE_KERNEL:
+                    raise RuntimeError("capture contains a non-kernel node")
+                params = HipKernelNodeParams()
+                self.runtime.check(
+                    self.runtime.library.hipGraphKernelNodeGetParams(
+                        ctypes.c_void_p(node), ctypes.byref(params)
+                    )
+                )
+                raw_name = self.runtime.library.hipKernelNameRefByPtr(
+                    params.func, ctypes.c_void_p(self.capture_stream)
+                )
+                if not raw_name:
+                    raise RuntimeError("hipKernelNameRefByPtr failed")
+                module, spec = ctx.resolve(raw_name.decode())
+                rep = index // per_iteration
+                stage = index % per_iteration
+                lane = lane_of[rep]
+                builder = builders[lane]
+                dependency_before = (
+                    self.timing_mode == "serial_latency" and index > 0
+                ) or (
+                    self.timing_mode == "independent_throughput" and stage != 0
+                )
+                if dependency_before:
+                    rc = ctx.lib.rl_pm4_wait_rmw(
+                        ctypes.c_void_p(builder),
+                        ctypes.c_void_p(module),
+                        spec["symbol"].encode(),
+                    )
+                    if rc != RL_OK:
+                        raise RuntimeError(f"rl_pm4_wait_rmw failed for {spec['symbol']}")
+                kernarg = bytearray(int(spec["kernarg_size"]))
+                explicit = 0
+                for arg in spec["args"]:
+                    kind = arg["value_kind"]
+                    offset, size = int(arg["offset"]), int(arg["size"])
+                    if not kind.startswith("hidden_"):
+                        if not params.kernelParams:
+                            raise RuntimeError("captured explicit kernel argument is null")
+                        kernarg[offset : offset + size] = ctypes.string_at(
+                            params.kernelParams[explicit], size
+                        )
+                        explicit += 1
+                    elif kind == "hidden_block_count_x":
+                        _copy_integer(kernarg, arg, params.gridDim.x)
+                    elif kind == "hidden_block_count_y":
+                        _copy_integer(kernarg, arg, params.gridDim.y)
+                    elif kind == "hidden_block_count_z":
+                        _copy_integer(kernarg, arg, params.gridDim.z)
+                    elif kind == "hidden_group_size_x":
+                        _copy_integer(kernarg, arg, params.blockDim.x)
+                    elif kind == "hidden_group_size_y":
+                        _copy_integer(kernarg, arg, params.blockDim.y)
+                    elif kind == "hidden_group_size_z":
+                        _copy_integer(kernarg, arg, params.blockDim.z)
+                    elif kind == "hidden_remainder_x":
+                        _copy_integer(kernarg, arg, params.blockDim.x)
+                    elif kind == "hidden_remainder_y":
+                        _copy_integer(kernarg, arg, params.blockDim.y)
+                    elif kind == "hidden_remainder_z":
+                        _copy_integer(kernarg, arg, params.blockDim.z)
+                    elif kind == "hidden_grid_dims":
+                        _copy_integer(
+                            kernarg,
+                            arg,
+                            3
+                            if params.gridDim.z > 1
+                            else 2
+                            if params.gridDim.y > 1
+                            else 1,
+                        )
+                    elif kind == "hidden_dynamic_lds_size":
+                        _copy_integer(kernarg, arg, params.sharedMemBytes)
+                if os.environ.get("REDLINE_CAPTURE_TRACE"):
+                    explicit_end = max(
+                        (
+                            int(arg["offset"]) + int(arg["size"])
+                            for arg in spec["args"]
+                            if not arg["value_kind"].startswith("hidden_")
+                        ),
+                        default=0,
+                    )
+                    print(
+                        f"[redline capture] {raw_name.decode()} grid={params.gridDim.x},{params.gridDim.y},{params.gridDim.z} "
+                        f"block={params.blockDim.x},{params.blockDim.y},{params.blockDim.z} args={kernarg[:explicit_end].hex()}",
+                        file=os.sys.stderr,
+                    )
+                storage = (ctypes.c_uint8 * len(kernarg)).from_buffer_copy(kernarg)
+                rc = ctx.lib.rl_pm4_dispatch(
+                    ctypes.c_void_p(builder),
+                    ctypes.c_void_p(module),
+                    spec["symbol"].encode(),
+                    params.gridDim.x * params.blockDim.x,
+                    params.gridDim.y * params.blockDim.y,
+                    params.gridDim.z * params.blockDim.z,
+                    params.blockDim.x,
+                    params.blockDim.y,
+                    params.blockDim.z,
+                    params.sharedMemBytes,
+                    storage,
+                    len(storage),
                 )
                 if rc != RL_OK:
-                    raise RuntimeError(f"rl_pm4_wait_rmw failed for {spec['symbol']}")
-            kernarg = bytearray(int(spec["kernarg_size"]))
-            explicit = 0
-            for arg in spec["args"]:
-                kind = arg["value_kind"]
-                offset, size = int(arg["offset"]), int(arg["size"])
-                if not kind.startswith("hidden_"):
-                    if not params.kernelParams:
-                        raise RuntimeError("captured explicit kernel argument is null")
-                    kernarg[offset : offset + size] = ctypes.string_at(params.kernelParams[explicit], size)
-                    explicit += 1
-                elif kind == "hidden_block_count_x": _copy_integer(kernarg, arg, params.gridDim.x)
-                elif kind == "hidden_block_count_y": _copy_integer(kernarg, arg, params.gridDim.y)
-                elif kind == "hidden_block_count_z": _copy_integer(kernarg, arg, params.gridDim.z)
-                elif kind == "hidden_group_size_x": _copy_integer(kernarg, arg, params.blockDim.x)
-                elif kind == "hidden_group_size_y": _copy_integer(kernarg, arg, params.blockDim.y)
-                elif kind == "hidden_group_size_z": _copy_integer(kernarg, arg, params.blockDim.z)
-                elif kind == "hidden_remainder_x": _copy_integer(kernarg, arg, params.blockDim.x)
-                elif kind == "hidden_remainder_y": _copy_integer(kernarg, arg, params.blockDim.y)
-                elif kind == "hidden_remainder_z": _copy_integer(kernarg, arg, params.blockDim.z)
-                elif kind == "hidden_grid_dims": _copy_integer(kernarg, arg, 3 if params.gridDim.z > 1 else 2 if params.gridDim.y > 1 else 1)
-                elif kind == "hidden_dynamic_lds_size": _copy_integer(kernarg, arg, params.sharedMemBytes)
-            if os.environ.get("REDLINE_CAPTURE_TRACE"):
-                explicit_end = max(
-                    (int(arg["offset"]) + int(arg["size"]) for arg in spec["args"] if not arg["value_kind"].startswith("hidden_")),
-                    default=0,
+                    raise RuntimeError(f"rl_pm4_dispatch failed for {spec['symbol']}")
+
+            ib_ptr = ctypes.c_void_p()
+            if active_lanes == 1:
+                # Single finalize always consumes the builder pointer.
+                builders_owned = False
+                if (
+                    ctx.lib.rl_pm4_finalize_profiled(
+                        ctx.gpu, ctypes.c_void_p(builders[0]), ctypes.byref(ib_ptr)
+                    )
+                    != RL_OK
+                ):
+                    raise RuntimeError("rl_pm4_finalize_profiled failed")
+                retained = _RetainedIb(int(ib_ptr.value), multi=False)
+            else:
+                builder_array = (ctypes.c_void_p * active_lanes)(
+                    *[ctypes.c_void_p(b) for b in builders]
                 )
-                print(
-                    f"[redline capture] {raw_name.decode()} grid={params.gridDim.x},{params.gridDim.y},{params.gridDim.z} "
-                    f"block={params.blockDim.x},{params.blockDim.y},{params.blockDim.z} args={kernarg[:explicit_end].hex()}",
-                    file=os.sys.stderr,
+                rc = ctx.lib.rl_pm4_finalize_multi_profiled(
+                    ctx.gpu,
+                    builder_array,
+                    active_lanes,
+                    ctypes.byref(ib_ptr),
                 )
-            storage = (ctypes.c_uint8 * len(kernarg)).from_buffer_copy(kernarg)
-            rc = ctx.lib.rl_pm4_dispatch(
-                builder, ctypes.c_void_p(module), spec["symbol"].encode(),
-                params.gridDim.x * params.blockDim.x, params.gridDim.y * params.blockDim.y,
-                params.gridDim.z * params.blockDim.z, params.blockDim.x, params.blockDim.y,
-                params.blockDim.z, params.sharedMemBytes, storage, len(storage),
-            )
-            if rc != RL_OK:
-                raise RuntimeError(f"rl_pm4_dispatch failed for {spec['symbol']}")
-        ib = ctypes.c_void_p()
-        if ctx.lib.rl_pm4_finalize_profiled(ctx.gpu, builder, ctypes.byref(ib)) != RL_OK:
-            raise RuntimeError("rl_pm4_finalize_profiled failed")
+                # Multi consumes builders after validation succeeds, including
+                # when PM4 compilation subsequently fails (RL_ERR_COMPILE).
+                if rc == RL_OK or rc == RL_ERR_COMPILE:
+                    builders_owned = False
+                if rc != RL_OK:
+                    raise RuntimeError("rl_pm4_finalize_multi_profiled failed")
+                retained = _RetainedIb(int(ib_ptr.value), multi=True)
+                got_lanes = int(ctx.lib.rl_pm4_multi_ib_lane_count(ib_ptr))
+                if got_lanes != active_lanes:
+                    retained.free(ctx.lib)
+                    raise RuntimeError(
+                        f"multi IB lane count {got_lanes} != active {active_lanes}"
+                    )
+        except Exception:
+            if builders_owned:
+                for builder in builders:
+                    ctx.lib.rl_pm4_builder_free(ctypes.c_void_p(builder))
+            self.runtime.graph_destroy(graph)
+            raise
+
         self.runtime.graph_destroy(graph)
-        self._ibs[key] = int(ib.value)
-        return self._ibs[key]
+        self._ibs[key] = retained
+        return retained
 
     def measure(self, logical_iterations: int, samples: int, launch: Callable[[int, int], None]) -> HipTimingSamples:
         ib = self._graph(logical_iterations, launch)
@@ -318,23 +481,19 @@ class HipSequenceTimer:
         preheat = int(os.environ.get("REDLINE_PREHEAT_REPLAYS", "0"))
         if preheat < 0:
             raise ValueError("REDLINE_PREHEAT_REPLAYS must be non-negative")
-        if preheat and ib not in self._preheated_ibs:
+        ctx = _context()
+        if preheat and ib.ptr not in self._preheated_ibs:
             ignored = ctypes.c_double()
             for _ in range(preheat):
-                if (
-                    _context().lib.rl_pm4_replay_profiled(
-                        ctypes.c_void_p(ib), ctypes.byref(ignored)
-                    )
-                    != RL_OK
-                ):
+                if ib.replay_profiled(ctx.lib, ignored) != RL_OK:
                     raise RuntimeError("Redline preheat replay failed")
-            self._preheated_ibs.add(ib)
+            self._preheated_ibs.add(ib.ptr)
         gpu_samples: list[float] = []
         host_samples: list[float] = []
         for _ in range(samples):
             elapsed = ctypes.c_double()
             start = time.perf_counter_ns()
-            if _context().lib.rl_pm4_replay_profiled(ctypes.c_void_p(ib), ctypes.byref(elapsed)) != RL_OK:
+            if ib.replay_profiled(ctx.lib, elapsed) != RL_OK:
                 raise RuntimeError("rl_pm4_replay_profiled failed")
             host_samples.append((time.perf_counter_ns() - start) / 1000.0)
             gpu_samples.append(elapsed.value)
@@ -342,5 +501,6 @@ class HipSequenceTimer:
 
     def run_and_wait(self, logical_iterations: int, launch: Callable[[int, int], None]) -> None:
         elapsed = ctypes.c_double()
-        if _context().lib.rl_pm4_replay_profiled(ctypes.c_void_p(self._graph(logical_iterations, launch)), ctypes.byref(elapsed)) != RL_OK:
+        ib = self._graph(logical_iterations, launch)
+        if ib.replay_profiled(_context().lib, elapsed) != RL_OK:
             raise RuntimeError("Redline replay failed")

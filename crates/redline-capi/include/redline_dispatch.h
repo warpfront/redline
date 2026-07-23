@@ -112,6 +112,11 @@ typedef struct RlPm4Builder RlPm4Builder;
 typedef struct RlPm4Ib RlPm4Ib;
 
 /**
+ * Finalized retained PM4 indirect buffers, one per independent public queue.
+ */
+typedef struct RlPm4MultiIb RlPm4MultiIb;
+
+/**
  * One buffer access declared by a kernel node.
  */
 typedef struct RlAccess {
@@ -472,6 +477,88 @@ int32_t rl_pm4_finalize(const struct RlGpu *gpu,
 int32_t rl_pm4_finalize_profiled(const struct RlGpu *gpu,
                                  struct RlPm4Builder *builder,
                                  struct RlPm4Ib **out);
+
+/**
+ * Lower one non-empty builder per independent lane into retained PM4 IBs.
+ *
+ * All builders must come from the supplied GPU. Builders are consumed once
+ * validation succeeds, including when PM4 compilation subsequently fails.
+ *
+ * # Safety
+ * `gpu`/`builders`/`out` valid or null; `builders` points to `lane_count`
+ * distinct, live, un-finalized builder pointers.
+ */
+int32_t rl_pm4_finalize_multi(const struct RlGpu *gpu,
+                              struct RlPm4Builder *const *builders,
+                              uintptr_t lane_count,
+                              struct RlPm4MultiIb **out);
+
+/**
+ * Profiled form of [`rl_pm4_finalize_multi`]. Replay reports the GPU makespan
+ * from the earliest lane start through the latest lane end.
+ *
+ * # Safety
+ * Identical to [`rl_pm4_finalize_multi`].
+ */
+int32_t rl_pm4_finalize_multi_profiled(const struct RlGpu *gpu,
+                                       struct RlPm4Builder *const *builders,
+                                       uintptr_t lane_count,
+                                       struct RlPm4MultiIb **out);
+
+/**
+ * Replay every independent lane once and wait for all lanes to complete.
+ *
+ * # Safety
+ * `ib` from [`rl_pm4_finalize_multi`], or null. Every lane's device memory
+ * footprint must be independent of every other lane.
+ */
+int32_t rl_pm4_replay_multi(struct RlPm4MultiIb *ib);
+
+/**
+ * Profiled replay of every independent lane. Writes the cross-queue GPU
+ * makespan in microseconds to `out_gpu_us`.
+ *
+ * # Safety
+ * `ib` from [`rl_pm4_finalize_multi_profiled`]; pointer and independence
+ * requirements match [`rl_pm4_replay_multi`].
+ */
+int32_t rl_pm4_replay_multi_profiled(struct RlPm4MultiIb *ib, double *out_gpu_us);
+
+/**
+ * Number of independent public-queue lanes retained by `ib`, or zero for null.
+ *
+ * # Safety
+ * `ib` from a multi-finalize function, or null.
+ */
+uintptr_t rl_pm4_multi_ib_lane_count(const struct RlPm4MultiIb *ib);
+
+/**
+ * Number of dispatches retained in `lane_index`, or zero for null/invalid lane.
+ *
+ * # Safety
+ * `ib` from a multi-finalize function, or null.
+ */
+uintptr_t rl_pm4_multi_ib_dispatch_count(const struct RlPm4MultiIb *ib, uintptr_t lane_index);
+
+/**
+ * Patch one retained kernarg segment selected by lane and dispatch index.
+ *
+ * # Safety
+ * `ib` from a multi-finalize function, or null; `kernarg` valid for `len`
+ * bytes. Any device pointer written here must remain live through replay.
+ */
+int32_t rl_pm4_multi_ib_set_kernargs(struct RlPm4MultiIb *ib,
+                                     uintptr_t lane_index,
+                                     uintptr_t dispatch_index,
+                                     uintptr_t byte_offset,
+                                     const uint8_t *kernarg,
+                                     uintptr_t len);
+
+/**
+ * # Safety
+ * `ib` from a multi-finalize function, or null.
+ */
+void rl_pm4_multi_ib_free(struct RlPm4MultiIb *ib);
 
 /**
  * Replay the retained IB once (submit + wait for completion). Returns `RL_OK`.

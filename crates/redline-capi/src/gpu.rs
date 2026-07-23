@@ -30,14 +30,14 @@ use std::sync::Arc;
 
 use radiowave::{CodeObjectCertification, MutableReadCache, SchedulerProfile};
 use redline_dispatch::aql::{
-    Executable, Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargBuffer,
-    KernargPool, QueuePolicy, Runtime, SingleQueuePm4Ib, load_symbols,
+    Executable, Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector,
+    KernargBuffer, KernargPool, MultiQueuePm4Ib, QueuePolicy, Runtime, SingleQueuePm4Ib,
+    load_symbols,
 };
 
 use crate::{
     RL_ERR_CERTIFICATION, RL_ERR_COMPILE, RL_ERR_HANDLE, RL_ERR_NULL, RL_ERR_RECORD, RL_ERR_REPLAY,
-    RL_ERR_UTF8,
-    RL_OK,
+    RL_ERR_UTF8, RL_OK,
 };
 
 /// A GPU binding: ROCr runtime + selected device + kernarg pool.
@@ -50,6 +50,7 @@ pub struct RlGpu {
 /// A loaded code object; kernels are looked up from it by symbol.
 pub struct RlModule {
     pub(crate) executable: Executable,
+    device_agent: u64,
     certification: Option<CodeObjectCertification>,
 }
 
@@ -103,6 +104,7 @@ impl From<RlQueuePolicy> for QueuePolicy {
 /// A builder accumulating dispatches into one PM4 command buffer.
 pub struct RlPm4Builder {
     family: Pm4Family,
+    device_agent: u64,
     cmd: Pm4Commands,
     kernargs: Vec<KernargBuffer>,
     modules: Vec<Executable>,
@@ -200,6 +202,13 @@ pub struct RlPm4Ib {
     _modules: Vec<Executable>,
 }
 
+/// Finalized retained PM4 indirect buffers, one per independent public queue.
+pub struct RlPm4MultiIb {
+    ib: MultiQueuePm4Ib,
+    kernargs: Vec<Vec<KernargBuffer>>,
+    _modules: Vec<Executable>,
+}
+
 /// Bind ROCr GPU `device_ordinal` (of the `ROCR_VISIBLE_DEVICES` set). Returns
 /// null on failure. Free with [`rl_gpu_free`].
 #[unsafe(no_mangle)]
@@ -270,6 +279,7 @@ pub unsafe extern "C" fn rl_gpu_load_module(
             unsafe {
                 *out = Box::into_raw(Box::new(RlModule {
                     executable,
+                    device_agent: gpu.device.agent_handle(),
                     certification: None,
                 }))
             };
@@ -314,6 +324,7 @@ pub unsafe extern "C" fn rl_gpu_load_module_radiowave(
             unsafe {
                 *out = Box::into_raw(Box::new(RlModule {
                     executable,
+                    device_agent: gpu.device.agent_handle(),
                     certification: Some(certification),
                 }))
             };
@@ -454,6 +465,7 @@ pub unsafe extern "C" fn rl_pm4_builder_new(gpu: *const RlGpu) -> *mut RlPm4Buil
     let cmd = Pm4Commands::stateful_with_leading_acquire(family);
     Box::into_raw(Box::new(RlPm4Builder {
         family,
+        device_agent: gpu.device.agent_handle(),
         cmd,
         kernargs: Vec::new(),
         modules: Vec::new(),
@@ -490,6 +502,9 @@ pub unsafe extern "C" fn rl_pm4_dispatch(
     let Some(module) = (unsafe { module.as_ref() }) else {
         return RL_ERR_NULL;
     };
+    if builder.device_agent != module.device_agent {
+        return RL_ERR_HANDLE;
+    }
     if symbol.is_null() {
         return RL_ERR_NULL;
     }
@@ -651,6 +666,263 @@ pub unsafe extern "C" fn rl_pm4_finalize_profiled(
     }
 }
 
+/// Lower one non-empty builder per independent lane into retained PM4 IBs.
+///
+/// All builders must come from the supplied GPU. Builders are consumed once
+/// validation succeeds, including when PM4 compilation subsequently fails.
+///
+/// # Safety
+/// `gpu`/`builders`/`out` valid or null; `builders` points to `lane_count`
+/// distinct, live, un-finalized builder pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_pm4_finalize_multi(
+    gpu: *const RlGpu,
+    builders: *const *mut RlPm4Builder,
+    lane_count: usize,
+    out: *mut *mut RlPm4MultiIb,
+) -> i32 {
+    unsafe { finalize_multi(gpu, builders, lane_count, out, false) }
+}
+
+/// Profiled form of [`rl_pm4_finalize_multi`]. Replay reports the GPU makespan
+/// from the earliest lane start through the latest lane end.
+///
+/// # Safety
+/// Identical to [`rl_pm4_finalize_multi`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_pm4_finalize_multi_profiled(
+    gpu: *const RlGpu,
+    builders: *const *mut RlPm4Builder,
+    lane_count: usize,
+    out: *mut *mut RlPm4MultiIb,
+) -> i32 {
+    unsafe { finalize_multi(gpu, builders, lane_count, out, true) }
+}
+
+unsafe fn finalize_multi(
+    gpu: *const RlGpu,
+    builders: *const *mut RlPm4Builder,
+    lane_count: usize,
+    out: *mut *mut RlPm4MultiIb,
+    profiled: bool,
+) -> i32 {
+    if out.is_null() {
+        return RL_ERR_NULL;
+    }
+    unsafe { *out = std::ptr::null_mut() };
+    let Some(gpu) = (unsafe { gpu.as_ref() }) else {
+        return RL_ERR_NULL;
+    };
+    if builders.is_null() {
+        return RL_ERR_NULL;
+    }
+    if lane_count == 0 {
+        return RL_ERR_RECORD;
+    }
+    let builders = unsafe { std::slice::from_raw_parts(builders, lane_count) };
+    if builders.contains(&std::ptr::null_mut()) {
+        return RL_ERR_NULL;
+    }
+    for (index, builder) in builders.iter().enumerate() {
+        if builders[..index].contains(builder) {
+            return RL_ERR_HANDLE;
+        }
+    }
+
+    let first = unsafe { &*builders[0] };
+    let family = first.family;
+    let device_agent = gpu.device.agent_handle();
+    for builder in builders {
+        let builder = unsafe { &**builder };
+        if builder.device_agent != device_agent
+            || builder.family != family
+            || builder.kernargs.is_empty()
+        {
+            return RL_ERR_RECORD;
+        }
+    }
+
+    let builders = builders
+        .iter()
+        .map(|builder| unsafe { *Box::from_raw(*builder) })
+        .collect::<Vec<_>>();
+    match build_multi_ib(gpu, family, builders, profiled) {
+        Ok(ib) => {
+            unsafe { *out = Box::into_raw(Box::new(ib)) };
+            RL_OK
+        }
+        Err(()) => RL_ERR_COMPILE,
+    }
+}
+
+fn build_multi_ib(
+    gpu: &RlGpu,
+    family: Pm4Family,
+    builders: Vec<RlPm4Builder>,
+    profiled: bool,
+) -> Result<RlPm4MultiIb, ()> {
+    let mut legacy_commands = Vec::with_capacity(builders.len());
+    let mut gfx12_commands = Vec::with_capacity(builders.len());
+    let mut kernargs = Vec::with_capacity(builders.len());
+    let mut modules = Vec::new();
+    for builder in builders {
+        let RlPm4Builder {
+            cmd,
+            kernargs: lane_kernargs,
+            modules: lane_modules,
+            ..
+        } = builder;
+        match cmd {
+            Pm4Commands::Legacy(commands) => legacy_commands.push(commands),
+            Pm4Commands::Gfx12(commands) => gfx12_commands.push(commands),
+        }
+        kernargs.push(lane_kernargs);
+        modules.extend(lane_modules);
+    }
+
+    let ib = match (family, profiled) {
+        (Pm4Family::Gfx10, false) => {
+            MultiQueuePm4Ib::create_gfx10(&gpu.device, &gpu.pool, &legacy_commands)
+        }
+        (Pm4Family::Gfx10, true) => {
+            MultiQueuePm4Ib::create_profiled_gfx10(&gpu.device, &gpu.pool, &legacy_commands)
+        }
+        (Pm4Family::Gfx11, false) => {
+            MultiQueuePm4Ib::create_gfx11(&gpu.device, &gpu.pool, &legacy_commands)
+        }
+        (Pm4Family::Gfx11, true) => {
+            MultiQueuePm4Ib::create_profiled_gfx11(&gpu.device, &gpu.pool, &legacy_commands)
+        }
+        (Pm4Family::Gfx12, false) => {
+            MultiQueuePm4Ib::create(&gpu.device, &gpu.pool, &gfx12_commands)
+        }
+        (Pm4Family::Gfx12, true) => {
+            MultiQueuePm4Ib::create_profiled(&gpu.device, &gpu.pool, &gfx12_commands)
+        }
+    }
+    .map_err(|_| ())?;
+    Ok(RlPm4MultiIb {
+        ib,
+        kernargs,
+        _modules: modules,
+    })
+}
+
+/// Replay every independent lane once and wait for all lanes to complete.
+///
+/// # Safety
+/// `ib` from [`rl_pm4_finalize_multi`], or null. Every lane's device memory
+/// footprint must be independent of every other lane.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_pm4_replay_multi(ib: *mut RlPm4MultiIb) -> i32 {
+    let Some(ib) = (unsafe { ib.as_mut() }) else {
+        return RL_ERR_NULL;
+    };
+    match unsafe { ib.ib.replay_and_wait() } {
+        Ok(()) => RL_OK,
+        Err(_) => RL_ERR_REPLAY,
+    }
+}
+
+/// Profiled replay of every independent lane. Writes the cross-queue GPU
+/// makespan in microseconds to `out_gpu_us`.
+///
+/// # Safety
+/// `ib` from [`rl_pm4_finalize_multi_profiled`]; pointer and independence
+/// requirements match [`rl_pm4_replay_multi`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_pm4_replay_multi_profiled(
+    ib: *mut RlPm4MultiIb,
+    out_gpu_us: *mut f64,
+) -> i32 {
+    let Some(ib) = (unsafe { ib.as_mut() }) else {
+        return RL_ERR_NULL;
+    };
+    if out_gpu_us.is_null() {
+        return RL_ERR_NULL;
+    }
+    match unsafe { ib.ib.replay_and_wait_profiled() } {
+        Ok(timing) => {
+            unsafe { *out_gpu_us = timing.span_microseconds() };
+            RL_OK
+        }
+        Err(_) => RL_ERR_REPLAY,
+    }
+}
+
+/// Number of independent public-queue lanes retained by `ib`, or zero for null.
+///
+/// # Safety
+/// `ib` from a multi-finalize function, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_pm4_multi_ib_lane_count(ib: *const RlPm4MultiIb) -> usize {
+    unsafe { ib.as_ref() }.map_or(0, |ib| ib.ib.queue_count())
+}
+
+/// Number of dispatches retained in `lane_index`, or zero for null/invalid lane.
+///
+/// # Safety
+/// `ib` from a multi-finalize function, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_pm4_multi_ib_dispatch_count(
+    ib: *const RlPm4MultiIb,
+    lane_index: usize,
+) -> usize {
+    unsafe { ib.as_ref() }
+        .and_then(|ib| ib.kernargs.get(lane_index))
+        .map_or(0, Vec::len)
+}
+
+/// Patch one retained kernarg segment selected by lane and dispatch index.
+///
+/// # Safety
+/// `ib` from a multi-finalize function, or null; `kernarg` valid for `len`
+/// bytes. Any device pointer written here must remain live through replay.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_pm4_multi_ib_set_kernargs(
+    ib: *mut RlPm4MultiIb,
+    lane_index: usize,
+    dispatch_index: usize,
+    byte_offset: usize,
+    kernarg: *const u8,
+    len: usize,
+) -> i32 {
+    let Some(ib) = (unsafe { ib.as_mut() }) else {
+        return RL_ERR_NULL;
+    };
+    let Some(buffer) = ib
+        .kernargs
+        .get_mut(lane_index)
+        .and_then(|lane| lane.get_mut(dispatch_index))
+    else {
+        return RL_ERR_HANDLE;
+    };
+    let Some(end) = byte_offset.checked_add(len) else {
+        return RL_ERR_RECORD;
+    };
+    if end > buffer.len() {
+        return RL_ERR_RECORD;
+    }
+    if len == 0 {
+        return RL_OK;
+    }
+    if kernarg.is_null() {
+        return RL_ERR_NULL;
+    }
+    let src = unsafe { std::slice::from_raw_parts(kernarg, len) };
+    buffer.as_mut_bytes()[byte_offset..end].copy_from_slice(src);
+    RL_OK
+}
+
+/// # Safety
+/// `ib` from a multi-finalize function, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_pm4_multi_ib_free(ib: *mut RlPm4MultiIb) {
+    if !ib.is_null() {
+        drop(unsafe { Box::from_raw(ib) });
+    }
+}
+
 fn finalize_ib(
     gpu: &RlGpu,
     family: Pm4Family,
@@ -662,13 +934,15 @@ fn finalize_ib(
             SingleQueuePm4Ib::create_gfx10(&gpu.device, &gpu.pool, commands).map_err(|_| ())
         }
         (Pm4Family::Gfx10, Pm4Commands::Legacy(commands), true) => {
-            SingleQueuePm4Ib::create_profiled_gfx10(&gpu.device, &gpu.pool, commands).map_err(|_| ())
+            SingleQueuePm4Ib::create_profiled_gfx10(&gpu.device, &gpu.pool, commands)
+                .map_err(|_| ())
         }
         (Pm4Family::Gfx11, Pm4Commands::Legacy(commands), false) => {
             SingleQueuePm4Ib::create_gfx11(&gpu.device, &gpu.pool, commands).map_err(|_| ())
         }
         (Pm4Family::Gfx11, Pm4Commands::Legacy(commands), true) => {
-            SingleQueuePm4Ib::create_profiled_gfx11(&gpu.device, &gpu.pool, commands).map_err(|_| ())
+            SingleQueuePm4Ib::create_profiled_gfx11(&gpu.device, &gpu.pool, commands)
+                .map_err(|_| ())
         }
         (Pm4Family::Gfx12, Pm4Commands::Gfx12(commands), false) => {
             SingleQueuePm4Ib::create(&gpu.device, &gpu.pool, commands).map_err(|_| ())
@@ -781,7 +1055,12 @@ pub unsafe extern "C" fn rl_pm4_ib_free(ib: *mut RlPm4Ib) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, Pm4Commands, Pm4Family};
+    use super::{
+        Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, Pm4Commands, Pm4Family, RL_ERR_NULL,
+        rl_pm4_finalize_multi, rl_pm4_multi_ib_dispatch_count, rl_pm4_multi_ib_free,
+        rl_pm4_multi_ib_lane_count, rl_pm4_multi_ib_set_kernargs, rl_pm4_replay_multi,
+        rl_pm4_replay_multi_profiled,
+    };
 
     #[test]
     fn rdna_generations_select_their_pm4_family() {
@@ -829,6 +1108,27 @@ mod tests {
         match Pm4Commands::stateful_with_leading_acquire(Pm4Family::Gfx12) {
             Pm4Commands::Gfx12(cmd) => assert_eq!(cmd.dwords(), expected_gfx12.dwords()),
             Pm4Commands::Legacy(_) => panic!("gfx12 must use the gfx12 command buffer"),
+        }
+    }
+    #[test]
+    fn multiqueue_c_abi_is_null_safe() {
+        unsafe {
+            assert_eq!(
+                rl_pm4_finalize_multi(std::ptr::null(), std::ptr::null(), 0, std::ptr::null_mut(),),
+                RL_ERR_NULL
+            );
+            assert_eq!(rl_pm4_replay_multi(std::ptr::null_mut()), RL_ERR_NULL);
+            assert_eq!(
+                rl_pm4_replay_multi_profiled(std::ptr::null_mut(), std::ptr::null_mut()),
+                RL_ERR_NULL
+            );
+            assert_eq!(rl_pm4_multi_ib_lane_count(std::ptr::null()), 0);
+            assert_eq!(rl_pm4_multi_ib_dispatch_count(std::ptr::null(), 0), 0);
+            assert_eq!(
+                rl_pm4_multi_ib_set_kernargs(std::ptr::null_mut(), 0, 0, 0, std::ptr::null(), 0,),
+                RL_ERR_NULL
+            );
+            rl_pm4_multi_ib_free(std::ptr::null_mut());
         }
     }
 }
