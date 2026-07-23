@@ -46,7 +46,7 @@ Useful flags already supported by the binary:
 | Flag | Meaning |
 | --- | --- |
 | `--backends all` / `redline,vulkan,...` | Backend subset |
-| `--redline-queues auto\|1\|2\|4` | Independent IB queue policy (auto: Q2 gfx1100/gfx12, Q4 other gfx11, Q1 else) |
+| `--redline-queues auto\|1\|2\|3\|4` | Independent IB queue policy (auto: Q2 gfx1100/gfx12, Q4 other gfx11, Q1 else) |
 | `--redline-rmw radiowave-vmem\|same-agent` | RMW cache boundary |
 | `--wave-policy radiowave` | Radiowave recipe catalog selection |
 | `--scheduler-profile default` | Shared HIP/HipGraph/Redline object profile |
@@ -96,9 +96,9 @@ were rejected.
 | Radeon 8060S Graphics | gfx1151 | 4 | **185/240 (77.08%)** | 233/240 | 0.373× | 185/240 | 0.772× | [`REPORT.md`](results/gfx1151/2026-07-23-rocm714-three-way/REPORT.md) |
 
 `Median RL/X` is median Redline time divided by backend X time; below 1 is
-faster. gfx1100 `auto` is capped at Q2 because an isolated explicit-Q4 rerun
-reproduced the retained-PM4 timeout at the same memory-waitcnt row. Explicit
-Q4 remains available as a diagnostic override.
+faster. gfx1100 `auto` is capped at Q2 because clean explicit-Q3 and Q4 runs
+both reproduced retained-PM4 timeouts in adjacent memory-waitcnt rows. Q3 and
+Q4 remain available as diagnostic overrides.
 
 #### Earlier gfx1201 controls
 
@@ -117,7 +117,7 @@ Q4 remains available as a diagnostic override.
 
 | Arch | Paths |
 | --- | --- |
-| gfx1100 | [`…/2026-07-14-redline-current-q1-independent/`](results/gfx1100/2026-07-14-redline-current-q1-independent/REPORT.md) (67/120 indep), [`…/2026-07-14-redline-multiqueue-q4/`](results/gfx1100/2026-07-14-redline-multiqueue-q4/REPORT.md) (189/240) |
+| gfx1100 | [`…/2026-07-14-redline-current-q1-independent/`](results/gfx1100/2026-07-14-redline-current-q1-independent/REPORT.md) (67/120 indep), [`…/2026-07-14-redline-multiqueue-q4/`](results/gfx1100/2026-07-14-redline-multiqueue-q4/REPORT.md) (189/240), [`Q3 negative`](results/gfx1100/2026-07-23-rocm714-three-way-q3-negative/REPORT.md) (164/240 matched; retained-PM4 timeout) |
 | gfx1151 | [`…/q1-independent`](results/gfx1151/2026-07-14-redline-current-q1-independent/REPORT.md) (68/120), [`…/q4`](results/gfx1151/2026-07-14-redline-multiqueue-q4/REPORT.md) (206/240) |
 | gfx1201 | [`q1-indep`](results/gfx1201/2026-07-14-redline-current-q1-independent/REPORT.md) (88/120), [`q2-indep`](results/gfx1201/2026-07-14-redline-multiqueue-q2-independent/REPORT.md) (99/120), [`q2 full`](results/gfx1201/2026-07-14-redline-multiqueue-q2/REPORT.md) (187/240), [`q4 negative`](results/gfx1201/2026-07-14-redline-multiqueue-q4/REPORT.md) |
 

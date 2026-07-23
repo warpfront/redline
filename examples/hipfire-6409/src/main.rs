@@ -1079,7 +1079,7 @@ fn parse_args() -> Result<Config> {
             "--list" => list = true,
             "--help" | "-h" => {
                 println!(
-                    "usage: hipfire-6409-bench [--out PATH] [--warmups N] [--samples N] [--filter TEXT] [--max-rows N] [--matrix hipengine|legacy] [--include-aggressive] [--backends all|redline,vulkan] [--wave-policy all32|targeted64|radiowave|blanket64] [--recipe-catalog PATH] [--recipe-mode certified|candidates] [--recipe-allow ID ...] [--scheduler-profile default|max-ilp|iterative-ilp|memory-clause|pipeline-ilp] [--interleave-aggressive-b32] [--mixed-paired-hash] [--redline-rmw radiowave-vmem|same-agent|radv-global] [--redline-dispatch-mode workitems|radv-workgroups|radv] [--redline-queues auto|1|2|4] [--partition-policy none|equal:N|cus:a,b,c] [--batch-mem (recorded-only on retained-PM4 path)] [--telemetry] [--roctx] [--list]"
+                    "usage: hipfire-6409-bench [--out PATH] [--warmups N] [--samples N] [--filter TEXT] [--max-rows N] [--matrix hipengine|legacy] [--include-aggressive] [--backends all|redline,vulkan] [--wave-policy all32|targeted64|radiowave|blanket64] [--recipe-catalog PATH] [--recipe-mode certified|candidates] [--recipe-allow ID ...] [--scheduler-profile default|max-ilp|iterative-ilp|memory-clause|pipeline-ilp] [--interleave-aggressive-b32] [--mixed-paired-hash] [--redline-rmw radiowave-vmem|same-agent|radv-global] [--redline-dispatch-mode workitems|radv-workgroups|radv] [--redline-queues auto|1|2|3|4] [--partition-policy none|equal:N|cus:a,b,c] [--batch-mem (recorded-only on retained-PM4 path)] [--telemetry] [--roctx] [--list]"
                 );
                 std::process::exit(0);
             }
