@@ -55,7 +55,7 @@ impl QueuePolicy {
 
 fn automatic_lane_limit(architecture: &str) -> usize {
     let architecture = architecture.to_ascii_lowercase();
-    if architecture.starts_with("gfx12") {
+    if architecture.starts_with("gfx12") || architecture.starts_with("gfx1100") {
         2
     } else if architecture.starts_with("gfx11") {
         4
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn automatic_policy_uses_certified_architecture_caps() {
-        assert_eq!(QueuePolicy::Auto.resolve("gfx1100", 16), 4);
+        assert_eq!(QueuePolicy::Auto.resolve("gfx1100", 16), 2);
         assert_eq!(QueuePolicy::Auto.resolve("gfx1151", 16), 4);
         assert_eq!(QueuePolicy::Auto.resolve("gfx1201", 16), 2);
         assert_eq!(QueuePolicy::Auto.resolve("gfx1030", 16), 1);
