@@ -79,14 +79,16 @@ pub enum RlSchedulerProfile {
 /// Public-queue fan-out policy for independent retained PM4 work.
 ///
 /// `RlQueueAuto` uses the architecture table certified by the #6409 sweeps:
-/// gfx11 uses at most four lanes, gfx12 at most two, and unmeasured families
-/// retain one lane. The resolved count never exceeds `independent_width`.
+/// gfx1100 and gfx12 use at most two lanes, other gfx11 devices use at most
+/// four, and unmeasured families retain one. The resolved count never exceeds
+/// `independent_width`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RlQueuePolicy {
     RlQueueAuto = 0,
     RlQueueOne = 1,
     RlQueueTwo = 2,
+    RlQueueThree = 3,
     RlQueueFour = 4,
 }
 
@@ -96,6 +98,7 @@ impl From<RlQueuePolicy> for QueuePolicy {
             RlQueuePolicy::RlQueueAuto => Self::Auto,
             RlQueuePolicy::RlQueueOne => Self::One,
             RlQueuePolicy::RlQueueTwo => Self::Two,
+            RlQueuePolicy::RlQueueThree => Self::Three,
             RlQueuePolicy::RlQueueFour => Self::Four,
         }
     }
@@ -1056,10 +1059,10 @@ pub unsafe extern "C" fn rl_pm4_ib_free(ib: *mut RlPm4Ib) {
 #[cfg(test)]
 mod tests {
     use super::{
-        Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, Pm4Commands, Pm4Family, RL_ERR_NULL,
-        rl_pm4_finalize_multi, rl_pm4_multi_ib_dispatch_count, rl_pm4_multi_ib_free,
-        rl_pm4_multi_ib_lane_count, rl_pm4_multi_ib_set_kernargs, rl_pm4_replay_multi,
-        rl_pm4_replay_multi_profiled,
+        Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, Pm4Commands, Pm4Family, QueuePolicy,
+        RL_ERR_NULL, RlQueuePolicy, rl_pm4_finalize_multi, rl_pm4_multi_ib_dispatch_count,
+        rl_pm4_multi_ib_free, rl_pm4_multi_ib_lane_count, rl_pm4_multi_ib_set_kernargs,
+        rl_pm4_replay_multi, rl_pm4_replay_multi_profiled,
     };
 
     #[test]
@@ -1069,6 +1072,15 @@ mod tests {
         assert_eq!(Pm4Family::from_name("gfx1151"), Some(Pm4Family::Gfx11));
         assert_eq!(Pm4Family::from_name("gfx1201"), Some(Pm4Family::Gfx12));
         assert_eq!(Pm4Family::from_name("gfx900"), None);
+    }
+
+    #[test]
+    fn queue_policy_three_preserves_its_public_abi_value() {
+        assert_eq!(RlQueuePolicy::RlQueueThree as u32, 3);
+        assert_eq!(
+            QueuePolicy::from(RlQueuePolicy::RlQueueThree),
+            QueuePolicy::Three
+        );
     }
 
     #[test]

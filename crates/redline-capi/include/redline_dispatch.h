@@ -49,13 +49,15 @@ typedef enum RlMode {
  * Public-queue fan-out policy for independent retained PM4 work.
  *
  * `RlQueueAuto` uses the architecture table certified by the #6409 sweeps:
- * gfx11 uses at most four lanes, gfx12 at most two, and unmeasured families
- * retain one lane. The resolved count never exceeds `independent_width`.
+ * gfx1100 and gfx12 use at most two lanes, other gfx11 devices use at most
+ * four, and unmeasured families retain one. The resolved count never exceeds
+ * `independent_width`.
  */
 typedef enum RlQueuePolicy {
     RlQueueAuto = 0,
     RlQueueOne = 1,
     RlQueueTwo = 2,
+    RlQueueThree = 3,
     RlQueueFour = 4,
 } RlQueuePolicy;
 
