@@ -15,13 +15,16 @@ HIP fences and submits more work per launch than the data flow requires.
 
 ## What you get
 
-Three integration surfaces, same retained-PM4 engine:
+Four integration paths, one retained-PM4 engine:
 
-| Surface | Use when |
+| Path | Use when |
 | --- | --- |
-| **`redline-hipgraph` preload interposer** | Drop-in for existing `hipGraph*` apps via `LD_PRELOAD` (and optional Python control module). Module-loaded / static-fatbin kernels can replay through Redline; unsupported graphs fall back to real HIP. |
-| **Explicit C ABI** (`redline-capi`) | Engine integration with `rl_*` record → load → build → launch. |
-| **Rust + Python APIs** (`redline-dispatch`, `redline-py`) | First-class graph authoring, Radiowave-bound module load, and PM4 wait/RMW selection. |
+| **Explicit C/C++ ABI** (`redline-capi`) | Your engine owns its HIP allocations, code objects, and fixed launch sequence. |
+| **Python** (`redline-py`) | You want graph authoring or retained module load/build/replay from Python. |
+| **`hipGraph*` preload** (`redline-hipgraph`) | An existing application already uses compatible HIP graph capture; unsupported operations fall through to HIP. |
+| **Rust** (`redline-dispatch`) | You want the native graph, public-AQL, HIP multistream, or direct retained-PM4 APIs. |
+
+Start with the choose-your-path **[Using Redline](docs/INTEGRATION.md)** guide.
 
 Radiowave is the compiler **policy** layer (not a compiler fork): it drives
 installed LLVM/hipcc, inspects the AMDGPU code object, certifies VMEM-only
@@ -34,7 +37,7 @@ Scalar or ambiguous consumers fail closed to the broader same-agent boundary.
 | --- | --- |
 | Public ROCr/AQL replay | Architecture-neutral; exercised on gfx1010, gfx1030, gfx1100, gfx1151, gfx1201 |
 | Retained direct PM4 | Family-specific GFX10/GFX11 and GFX12 encoders; device-family mismatch fails closed |
-| Multi-queue independent IBs | Auto policy: Q1 (unswept gfx10), Q4 (gfx11/gfx1151), Q2 (gfx12); serial RMW stays single-queue |
+| Multi-queue independent IBs | Auto policy: Q2 (gfx1100 and gfx12), Q4 (other measured gfx11), Q1 (unswept gfx10); serial RMW stays single-queue |
 
 Legacy direct PM4 supports zero-scratch HSA kernels whose implicit user data is
 the optional private-segment buffer plus kernarg pointer. Unsupported scratch,
@@ -44,34 +47,37 @@ queue, dispatch, or flat-scratch contracts fail closed.
 
 ## Current results (ROCm 7.14)
 
-Primary headline — Hipfire-native 240-row four-backend matrix on **gfx1201**
-(RX 9070 XT), correctness-gated:
+Current headline — clean, same-commit three-card comparison at
+`bb612d14a95c92c4bf20f492be28f7ae11cb51f7`: the full 240-row HipEngine-shaped
+matrix, Redline/HIP/Vulkan, 3 warmups, 7 samples, and CPU-oracle correctness
+gating. **All 720 rows matched; zero were rejected.**
 
-| Run | Role | Redline firsts | Notes |
-| --- | --- | ---: | --- |
-| [`2026-07-22-rocm7.14-retest`](examples/hipfire-6409/results/gfx1201/2026-07-22-rocm7.14-retest/REPORT.md) | **Primary** | **192/240 (80.0%)** | RL > Vulkan 192/240; RL > HipGraph/HIP 222/240 each; 0 rejected rows |
-| [`2026-07-22-rocm714-leverage-certification`](examples/hipfire-6409/results/gfx1201/2026-07-22-rocm714-leverage-certification/REPORT.md) | Secondary A/B | 194/240 (80.83%) | **Dirty-tree / non-regression leverage evidence — not a clean certification** |
+| GPU | Arch | Auto queues | Redline first | RL > HIP | Median speedup vs HIP | RL > Vulkan | Median speedup vs Vulkan | Report |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| AMD Radeon RX 9070 XT | gfx1201 | 2 | **187/240 (77.92%)** | 222/240 | **3.52×** | 187/240 | **1.32×** | [`REPORT`](examples/hipfire-6409/results/gfx1201/2026-07-23-rocm714-three-way/REPORT.md) |
+| AMD Radeon RX 7900 XTX | gfx1100 | 2 | **182/240 (75.83%)** | 227/240 | **2.34×** | 192/240 | **1.43×** | [`REPORT`](examples/hipfire-6409/results/gfx1100/2026-07-23-rocm714-three-way/REPORT.md) |
+| Radeon 8060S Graphics | gfx1151 | 4 | **185/240 (77.08%)** | 233/240 | **2.68×** | 185/240 | **1.30×** | [`REPORT`](examples/hipfire-6409/results/gfx1151/2026-07-23-rocm714-three-way/REPORT.md) |
 
-Cross-RDNA portability (ROCm 7.2-era retained native PM4, still the published
-multi-arch control):
+Median speedup is backend time divided by Redline time. On gfx1100, `auto` is
+capped at Q2: clean explicit-Q3 and Q4 controls both reproduced retained-PM4
+timeouts in adjacent memory-waitcnt rows. Those queue counts remain diagnostic
+overrides, not supported defaults.
 
-- Aggregate [`2026-07-14-rdna-rocr-native`](examples/hipfire-6409/results/2026-07-14-rdna-rocr-native/REPORT.md): **537/960** firsts (55.94%), RL > Vulkan **606/960** (63.13%), 960/960 correct — gfx1010 / gfx1030 / gfx1100 / gfx1151.
+Earlier controls remain available for comparison:
 
-Multi-queue controls (independent throughput + full certifications):
-
-| Arch | Retained runs |
-| --- | --- |
-| gfx1100 | [Q1 independent](examples/hipfire-6409/results/gfx1100/2026-07-14-redline-current-q1-independent/REPORT.md), [Q4 full](examples/hipfire-6409/results/gfx1100/2026-07-14-redline-multiqueue-q4/REPORT.md) (189/240) |
-| gfx1151 | [Q1 independent](examples/hipfire-6409/results/gfx1151/2026-07-14-redline-current-q1-independent/REPORT.md), [Q4 full](examples/hipfire-6409/results/gfx1151/2026-07-14-redline-multiqueue-q4/REPORT.md) (206/240) |
-| gfx1201 | [Q1 independent](examples/hipfire-6409/results/gfx1201/2026-07-14-redline-current-q1-independent/REPORT.md), [Q2 independent](examples/hipfire-6409/results/gfx1201/2026-07-14-redline-multiqueue-q2-independent/REPORT.md), [Q2 full](examples/hipfire-6409/results/gfx1201/2026-07-14-redline-multiqueue-q2/REPORT.md) (187/240), [Q4 negative control](examples/hipfire-6409/results/gfx1201/2026-07-14-redline-multiqueue-q4/REPORT.md) |
-
-HipEngine pristine harness (core 224 rows, three backends) on ROCm 7.14:
-
-| Arch | RL > Vulkan | Report |
-| --- | ---: | --- |
-| gfx1201 | **197/224 (87.9%)** | [REPORT](examples/hipengine-6409/results/gfx1201/2026-07-22-714-bench/REPORT.md) |
-| gfx1151 | **164/224 (73.2%)** | [REPORT](examples/hipengine-6409/results/gfx1151/2026-07-22-714-bench/REPORT.md) |
-| gfx1100 | **127/224 (56.7%)** | [REPORT](examples/hipengine-6409/results/gfx1100/2026-07-22-714-bench/REPORT.md) |
+- Four-backend gfx1201 retest:
+  [`2026-07-22-rocm7.14-retest`](examples/hipfire-6409/results/gfx1201/2026-07-22-rocm7.14-retest/REPORT.md) —
+  192/240 Redline firsts; Redline beat Vulkan and HipGraph/HIP in 192 and
+  222 rows respectively.
+- Cross-RDNA ROCm 7.2-era native PM4:
+  [`2026-07-14-rdna-rocr-native`](examples/hipfire-6409/results/2026-07-14-rdna-rocr-native/REPORT.md) —
+  537/960 firsts, Redline > Vulkan 606/960, and 960/960 correct across gfx1010,
+  gfx1030, gfx1100, and gfx1151.
+- HipEngine pristine 224-row harness:
+  [gfx1201](examples/hipengine-6409/results/gfx1201/2026-07-22-714-bench/REPORT.md)
+  197/224, [gfx1151](examples/hipengine-6409/results/gfx1151/2026-07-22-714-bench/REPORT.md)
+  164/224, and [gfx1100](examples/hipengine-6409/results/gfx1100/2026-07-22-714-bench/REPORT.md)
+  127/224 Redline wins over Vulkan.
 
 Raw JSON records keep their original dirty-tree flags, empty/`hipcc` capture
 fields, and absolute runner paths where the harness wrote them. Product docs
@@ -83,25 +89,27 @@ Harness details and reproduce commands:
 Dispatch-floor methodology (historical ROCm 7.2 microbench):
 [`docs/DISPATCH-FLOOR.md`](docs/DISPATCH-FLOOR.md).
 
-## Quick start
+## Start here
+
+The canonical **[Using Redline](docs/INTEGRATION.md)** guide covers prerequisites,
+the shared kernel/kernarg contract, verified C, Python, preload, and Rust
+walkthroughs, failure behavior, and current package availability.
+
+Common source-build setup:
 
 ```bash
-# Toolchain (TheRock / ROCm 7.14+)
 export PATH=/opt/rocm/core/bin:/opt/rocm/core/lib/llvm/bin:$PATH
 export ROCM_PATH=/opt/rocm/core HIP_PATH=/opt/rocm/core
 
 cargo build --release -p redline-dispatch -p redline-capi -p redline-hipgraph
-
-# Explicit hipGraph-shaped Rust API
-cargo run -p redline-dispatch --example hipgraph_migration
-
-# Optional: preload interposer into a HIP graph process
-LD_PRELOAD="$PWD/target/release/libredline_hipgraph.so" your_hip_app
 ```
 
+Redline is currently distributed from source. The guide distinguishes commands
+that work now from the intended PyPI wheel and versioned C SDK release.
+
 C header: [`crates/redline-capi/include/redline_dispatch.h`](crates/redline-capi/include/redline_dispatch.h).
-Python package notes: [`crates/redline-py`](crates/redline-py/README.md).
-Preload crate: [`crates/redline-hipgraph`](crates/redline-hipgraph/README.md).
+Python reference: [`crates/redline-py`](crates/redline-py/README.md).
+Preload reference: [`crates/redline-hipgraph`](crates/redline-hipgraph/README.md).
 
 ## Limitations (honest)
 
@@ -111,13 +119,13 @@ Preload crate: [`crates/redline-hipgraph`](crates/redline-hipgraph/README.md).
 - **Residual Vulkan wins are mostly codegen.** Packed-dot / VOPD-class rows and
   some production shapes remain RADV/ACO advantages on the shared-HSACO control;
   transport is not the whole story.
-- **Published ROCm 7.14 Hipfire runs carry dirty-tree provenance** in the raw
-  records (`repository_dirty` / `hipfire_clone_dirty`). The primary retest also
-  recorded an empty `hipcc` version string. Treat numbers as correctness-gated
-  measurements with that capture context, not as a laundered clean CI stamp.
-- **Leverage A/B is secondary.** The 194/240 partitioned run is non-regression
-  evidence under dirty tree; roctx/amd-smi observation was not uniformly
-  available across arms.
+- **The current three-card comparison is clean and same-commit.** Earlier
+  2026-07-22 controls retain their original dirty-tree flags, empty `hipcc`
+  capture fields, and absolute runner paths. Those artifacts remain useful
+  controls but are not the current certification.
+- **Leverage A/B is secondary.** The earlier 194/240 partitioned run is
+  dirty-tree non-regression evidence; roctx/amd-smi observation was not
+  uniformly available across arms.
 - **Historical dispatch-floor µs tables** in `docs/DISPATCH-FLOOR.md` are ROCm
   7.2 methodology on R9700; current product validation is the retained ROCm
   7.14 set above.

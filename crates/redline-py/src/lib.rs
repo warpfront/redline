@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
 
-//! Python bindings for `redline-dispatch` — a leaner, safer HipGraph.
+//! Python bindings for Redline — lightning-fast kernel dispatch for ROCm.
 //!
 //! ```python
 //! import redline_dispatch as rl

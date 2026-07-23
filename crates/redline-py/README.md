@@ -3,8 +3,12 @@
 
 # redline-dispatch (Python)
 
-Python bindings for [Redline](https://github.com/Kaden-Schutt/redline) — a
-leaner, safer HipGraph. Capture a dispatch graph, instantiate, and launch.
+Python bindings for [Redline](https://github.com/Kaden-Schutt/redline) —
+lightning-fast kernel dispatch for ROCm. Author and validate graphs, or load
+code objects and replay retained PM4 from Python.
+
+Build/install instructions and the shared kernel contract are in
+[`docs/INTEGRATION.md`](../../docs/INTEGRATION.md#python).
 
 ```python
 import redline_dispatch as rl
@@ -38,6 +42,9 @@ When `Gpu.build()` inserts a serialized RMW edge, it uses the verified next
 consumer's cache classification. VMEM-only consumers get Redline's minimal
 vector/L1 acquire; missing manifests or ambiguous kernels automatically retain
 the generic scalar/vector/L1 boundary.
+
+The current Python `Gpu.build()` path emits GFX12 direct PM4. Use the C or Rust
+architecture-dispatched APIs for GFX10/GFX11 real-GPU replay.
 
 ## Per-token decode: build once, patch, replay
 
