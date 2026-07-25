@@ -85,6 +85,7 @@ impl RecipePredicate {
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum SourceLowering {
     BufferResourceB32,
+    TemporalBufferB32,
     AlignedBufferB128,
     IndependentBufferB32,
     BufferOutputRmw,
@@ -580,6 +581,20 @@ impl RecipeCatalog {
                 hipx_cache_vmem_promotion_evidence("reduction"),
             ),
             recipe(
+                "hipfire.cache.mfp4_e8_u4_temporal_buffer",
+                "Lower MFP4-E8 U4 decode weights through temporal cpol0 buffer loads.",
+                exact_kernels(&["gemv_mfp4g32_e8_soa_u4"]),
+                &["dense-e8"],
+                &["phase:decode", "quant:mfp4-e8"],
+                &[],
+                RecipeAction {
+                    kernel_variant: Some("temporal_buffer_cpol0".to_owned()),
+                    lowerings: BTreeSet::from([SourceLowering::TemporalBufferB32]),
+                    ..RecipeAction::default()
+                },
+                gfx1151_e8_temporal_buffer_evidence(),
+            ),
+            recipe(
                 "hipfire.memory.interleave.independent_buffer_output",
                 "Use buffer-resource output RMW for independent interleave throughput.",
                 exact_kernels(&["memory_interleave4"]),
@@ -875,6 +890,22 @@ fn hipx_dispatch_workgroup_promotion_evidence() -> Vec<RecipeEvidence> {
         .collect()
 }
 
+fn gfx1151_e8_temporal_buffer_evidence() -> Vec<RecipeEvidence> {
+    vec![RecipeEvidence {
+        architecture: "gfx1151".to_owned(),
+        verdict: EvidenceVerdict::Promoted,
+        correctness_pass: true,
+        artifact:
+            "crates/radiowave/tests/artifacts/hipfire-deepseek4-mq2r-gfx1151-2026-07-25-e8-temporal-buffer.json"
+                .to_owned(),
+        samples_per_row: Some(3),
+        throughput_delta_pct: Some(2.937766),
+        duration_delta_pct: None,
+        note: "2048/510 top-k-6 ABBA improved 25.87 to 26.63 tok/s with byte-identical output; temporal cpol0 won while non-temporal cpol20/cpol22 regressed large tensors by 40-50%"
+            .to_owned(),
+    }]
+}
+
 fn hipx_wave64_rejection_evidence(kernel: &str) -> Vec<RecipeEvidence> {
     ["gfx1010", "gfx1030", "gfx1100", "gfx1151"]
         .into_iter()
@@ -1060,6 +1091,36 @@ mod tests {
                 WorkloadDescriptor::new("geometry_fma", "geometry").tag("phase:runtime"),
                 SelectionMode::Certified,
             )
+            .unwrap();
+        assert!(unseen.applied_recipes.is_empty());
+    }
+
+    #[test]
+    fn gfx1151_e8_temporal_buffer_requires_exact_arch_proof() {
+        let workload = WorkloadDescriptor::new("gemv_mfp4g32_e8_soa_u4", "dense-e8")
+            .tag("phase:decode")
+            .tag("quant:mfp4-e8");
+        let certified = RecipeCatalog::builtin_hipfire_6409()
+            .select("gfx1151", workload.clone(), SelectionMode::Certified)
+            .unwrap();
+        assert_eq!(
+            certified.plan.kernel_variant.as_deref(),
+            Some("temporal_buffer_cpol0")
+        );
+        assert!(
+            certified
+                .plan
+                .lowerings
+                .contains(&SourceLowering::TemporalBufferB32)
+        );
+        assert!(
+            certified
+                .applied_recipes
+                .contains(&"hipfire.cache.mfp4_e8_u4_temporal_buffer".to_owned())
+        );
+
+        let unseen = RecipeCatalog::builtin_hipfire_6409()
+            .select("gfx1201", workload, SelectionMode::Certified)
             .unwrap();
         assert!(unseen.applied_recipes.is_empty());
     }
