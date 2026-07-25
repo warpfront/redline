@@ -90,6 +90,7 @@ pub enum SourceLowering {
     IndependentBufferB32,
     BufferOutputRmw,
     Wave32XorExchange,
+    LdsTranspose32x32,
     Unroll(u32),
     Chunk(u32),
     PairedIntegerHash,
@@ -610,6 +611,21 @@ impl RecipeCatalog {
                 gfx1151_xor_shuffle_evidence(),
             ),
             recipe(
+                "hipfire.memory.topk_gather_lds_transpose",
+                "Stage DeepSeek top-k gather tiles through padded LDS so row-major reads and dimension-major writes are both coalesced.",
+                exact_kernels(&["deepseek4_topk_kv_gather_f32_buf"]),
+                &["attention-gather"],
+                &["phase:decode", "layout:row-to-column"],
+                &[],
+                RecipeAction {
+                    workgroup_size: Some(256),
+                    kernel_variant: Some("tiled_32x32_gfx1151".to_owned()),
+                    lowerings: BTreeSet::from([SourceLowering::LdsTranspose32x32]),
+                    ..RecipeAction::default()
+                },
+                gfx1151_topk_gather_tiled_evidence(),
+            ),
+            recipe(
                 "hipfire.memory.interleave.independent_buffer_output",
                 "Use buffer-resource output RMW for independent interleave throughput.",
                 exact_kernels(&["memory_interleave4"]),
@@ -937,6 +953,22 @@ fn gfx1151_xor_shuffle_evidence() -> Vec<RecipeEvidence> {
     }]
 }
 
+fn gfx1151_topk_gather_tiled_evidence() -> Vec<RecipeEvidence> {
+    vec![RecipeEvidence {
+        architecture: "gfx1151".to_owned(),
+        verdict: EvidenceVerdict::Promoted,
+        correctness_pass: true,
+        artifact:
+            "crates/radiowave/tests/artifacts/hipfire-deepseek4-mq2r-gfx1151-2026-07-25-topk-gather-tiled.json"
+                .to_owned(),
+        samples_per_row: Some(3),
+        throughput_delta_pct: Some(3.363316),
+        duration_delta_pct: Some(-72.760),
+        note: "2048/510 top-k-6 ABBA improved 25.57 to 26.43 tok/s with byte-identical output; a 21-layer cold-set microbench reduced gather latency from 72.311 to 19.697 us/call"
+            .to_owned(),
+    }]
+}
+
 fn hipx_wave64_rejection_evidence(kernel: &str) -> Vec<RecipeEvidence> {
     ["gfx1010", "gfx1030", "gfx1100", "gfx1151"]
         .into_iter()
@@ -1178,6 +1210,38 @@ mod tests {
             .plan
             .lowerings
             .contains(&SourceLowering::Wave32XorExchange));
+    }
+
+    #[test]
+    fn gfx1151_topk_gather_lds_transpose_requires_exact_arch_proof() {
+        let workload =
+            WorkloadDescriptor::new("deepseek4_topk_kv_gather_f32_buf", "attention-gather")
+                .tag("phase:decode")
+                .tag("layout:row-to-column");
+        let certified = RecipeCatalog::builtin_hipfire_6409()
+            .select("gfx1151", workload.clone(), SelectionMode::Certified)
+            .unwrap();
+        assert_eq!(certified.plan.workgroup_size, Some(256));
+        assert_eq!(
+            certified.plan.kernel_variant.as_deref(),
+            Some("tiled_32x32_gfx1151")
+        );
+        assert!(
+            certified
+                .plan
+                .lowerings
+                .contains(&SourceLowering::LdsTranspose32x32)
+        );
+        assert!(
+            certified
+                .applied_recipes
+                .contains(&"hipfire.memory.topk_gather_lds_transpose".to_owned())
+        );
+
+        let unseen = RecipeCatalog::builtin_hipfire_6409()
+            .select("gfx1201", workload, SelectionMode::Certified)
+            .unwrap();
+        assert!(unseen.applied_recipes.is_empty());
     }
 
     #[test]
