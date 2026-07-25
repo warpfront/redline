@@ -1,0 +1,51 @@
+{
+  "schema": "radiowave.recipe_evidence.v1",
+  "source_repository": "Kaden-Schutt/hipfire",
+  "campaign": "deepseek4-mq2r-gfx1151",
+  "date_utc": "2026-07-25",
+  "architecture": "gfx1151",
+  "recipe": "hipfire.memory.topk_gather_lds_transpose",
+  "fixture": {
+    "prompt_tokens": 2048,
+    "generated_tokens": 510,
+    "batch": 1,
+    "temperature": 0,
+    "genre": "coherent prose",
+    "num_experts_per_tok": 6
+  },
+  "method": {
+    "fresh_process_samples_per_arm": 3,
+    "order": "ABBAAB",
+    "baseline": "one 512-thread block per selected row",
+    "candidate": "32x32 padded-LDS transpose with 256-thread blocks"
+  },
+  "results": {
+    "baseline_tok_s": [25.57, 25.60, 25.53],
+    "candidate_tok_s": [26.38, 26.45, 26.43],
+    "baseline_median_tok_s": 25.57,
+    "candidate_median_tok_s": 26.43,
+    "candidate_over_baseline_percent": 3.363316,
+    "exact_bootstrap_95_percent": [3.046875, 3.603604],
+    "decoded_output_bit_exact": true
+  },
+  "microbench": {
+    "layers": 21,
+    "k": 512,
+    "n_compressed": 640,
+    "head_dim": 512,
+    "baseline_median_us": 72.311,
+    "candidate_median_us": 19.697,
+    "latency_reduction_percent": 72.760,
+    "output_bit_exact": true
+  },
+  "resource_contract": {
+    "wavefront": 32,
+    "workgroup_size": 256,
+    "static_lds_bytes": 4352,
+    "vgpr_count": 13,
+    "sgpr_count": 18,
+    "private_segment_bytes": 0,
+    "scratch_spills": 0,
+    "code_object_sha256": "a92ac0fc8d7b8c7a6b18c4df82bee0307a9322cfedd680bd08ab306284926a01"
+  }
+}
