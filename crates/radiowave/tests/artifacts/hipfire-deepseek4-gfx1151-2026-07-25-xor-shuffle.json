@@ -1,0 +1,46 @@
+{
+  "schema": "radiowave.recipe_evidence.v1",
+  "source_repository": "Kaden-Schutt/hipfire",
+  "campaign": "deepseek4-mq2r-gfx1151",
+  "date_utc": "2026-07-25",
+  "architecture": "gfx1151",
+  "recipe": "hipfire.cross_lane.wave32_xor_exchange",
+  "lane_mapping_proof": {
+    "reference": "__shfl_xor(bits, stride, 32)",
+    "raw_bit_comparisons": 41120,
+    "strides": {
+      "1": "v_mov_b32_dpp quad_perm 0xb1",
+      "2": "v_mov_b32_dpp quad_perm 0x4e",
+      "4": "ds_swizzle_b32 0x101f",
+      "8": "ds_swizzle_b32 0x201f",
+      "16": "v_permlanex16_b32 selectors 0x76543210/0xfedcba98"
+    },
+    "mismatches": 0
+  },
+  "screen": {
+    "shape": {
+      "n_heads": 64,
+      "head_dim": 512,
+      "swa_window": 128,
+      "topk_window": 512
+    },
+    "fresh_process_samples_per_arm": 3,
+    "order": "ABBAAB",
+    "baseline_us_per_call": [176.354, 177.546, 176.392],
+    "candidate_us_per_call": [174.281, 175.274, 175.478],
+    "baseline_median_us": 176.392,
+    "candidate_median_us": 175.274,
+    "candidate_speedup_percent": 0.637858,
+    "output_bit_exact": true,
+    "projected_saved_us_per_token_at_41_calls": 45.838,
+    "projected_whole_token_percent": 0.118390
+  },
+  "resource_contract": {
+    "wavefront": 32,
+    "vgpr_count": 75,
+    "sgpr_count": 38,
+    "private_segment_bytes": 0,
+    "scratch_spills": 0
+  },
+  "decision": "correctness_only_not_promoted_below_product_threshold"
+}
