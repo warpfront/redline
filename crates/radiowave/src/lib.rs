@@ -240,6 +240,61 @@ impl CompileRequest {
     }
 }
 
+/// Describes a code object emitted by an external compiler driver which
+/// Radiowave should inspect and bind to a certification manifest.
+///
+/// This is the runtime/JIT integration path: the owner keeps its existing
+/// compiler and cache, while Radiowave owns the exact-object inspection and
+/// hash binding consumed by replay.
+#[derive(Clone, Debug)]
+pub struct ExistingCodeObjectRequest {
+    pub source: PathBuf,
+    pub output: PathBuf,
+    pub arch: String,
+    pub wavefront: Wavefront,
+    pub hipcc: PathBuf,
+    pub command: Vec<String>,
+    pub manifest: Option<PathBuf>,
+}
+
+impl ExistingCodeObjectRequest {
+    pub fn new(
+        source: impl Into<PathBuf>,
+        output: impl Into<PathBuf>,
+        arch: impl Into<String>,
+    ) -> Self {
+        Self {
+            source: source.into(),
+            output: output.into(),
+            arch: arch.into(),
+            wavefront: Wavefront::Wave32,
+            hipcc: resolve_hipcc(),
+            command: Vec::new(),
+            manifest: None,
+        }
+    }
+
+    pub fn wavefront(mut self, wavefront: Wavefront) -> Self {
+        self.wavefront = wavefront;
+        self
+    }
+
+    pub fn hipcc(mut self, hipcc: impl Into<PathBuf>) -> Self {
+        self.hipcc = hipcc.into();
+        self
+    }
+
+    pub fn command(mut self, command: Vec<String>) -> Self {
+        self.command = command;
+        self
+    }
+
+    pub fn manifest(mut self, path: impl Into<PathBuf>) -> Self {
+        self.manifest = Some(path.into());
+        self
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InstructionStats {
@@ -471,6 +526,68 @@ impl Compiler {
             output_sha256,
             manifest: Some(manifest_path),
             inspection,
+        })
+    }
+
+    /// Inspect an already-emitted code object and write the same hash-bound
+    /// manifest used by [`Compiler::compile`].
+    ///
+    /// No compilation is performed. Both the source and code object must
+    /// already exist, and the returned manifest certifies the exact output
+    /// bytes observed by Radiowave.
+    pub fn certify_existing(&self, request: &ExistingCodeObjectRequest) -> Result<CompileArtifact> {
+        let cwd = env::current_dir()?;
+        let source = absolute_from(&cwd, &request.source);
+        let output = absolute_from(&cwd, &request.output);
+        if !source.is_file() {
+            return Err(Error::MissingSource(source));
+        }
+        if !output.is_file() {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("code object does not exist: {}", output.display()),
+            )));
+        }
+
+        let inspection = Inspector::from_hipcc(&request.hipcc).inspect(&output, &request.arch)?;
+        let output_sha256 = sha256_file(&output)?;
+        let manifest_path = request
+            .manifest
+            .as_ref()
+            .map(|path| absolute_from(&cwd, path))
+            .unwrap_or_else(|| output.with_extension("radiowave.json"));
+        if let Some(parent) = manifest_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let manifest = CompileManifest {
+            schema_version: 3,
+            compiler: "radiowave".to_owned(),
+            generated_unix_seconds: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            source: source.clone(),
+            output: output.clone(),
+            arch: request.arch.clone(),
+            wavefront: request.wavefront,
+            scheduler_profile: SchedulerProfile::Default,
+            hipcc: request.hipcc.clone(),
+            hipcc_version: tool_version(&request.hipcc),
+            command: request.command.clone(),
+            source_sha256: sha256_file(&source)?,
+            // Existing-object certification does not inject Radiowave's HIP
+            // support header. Bind the manifest to that explicit absence.
+            support_header_sha256: sha256_bytes(&[]),
+            output_sha256: output_sha256.clone(),
+            inspection: Some(inspection.clone()),
+        };
+        fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+
+        Ok(CompileArtifact {
+            output,
+            output_sha256,
+            manifest: Some(manifest_path),
+            inspection: Some(inspection),
         })
     }
 }
@@ -1215,6 +1332,29 @@ mod tests {
                 Path::new("/tmp/project/artifacts/kernel.hsaco")
             ),
             Path::new("/tmp/project/artifacts/kernel.radiowave.json")
+        );
+    }
+
+    #[test]
+    fn existing_code_object_request_preserves_external_build_identity() {
+        let request =
+            ExistingCodeObjectRequest::new("cache/kernel.hip", "cache/kernel.hsaco", "gfx1151")
+                .wavefront(Wavefront::Wave32)
+                .hipcc("/opt/rocm/bin/hipcc")
+                .command(vec![
+                    "hipcc".to_owned(),
+                    "--offload-arch=gfx1151".to_owned(),
+                ])
+                .manifest("cache/kernel.radiowave.json");
+        assert_eq!(request.source, Path::new("cache/kernel.hip"));
+        assert_eq!(request.output, Path::new("cache/kernel.hsaco"));
+        assert_eq!(request.arch, "gfx1151");
+        assert_eq!(request.wavefront, Wavefront::Wave32);
+        assert_eq!(request.hipcc, Path::new("/opt/rocm/bin/hipcc"));
+        assert_eq!(request.command, ["hipcc", "--offload-arch=gfx1151"]);
+        assert_eq!(
+            request.manifest.as_deref(),
+            Some(Path::new("cache/kernel.radiowave.json"))
         );
     }
 
