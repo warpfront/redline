@@ -89,6 +89,7 @@ pub enum SourceLowering {
     AlignedBufferB128,
     IndependentBufferB32,
     BufferOutputRmw,
+    Wave32XorExchange,
     Unroll(u32),
     Chunk(u32),
     PairedIntegerHash,
@@ -595,6 +596,20 @@ impl RecipeCatalog {
                 gfx1151_e8_temporal_buffer_evidence(),
             ),
             recipe(
+                "hipfire.cross_lane.wave32_xor_exchange",
+                "Lower wave32 XOR exchanges through architecture-reviewed DPP, ds_swizzle, and permlanex16 forms.",
+                exact_kernels(&["deepseek4_attn_swa_topk_scoregrid_f32_buf"]),
+                &["attention"],
+                &["phase:decode", "reduction:max"],
+                &[],
+                RecipeAction {
+                    kernel_variant: Some("scoregrid_xlane".to_owned()),
+                    lowerings: BTreeSet::from([SourceLowering::Wave32XorExchange]),
+                    ..RecipeAction::default()
+                },
+                gfx1151_xor_shuffle_evidence(),
+            ),
+            recipe(
                 "hipfire.memory.interleave.independent_buffer_output",
                 "Use buffer-resource output RMW for independent interleave throughput.",
                 exact_kernels(&["memory_interleave4"]),
@@ -906,6 +921,22 @@ fn gfx1151_e8_temporal_buffer_evidence() -> Vec<RecipeEvidence> {
     }]
 }
 
+fn gfx1151_xor_shuffle_evidence() -> Vec<RecipeEvidence> {
+    vec![RecipeEvidence {
+        architecture: "gfx1151".to_owned(),
+        verdict: EvidenceVerdict::CorrectnessOnly,
+        correctness_pass: true,
+        artifact:
+            "crates/radiowave/tests/artifacts/hipfire-deepseek4-gfx1151-2026-07-25-xor-shuffle.json"
+                .to_owned(),
+        samples_per_row: Some(3),
+        throughput_delta_pct: Some(0.637858),
+        duration_delta_pct: Some(-0.633817),
+        note: "41,120 raw-bit comparisons proved the stride table: xor1/xor2 DPP quad-perm, xor4/xor8 ds_swizzle, xor16 permlanex16 selectors 0x76543210/0xfedcba98; the score-grid screen was bit-exact but projected only 0.118% whole-token gain, so the lowering remains an unpromoted candidate"
+            .to_owned(),
+    }]
+}
+
 fn hipx_wave64_rejection_evidence(kernel: &str) -> Vec<RecipeEvidence> {
     ["gfx1010", "gfx1030", "gfx1100", "gfx1151"]
         .into_iter()
@@ -1123,6 +1154,30 @@ mod tests {
             .select("gfx1201", workload, SelectionMode::Certified)
             .unwrap();
         assert!(unseen.applied_recipes.is_empty());
+    }
+
+    #[test]
+    fn gfx1151_xor_shuffle_is_proven_but_not_performance_promoted() {
+        let workload =
+            WorkloadDescriptor::new("deepseek4_attn_swa_topk_scoregrid_f32_buf", "attention")
+                .tag("phase:decode")
+                .tag("reduction:max");
+        let certified = RecipeCatalog::builtin_hipfire_6409()
+            .select("gfx1151", workload.clone(), SelectionMode::Certified)
+            .unwrap();
+        assert!(certified.applied_recipes.is_empty());
+        assert!(certified.plan.lowerings.is_empty());
+
+        let candidate = RecipeCatalog::builtin_hipfire_6409()
+            .select("gfx1151", workload, SelectionMode::Candidates)
+            .unwrap();
+        assert!(candidate
+            .candidate_recipes
+            .contains(&"hipfire.cross_lane.wave32_xor_exchange".to_owned()));
+        assert!(candidate
+            .plan
+            .lowerings
+            .contains(&SourceLowering::Wave32XorExchange));
     }
 
     #[test]
