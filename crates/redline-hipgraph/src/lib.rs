@@ -1492,13 +1492,13 @@ pub unsafe extern "C" fn hipGraphExecUpdate(
         unsafe { *update_result = hipGraphExecUpdateErrorNotSupported };
     }
     let Some(graph_handle) = graph_handle(graph) else {
-        return hipErrorNotSupported;
+        return hipErrorGraphExecUpdateFailure;
     };
     let exec_handle = exec_handle(exec).expect("owned exec checked");
     let graph_state = lock(&graph_handle.state);
     let mut exec_state = lock(&exec_handle.state);
     if graph_state.native_graph == 0 || exec_state.native_exec == 0 {
-        return hipErrorNotSupported;
+        return hipErrorGraphExecUpdateFailure;
     }
     type Function = unsafe extern "C" fn(
         hipGraphExec_t,
@@ -1507,18 +1507,104 @@ pub unsafe extern "C" fn hipGraphExecUpdate(
         *mut i32,
     ) -> hipError_t;
     let Some(function) = (unsafe { real_symbol::<Function>(b"hipGraphExecUpdate\0") }) else {
-        return hipErrorNotSupported;
+        return hipErrorGraphExecUpdateFailure;
     };
+    // HIP's hipGraphExecUpdate requires a valid hipGraphNode_t* out-param; passing
+    // null here made the real runtime reject the call with hipErrorInvalidValue(1),
+    // which callers (e.g. llama.cpp ggml-cuda.cu) treat as fatal rather than as a
+    // recoverable update failure. Supply a local slot instead. The node handle is a
+    // NATIVE node, so it is deliberately not propagated back to the caller's
+    // error_node (already set to null above) to avoid handing out a foreign handle.
+    let mut native_error_node: hipGraphNode_t = ptr::null_mut();
     let status = unsafe {
         function(
             exec_state.native_exec as hipGraphExec_t,
             graph_state.native_graph as hipGraph_t,
-            ptr::null_mut(),
+            &mut native_error_node,
             update_result,
         )
     };
+
+    // ---- PM4 graph-exec UPDATE -------------------------------------------
+    // Callers such as llama.cpp re-capture and update every iteration because
+    // data pointers / shapes / strides advance while the topology stays fixed
+    // (ggml-cuda.cu node_properties tracks exactly: node, src data ptrs, ne, nb).
+    // The PM4 IB references kernarg buffers by ADDRESS, so those changes can be
+    // applied by rewriting kernarg bytes in place -- no re-encode needed.
+    //
+    // Anything the PM4 stream bakes in (kernel identity, grid, block, dyn_group)
+    // CANNOT be patched, so if any of those moved we fall back to native launch
+    // rather than replaying a stale IB. Without this check the replay silently
+    // produces wrong results (measured: byte-identical at 128 tokens, divergent
+    // at 256, because attention geometry grows with the KV cache).
+    if status == hipSuccess && exec_state.replay.is_some() {
+        let mut patchable = true;
+        if let Some(plan) = exec_state.exec.as_ref() {
+            let dispatches = plan.plan().dispatches();
+            // geometry/kernel identity must be unchanged for every dispatch
+            for planned in dispatches {
+                let node = planned.node();
+                match (graph_state.node_meta.get(&node), exec_state.node_meta.get(&node)) {
+                    (Some(new_meta), Some(old_meta)) => {
+                        if new_meta.grid != old_meta.grid
+                            || new_meta.block != old_meta.block
+                            || new_meta.dyn_group != old_meta.dyn_group
+                            || new_meta.symbol != old_meta.symbol
+                        {
+                            patchable = false;
+                            break;
+                        }
+                    }
+                    _ => {
+                        patchable = false;
+                        break;
+                    }
+                }
+            }
+            if patchable {
+                let order: Vec<NodeId> = dispatches.iter().map(|d| d.node()).collect();
+                let new_args: Vec<Option<Vec<u8>>> = order
+                    .iter()
+                    .map(|node| graph_state.node_meta.get(node).map(|m| m.kernargs.clone()))
+                    .collect();
+                if let Some(replay) = exec_state.replay.as_mut() {
+                    if replay.dispatch_count() == new_args.len() {
+                        let _ = replay.update_kernargs(|index| {
+                            new_args.get(index).and_then(|slot| slot.as_deref())
+                        });
+                        // adopt the new kernargs as this exec's current state
+                        for node in &order {
+                            if let (Some(new_meta), Some(old_meta)) = (
+                                graph_state.node_meta.get(node),
+                                exec_state.node_meta.get_mut(node),
+                            ) {
+                                old_meta.kernargs.clone_from(&new_meta.kernargs);
+                            }
+                        }
+                        hgdbg!(
+                            "hipGraphExecUpdate pm4_kernarg_patch=ok dispatches={}",
+                            new_args.len()
+                        );
+                        // replay stays valid -> do NOT pin to native
+                        return status;
+                    }
+                }
+            } else {
+                hgdbg!("hipGraphExecUpdate pm4_kernarg_patch=skipped reason=geometry_changed");
+            }
+        }
+    }
+
     if status == hipSuccess {
-        exec_state.force_native = true;
+        // UPPER-BOUND PROBE ONLY (REDLINE_FORCE_REPLAY=1): normally a successful
+        // native update pins this exec to native launches, which is why llama.cpp
+        // (which updates every token) never exercises the PM4 replay. Skipping the
+        // pin keeps the retained replay live so its SPEED can be measured -- the
+        // replay then runs with capture-time pointers, so OUTPUT IS INCORRECT.
+        // This exists to size the prize for implementing PM4 re-encode on update.
+        if std::env::var_os("REDLINE_FORCE_REPLAY").is_none() {
+            exec_state.force_native = true;
+        }
     }
     status
 }

@@ -28,7 +28,10 @@ pub struct NodeDispatch<'a> {
 /// by the encoded indirect buffer.
 pub struct Pm4GraphReplay {
     ib: SingleQueuePm4Ib,
-    _kernargs: Vec<KernargBuffer>,
+    /// Retained kernarg buffers, in `CompiledPlan::dispatches()` order. The
+    /// encoded IB embeds each buffer's ADDRESS, so rewriting the contents in
+    /// place updates the replay without re-encoding any PM4.
+    kernargs: Vec<KernargBuffer>,
     _kernels: Vec<Kernel>,
 }
 
@@ -40,6 +43,38 @@ impl Pm4GraphReplay {
     /// Device pointers embedded in the retained kernarg bytes must remain live
     /// and GPU-accessible until this method returns. After an error, they must
     /// remain live through destruction of this replay object.
+    /// Number of retained dispatches, in `CompiledPlan::dispatches()` order.
+    pub fn dispatch_count(&self) -> usize {
+        self.kernargs.len()
+    }
+
+    /// Rewrite retained kernarg bytes in place, preserving the encoded IB.
+    ///
+    /// This implements graph-exec *update* semantics for the PM4 backend: the
+    /// indirect buffer references kernarg buffers by address, so changing only
+    /// the argument bytes (device pointers, shapes, strides) needs no
+    /// re-encoding. Callers MUST have already verified that launch geometry
+    /// (grid/block/dyn_group) and the kernel identity per dispatch are
+    /// unchanged -- those are baked into the PM4 stream and cannot be patched.
+    ///
+    /// `resolve` is called with the dispatch index and returns the new bytes,
+    /// or `None` to leave that dispatch untouched.
+    pub fn update_kernargs<'a>(
+        &mut self,
+        mut resolve: impl FnMut(usize) -> Option<&'a [u8]>,
+    ) -> Result<(), GraphPm4Error> {
+        for (index, kernarg) in self.kernargs.iter_mut().enumerate() {
+            let Some(bytes) = resolve(index) else {
+                continue;
+            };
+            let destination = kernarg.as_mut_bytes();
+            destination.fill(0);
+            let len = bytes.len().min(destination.len());
+            destination[..len].copy_from_slice(&bytes[..len]);
+        }
+        Ok(())
+    }
+
     pub unsafe fn replay_and_wait(&mut self) -> Result<(), GraphPm4Error> {
         // SAFETY: forwarded from this method's caller. Kernarg allocations and
         // code objects are retained by this object.
@@ -173,9 +208,11 @@ pub fn lower_plan_to_pm4_ib<'a>(
     let mut kernargs = Vec::with_capacity(plan.dispatches().len());
     let mut kernels = Vec::with_capacity(plan.dispatches().len());
 
+    let mut boundary_count = 0usize;
     for (index, dispatch) in plan.dispatches().iter().enumerate() {
         if index > 0 && !dispatch.dependencies().is_empty() {
             commands.dependency_boundary();
+            boundary_count += 1;
         }
         let binding =
             resolve(dispatch.node()).ok_or(GraphPm4Error::MissingNode(dispatch.node()))?;
@@ -195,6 +232,15 @@ pub fn lower_plan_to_pm4_ib<'a>(
         kernargs.push(kernarg);
     }
 
+    if std::env::var_os("REDLINE_BOUNDARY_STATS").is_some() {
+        eprintln!(
+            "redline-pm4: dispatches={} dependency_boundaries={} ratio={:.3}",
+            plan.dispatches().len(),
+            boundary_count,
+            boundary_count as f64 / plan.dispatches().len().max(1) as f64
+        );
+    }
+
     let ib = match (family, &commands) {
         (Pm4Family::Gfx10, Pm4Commands::Legacy(commands)) => {
             SingleQueuePm4Ib::create_gfx10(device, pool, commands)
@@ -211,7 +257,7 @@ pub fn lower_plan_to_pm4_ib<'a>(
 
     Ok(Pm4GraphReplay {
         ib,
-        _kernargs: kernargs,
+        kernargs,
         _kernels: kernels,
     })
 }
