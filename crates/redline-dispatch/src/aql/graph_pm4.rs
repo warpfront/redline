@@ -40,9 +40,6 @@ impl Pm4GraphReplay {
     ///
     /// # Safety
     ///
-    /// Device pointers embedded in the retained kernarg bytes must remain live
-    /// and GPU-accessible until this method returns. After an error, they must
-    /// remain live through destruction of this replay object.
     /// Number of retained dispatches, in `CompiledPlan::dispatches()` order.
     pub fn dispatch_count(&self) -> usize {
         self.kernargs.len()
@@ -75,6 +72,9 @@ impl Pm4GraphReplay {
         Ok(())
     }
 
+    /// Device pointers embedded in the retained kernarg bytes must remain live
+    /// and GPU-accessible until this method returns. After an error, they must
+    /// remain live through destruction of this replay object.
     pub unsafe fn replay_and_wait(&mut self) -> Result<(), GraphPm4Error> {
         // SAFETY: forwarded from this method's caller. Kernarg allocations and
         // code objects are retained by this object.

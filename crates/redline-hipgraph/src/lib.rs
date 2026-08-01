@@ -1537,6 +1537,10 @@ pub unsafe extern "C" fn hipGraphExecUpdate(
     // rather than replaying a stale IB. Without this check the replay silently
     // produces wrong results (measured: byte-identical at 128 tokens, divergent
     // at 256, because attention geometry grows with the KV cache).
+    // LOAD-BEARING ORDERING: this runs only after the native update returned
+    // hipSuccess. HIP validates that the new graph is topologically identical to
+    // the instantiated one, so a shape change cannot reach the kernarg patch
+    // below. Do not hoist this above the native call.
     if status == hipSuccess && exec_state.replay.is_some() {
         let mut patchable = true;
         if let Some(plan) = exec_state.exec.as_ref() {
@@ -1569,9 +1573,13 @@ pub unsafe extern "C" fn hipGraphExecUpdate(
                     .collect();
                 if let Some(replay) = exec_state.replay.as_mut() {
                     if replay.dispatch_count() == new_args.len() {
-                        let _ = replay.update_kernargs(|index| {
+                        if let Err(error) = replay.update_kernargs(|index| {
                             new_args.get(index).and_then(|slot| slot.as_deref())
-                        });
+                        }) {
+                            hgdbg!("hipGraphExecUpdate pm4_kernarg_patch=failed {error:?}");
+                            exec_state.force_native = true;
+                            return status;
+                        }
                         // adopt the new kernargs as this exec's current state
                         for node in &order {
                             if let (Some(new_meta), Some(old_meta)) = (
@@ -1604,6 +1612,20 @@ pub unsafe extern "C" fn hipGraphExecUpdate(
         // This exists to size the prize for implementing PM4 re-encode on update.
         if std::env::var_os("REDLINE_FORCE_REPLAY").is_none() {
             exec_state.force_native = true;
+        } else {
+            // This probe replays with capture-time pointers: results are WRONG by
+            // construction. It exists to size the prize for PM4 re-encode on update.
+            // It must never run silently -- a fast wrong number is worse than a slow
+            // right one, and benchmark knobs outlive the person who set them.
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!(
+                    "redline: REDLINE_FORCE_REPLAY=1 is set -- retained replay is kept \
+live across graph-exec updates using CAPTURE-TIME kernargs. Output is INCORRECT. \
+This is a speed upper-bound probe only; do not use it for correctness or for \
+published measurements."
+                );
+            });
         }
     }
     status
