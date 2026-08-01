@@ -12,7 +12,7 @@
 //! - `/opt/rocm/core/include/rocprofiler-sdk-roctx/roctx.h` (sdk API)
 //! - `/opt/rocm/core/include/roctracer/roctx.h` (legacy mark/range only)
 
-use std::ffi::{c_char, c_int, CString};
+use std::ffi::{CString, c_char, c_int};
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -276,7 +276,10 @@ impl Roctx {
     ///
     /// This is the correct lifecycle for selected-region collection. Nested
     /// [`Self::range`] markers may still be used for naming inside the window.
-    pub fn selected_region(&self, tid: RoctxThreadId) -> Result<SelectedRegionGuard<'_>, RoctxError> {
+    pub fn selected_region(
+        &self,
+        tid: RoctxThreadId,
+    ) -> Result<SelectedRegionGuard<'_>, RoctxError> {
         self.resume(tid)?;
         Ok(SelectedRegionGuard {
             roctx: self,
@@ -337,13 +340,9 @@ impl Roctx {
             })
         }
     }
-
 }
 
-unsafe fn resolve<T: Copy>(
-    library: &Library,
-    name: &'static [u8],
-) -> Result<T, RoctxError> {
+unsafe fn resolve<T: Copy>(library: &Library, name: &'static [u8]) -> Result<T, RoctxError> {
     let symbol_static: &'static str = match name {
         b"roctxMarkA\0" => "roctxMarkA",
         b"roctxRangePushA\0" => "roctxRangePushA",

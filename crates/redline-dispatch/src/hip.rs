@@ -56,20 +56,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use libloading::Library;
 
+use crate::batch_mem::BatchMemPlan;
+use crate::ffi_batch_mem::{self, BatchMemSymbols, HIP_MEM_BATCH_FLAGS_NONE, HipMemLocation};
+use crate::ffi_execution_ctx::{
+    self, ExecutionCtxSymbols, HIP_DEV_RESOURCE_TYPE_SM, HipDevResource, HipDevResourceDesc,
+    HipDevSmResourceGroupParams, HipExecutionCtx,
+};
+use crate::partition::{self, PartitionPolicy};
 use crate::{
     Access, BeginReplay, CompiledPlan, DispatchBackend, DispatchRequest, EndReplay, KernelArg,
     LaneId, NodeId, ReplayBindingError, ReplayBindings, ReplayMode, ReplayToken, ResourceId,
 };
-use crate::batch_mem::BatchMemPlan;
-use crate::ffi_batch_mem::{
-    self, BatchMemSymbols, HIP_MEM_BATCH_FLAGS_NONE, HipMemLocation,
-};
-use crate::ffi_execution_ctx::{
-    self, ExecutionCtxSymbols, HIP_DEV_RESOURCE_TYPE_SM, HipDevResource,
-    HipDevResourceDesc, HipDevSmResourceGroupParams, HipExecutionCtx,
-};
-use crate::partition::{self, PartitionPolicy};
-
 
 type HipErrorCode = c_int;
 type HipFunction = *mut c_void;
@@ -383,12 +380,7 @@ impl Stream {
         unsafe {
             fns.check(
                 "hipExecutionCtxStreamCreate",
-                (symbols.execution_ctx_stream_create)(
-                    &mut raw,
-                    ctx,
-                    HIP_STREAM_NON_BLOCKING,
-                    0,
-                ),
+                (symbols.execution_ctx_stream_create)(&mut raw, ctx, HIP_STREAM_NON_BLOCKING, 0),
             )?;
         }
         let raw = NonNull::new(raw).ok_or(HipBackendError::NullHandle {
@@ -733,18 +725,16 @@ impl HipMultiStreamBackend {
         let fns = HipFns::load(device_ordinal)?;
         let coordinator = Stream::create(&fns)?;
 
-        let (workers, execution_contexts) = if matches!(
-            config.get_partition_policy(),
-            PartitionPolicy::None
-        ) {
-            // Byte-identical legacy path: plain nonblocking worker streams.
-            let workers = (0..config.worker_count().get())
-                .map(|_| Stream::create(&fns))
-                .collect::<Result<Vec<_>, _>>()?;
-            (workers, Vec::new())
-        } else {
-            create_partitioned_workers(&fns, device_ordinal, &config)?
-        };
+        let (workers, execution_contexts) =
+            if matches!(config.get_partition_policy(), PartitionPolicy::None) {
+                // Byte-identical legacy path: plain nonblocking worker streams.
+                let workers = (0..config.worker_count().get())
+                    .map(|_| Stream::create(&fns))
+                    .collect::<Result<Vec<_>, _>>()?;
+                (workers, Vec::new())
+            } else {
+                create_partitioned_workers(&fns, device_ordinal, &config)?
+            };
 
         Ok(Self {
             backend_id,
@@ -1797,11 +1787,10 @@ fn create_partitioned_workers(
         PartitionPolicy::Equal(_) => {
             let min_count = partitions[0].cu_count;
             let mut results = vec![HipDevResource::default(); worker_count];
-            let mut nb_groups = c_uint::try_from(worker_count).map_err(|_| {
-                HipBackendError::InvalidConfig {
+            let mut nb_groups =
+                c_uint::try_from(worker_count).map_err(|_| HipBackendError::InvalidConfig {
                     detail: format!("worker count {worker_count} exceeds u32"),
-                }
-            })?;
+                })?;
             let mut remainder = HipDevResource::default();
             // SAFETY: result buffer has nb_groups slots; input is the device SM
             // resource; remainder is a valid out-parameter.
@@ -1840,11 +1829,10 @@ fn create_partitioned_workers(
                     reserved: [0; 12],
                 })
                 .collect();
-            let nb_groups = c_uint::try_from(worker_count).map_err(|_| {
-                HipBackendError::InvalidConfig {
+            let nb_groups =
+                c_uint::try_from(worker_count).map_err(|_| HipBackendError::InvalidConfig {
                     detail: format!("worker count {worker_count} exceeds u32"),
-                }
-            })?;
+                })?;
             // SAFETY: result/group_params lengths match nb_groups; input is the
             // device SM resource; remainder is a valid out-parameter.
             unsafe {
@@ -2223,9 +2211,7 @@ pub enum HipBackendError {
     },
     #[error("invalid HIP backend partition policy: {0}")]
     InvalidPartition(#[source] partition::PartitionError),
-    #[error(
-        "partition policy produced {partitions} slices but backend worker_count is {workers}"
-    )]
+    #[error("partition policy produced {partitions} slices but backend worker_count is {workers}")]
     PartitionWorkerMismatch { partitions: usize, workers: usize },
     #[error("invalid HIP backend configuration: {detail}")]
     InvalidConfig { detail: String },

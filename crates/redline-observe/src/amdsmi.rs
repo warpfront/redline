@@ -325,32 +325,22 @@ const _: () = {
 
 type InitFn = unsafe extern "C" fn(u64) -> Status;
 type ShutDownFn = unsafe extern "C" fn() -> Status;
-type GetSocketHandlesFn =
-    unsafe extern "C" fn(*mut u32, *mut SocketHandle) -> Status;
+type GetSocketHandlesFn = unsafe extern "C" fn(*mut u32, *mut SocketHandle) -> Status;
 type GetProcessorHandlesFn =
     unsafe extern "C" fn(SocketHandle, *mut u32, *mut ProcessorHandle) -> Status;
-type GetProcessorTypeFn =
-    unsafe extern "C" fn(ProcessorHandle, *mut ProcessorType) -> Status;
-type GetClockInfoFn =
-    unsafe extern "C" fn(ProcessorHandle, ClkType, *mut AmdSmiClkInfo) -> Status;
+type GetProcessorTypeFn = unsafe extern "C" fn(ProcessorHandle, *mut ProcessorType) -> Status;
+type GetClockInfoFn = unsafe extern "C" fn(ProcessorHandle, ClkType, *mut AmdSmiClkInfo) -> Status;
 type GetClkFreqFn =
     unsafe extern "C" fn(ProcessorHandle, ClkType, *mut AmdSmiFrequencies) -> Status;
-type GetTempMetricFn = unsafe extern "C" fn(
-    ProcessorHandle,
-    TemperatureType,
-    TemperatureMetric,
-    *mut i64,
-) -> Status;
-type GetPowerInfoFn =
-    unsafe extern "C" fn(ProcessorHandle, *mut AmdSmiPowerInfo) -> Status;
+type GetTempMetricFn =
+    unsafe extern "C" fn(ProcessorHandle, TemperatureType, TemperatureMetric, *mut i64) -> Status;
+type GetPowerInfoFn = unsafe extern "C" fn(ProcessorHandle, *mut AmdSmiPowerInfo) -> Status;
 type GetPowerCapInfoFn =
     unsafe extern "C" fn(ProcessorHandle, u32, *mut AmdSmiPowerCapInfo) -> Status;
-type GetGpuMetricsInfoFn =
-    unsafe extern "C" fn(ProcessorHandle, *mut AmdSmiGpuMetrics) -> Status;
+type GetGpuMetricsInfoFn = unsafe extern "C" fn(ProcessorHandle, *mut AmdSmiGpuMetrics) -> Status;
 type GetGpuPartitionMetricsInfoFn =
     unsafe extern "C" fn(ProcessorHandle, *mut AmdSmiGpuMetrics) -> Status;
-type GetGpuFanRpmsFn =
-    unsafe extern "C" fn(ProcessorHandle, u32, *mut i64) -> Status;
+type GetGpuFanRpmsFn = unsafe extern "C" fn(ProcessorHandle, u32, *mut i64) -> Status;
 
 struct Symbols {
     _lib: Arc<Library>,
@@ -409,9 +399,7 @@ pub struct AmdSmi {
 /// Errors from loading or querying AMD SMI.
 #[derive(Debug, Error)]
 pub enum AmdSmiError {
-    #[error(
-        "could not load libamd_smi (requires ROCm >= 7.14); tried {candidates}: {detail}"
-    )]
+    #[error("could not load libamd_smi (requires ROCm >= 7.14); tried {candidates}: {detail}")]
     Library { candidates: String, detail: String },
 
     #[error("missing libamd_smi symbol `{symbol}` (requires ROCm >= 7.14)")]
@@ -467,50 +455,38 @@ impl AmdSmi {
         check(
             "get_clock_info",
             // SAFETY: handle from this session; out-struct is valid stack memory.
-            unsafe {
-                (self.symbols.get_clock_info)(handle, AMDSMI_CLK_TYPE_GFX, &mut gfx)
-            },
+            unsafe { (self.symbols.get_clock_info)(handle, AMDSMI_CLK_TYPE_GFX, &mut gfx) },
         )?;
 
         let mut mem = zeroed_clk();
-        check(
-            "get_clock_info",
-            unsafe {
-                (self.symbols.get_clock_info)(handle, AMDSMI_CLK_TYPE_MEM, &mut mem)
-            },
-        )?;
+        check("get_clock_info", unsafe {
+            (self.symbols.get_clock_info)(handle, AMDSMI_CLK_TYPE_MEM, &mut mem)
+        })?;
 
         let mut edge_temp_c: i64 = 0;
-        check(
-            "get_temp_metric",
-            unsafe {
-                (self.symbols.get_temp_metric)(
-                    handle,
-                    AMDSMI_TEMPERATURE_TYPE_EDGE,
-                    AMDSMI_TEMP_CURRENT,
-                    &mut edge_temp_c,
-                )
-            },
-        )?;
+        check("get_temp_metric", unsafe {
+            (self.symbols.get_temp_metric)(
+                handle,
+                AMDSMI_TEMPERATURE_TYPE_EDGE,
+                AMDSMI_TEMP_CURRENT,
+                &mut edge_temp_c,
+            )
+        })?;
 
         let mut junction_temp_c: i64 = 0;
-        check(
-            "get_temp_metric",
-            unsafe {
-                (self.symbols.get_temp_metric)(
-                    handle,
-                    AMDSMI_TEMPERATURE_TYPE_JUNCTION,
-                    AMDSMI_TEMP_CURRENT,
-                    &mut junction_temp_c,
-                )
-            },
-        )?;
+        check("get_temp_metric", unsafe {
+            (self.symbols.get_temp_metric)(
+                handle,
+                AMDSMI_TEMPERATURE_TYPE_JUNCTION,
+                AMDSMI_TEMP_CURRENT,
+                &mut junction_temp_c,
+            )
+        })?;
 
         let mut power = zeroed_power();
-        check(
-            "get_power_info",
-            unsafe { (self.symbols.get_power_info)(handle, &mut power) },
-        )?;
+        check("get_power_info", unsafe {
+            (self.symbols.get_power_info)(handle, &mut power)
+        })?;
 
         let mut cap = zeroed_power_cap();
         check(
@@ -550,10 +526,9 @@ impl AmdSmi {
     pub fn gpu_metrics(&self, gpu_index: u32) -> Result<AmdSmiGpuMetrics, AmdSmiError> {
         let handle = self.gpu_handle(gpu_index)?;
         let mut metrics = zeroed_metrics();
-        check(
-            "get_gpu_metrics_info",
-            unsafe { (self.symbols.get_gpu_metrics_info)(handle, &mut metrics) },
-        )?;
+        check("get_gpu_metrics_info", unsafe {
+            (self.symbols.get_gpu_metrics_info)(handle, &mut metrics)
+        })?;
         Ok(metrics)
     }
 
@@ -561,18 +536,12 @@ impl AmdSmi {
     ///
     /// Same blob shape as [`Self::gpu_metrics`], scoped to the active partition
     /// (CPX/DPX/… when applicable).
-    pub fn partition_metrics(
-        &self,
-        gpu_index: u32,
-    ) -> Result<AmdSmiGpuMetrics, AmdSmiError> {
+    pub fn partition_metrics(&self, gpu_index: u32) -> Result<AmdSmiGpuMetrics, AmdSmiError> {
         let handle = self.gpu_handle(gpu_index)?;
         let mut metrics = zeroed_metrics();
-        check(
-            "get_gpu_partition_metrics_info",
-            unsafe {
-                (self.symbols.get_gpu_partition_metrics_info)(handle, &mut metrics)
-            },
-        )?;
+        check("get_gpu_partition_metrics_info", unsafe {
+            (self.symbols.get_gpu_partition_metrics_info)(handle, &mut metrics)
+        })?;
         Ok(metrics)
     }
 
@@ -584,10 +553,9 @@ impl AmdSmi {
     ) -> Result<AmdSmiFrequencies, AmdSmiError> {
         let handle = self.gpu_handle(gpu_index)?;
         let mut freq = zeroed_freq();
-        check(
-            "get_clk_freq",
-            unsafe { (self.symbols.get_clk_freq)(handle, clk_type, &mut freq) },
-        )?;
+        check("get_clk_freq", unsafe {
+            (self.symbols.get_clk_freq)(handle, clk_type, &mut freq)
+        })?;
         Ok(freq)
     }
 
@@ -610,63 +578,42 @@ impl AmdSmi {
         self.initialized = true;
 
         let mut socket_count: u32 = 0;
-        check(
-            "get_socket_handles",
-            unsafe {
-                (self.symbols.get_socket_handles)(&mut socket_count, ptr::null_mut())
-            },
-        )?;
+        check("get_socket_handles", unsafe {
+            (self.symbols.get_socket_handles)(&mut socket_count, ptr::null_mut())
+        })?;
 
         let mut sockets = vec![SocketHandle(ptr::null_mut()); socket_count as usize];
         if socket_count > 0 {
-            check(
-                "get_socket_handles",
-                unsafe {
-                    (self.symbols.get_socket_handles)(
-                        &mut socket_count,
-                        sockets.as_mut_ptr(),
-                    )
-                },
-            )?;
+            check("get_socket_handles", unsafe {
+                (self.symbols.get_socket_handles)(&mut socket_count, sockets.as_mut_ptr())
+            })?;
             sockets.truncate(socket_count as usize);
         }
 
         let mut gpus = Vec::new();
         for socket in sockets {
             let mut processor_count: u32 = 0;
-            check(
-                "get_processor_handles",
-                unsafe {
+            check("get_processor_handles", unsafe {
+                (self.symbols.get_processor_handles)(socket, &mut processor_count, ptr::null_mut())
+            })?;
+
+            let mut processors = vec![ProcessorHandle(ptr::null_mut()); processor_count as usize];
+            if processor_count > 0 {
+                check("get_processor_handles", unsafe {
                     (self.symbols.get_processor_handles)(
                         socket,
                         &mut processor_count,
-                        ptr::null_mut(),
+                        processors.as_mut_ptr(),
                     )
-                },
-            )?;
-
-            let mut processors =
-                vec![ProcessorHandle(ptr::null_mut()); processor_count as usize];
-            if processor_count > 0 {
-                check(
-                    "get_processor_handles",
-                    unsafe {
-                        (self.symbols.get_processor_handles)(
-                            socket,
-                            &mut processor_count,
-                            processors.as_mut_ptr(),
-                        )
-                    },
-                )?;
+                })?;
                 processors.truncate(processor_count as usize);
             }
 
             for proc in processors {
                 let mut ty: ProcessorType = 0;
-                check(
-                    "get_processor_type",
-                    unsafe { (self.symbols.get_processor_type)(proc, &mut ty) },
-                )?;
+                check("get_processor_type", unsafe {
+                    (self.symbols.get_processor_type)(proc, &mut ty)
+                })?;
                 if ty == AMDSMI_PROCESSOR_TYPE_AMD_GPU {
                     gpus.push(proc);
                 }
@@ -735,11 +682,7 @@ impl Symbols {
                     b"amdsmi_get_clock_info\0",
                     "amdsmi_get_clock_info",
                 )?,
-                get_clk_freq: resolve(
-                    &library,
-                    b"amdsmi_get_clk_freq\0",
-                    "amdsmi_get_clk_freq",
-                )?,
+                get_clk_freq: resolve(&library, b"amdsmi_get_clk_freq\0", "amdsmi_get_clk_freq")?,
                 get_temp_metric: resolve(
                     &library,
                     b"amdsmi_get_temp_metric\0",
@@ -876,9 +819,7 @@ mod tests {
 
     #[test]
     fn load_nonexistent_path_yields_library_error() {
-        let result = AmdSmi::new_from_candidates(&[
-            "/nonexistent/libamd_smi-redline-test.so.26",
-        ]);
+        let result = AmdSmi::new_from_candidates(&["/nonexistent/libamd_smi-redline-test.so.26"]);
         let err = match result {
             Err(e) => e,
             Ok(_) => panic!("nonexistent path must fail"),

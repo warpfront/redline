@@ -416,10 +416,7 @@ impl Symbols {
                     b"rocprofiler_configure_callback_dispatch_counting_service\0",
                 )?,
                 create_counter_config: load_fn(library, b"rocprofiler_create_counter_config\0")?,
-                destroy_counter_config: load_fn(
-                    library,
-                    b"rocprofiler_destroy_counter_config\0",
-                )?,
+                destroy_counter_config: load_fn(library, b"rocprofiler_destroy_counter_config\0")?,
                 iterate_agent_supported_counters: load_fn(
                     library,
                     b"rocprofiler_iterate_agent_supported_counters\0",
@@ -648,10 +645,7 @@ unsafe extern "C" fn dispatch_callback(
     if collect.is_empty() {
         record_callback_error(
             &g.session,
-            format!(
-                "counter `{want}` not found for agent {}",
-                agent.handle
-            ),
+            format!("counter `{want}` not found for agent {}", agent.handle),
         );
         return;
     }
@@ -752,8 +746,9 @@ unsafe extern "C" fn tool_init(
     let vst = unsafe { (g.symbols.context_is_valid)(ctx, &mut valid) };
     // Header sample: nonzero valid flag means invalid context.
     if vst != STATUS_SUCCESS || valid != 0 {
-        *g.init_error.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(format!("context_is_valid rejected ctx (status={vst}, flag={valid})"));
+        *g.init_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!(
+            "context_is_valid rejected ctx (status={vst}, flag={valid})"
+        ));
         return -1;
     }
 
@@ -768,8 +763,9 @@ unsafe extern "C" fn tool_init(
     };
     if cst != STATUS_SUCCESS {
         let msg = g.symbols.status_message(cst);
-        *g.init_error.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(format!("configure_callback_dispatch_counting_service: {cst} ({msg})"));
+        *g.init_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!(
+            "configure_callback_dispatch_counting_service: {cst} ({msg})"
+        ));
         return -1;
     }
 

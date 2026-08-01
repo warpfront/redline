@@ -71,7 +71,6 @@ pub const QUEUE_INFO_VM_FAULT_STATUS: u32 = 10;
 pub const QUEUE_INFO_VM_FAULT_ADDRESS: u32 = 11;
 pub const QUEUE_INFO_VM_FAULT_REASON: u32 = 12;
 
-
 pub const PROFILE_BASE: u32 = 0;
 pub const PROFILE_FULL: u32 = 1;
 pub const DEFAULT_FLOAT_ROUNDING_MODE_ZERO: u32 = 1;
@@ -187,7 +186,6 @@ pub struct QueueInfoAttribute(pub u32);
 /// Fixed-width stand-in for `hsa_queue_type_t` (C enum, 4 bytes).
 pub type QueueType = u32;
 
-
 pub type AgentCallback = unsafe extern "C" fn(Agent, *mut c_void) -> Status;
 pub type MemoryPoolCallback = unsafe extern "C" fn(MemoryPool, *mut c_void) -> Status;
 pub type QueueErrorCallback = unsafe extern "C" fn(Status, *mut Queue, *mut c_void);
@@ -256,8 +254,7 @@ pub type ExecutableSymbolGetInfoFn =
     unsafe extern "C" fn(ExecutableSymbol, u32, *mut c_void) -> Status;
 
 // ROCm 7.14 / HSA_AMD_INTERFACE_VERSION 1.26 entry points (hsa_ext_amd.h).
-pub type QueueCuSetMaskFn =
-    unsafe extern "C" fn(*const Queue, u32, *const u32) -> Status;
+pub type QueueCuSetMaskFn = unsafe extern "C" fn(*const Queue, u32, *const u32) -> Status;
 pub type QueueCuGetMaskFn = unsafe extern "C" fn(*const Queue, u32, *mut u32) -> Status;
 pub type QueueSetPriorityFn = unsafe extern "C" fn(*mut Queue, QueuePriority) -> Status;
 pub type CountedQueueAcquireFn = unsafe extern "C" fn(
@@ -290,25 +287,12 @@ pub type SignalWaitAnyFn = unsafe extern "C" fn(
     WaitState,
     *mut SignalValue,
 ) -> u32;
-pub type SvmPrefetchAsyncFn = unsafe extern "C" fn(
-    *mut c_void,
-    usize,
-    Agent,
-    u32,
-    *const Signal,
-    Signal,
-) -> Status;
-pub type SvmDiscardBatchAsyncFn = unsafe extern "C" fn(
-    *mut *mut c_void,
-    *mut usize,
-    u32,
-    u32,
-    *const Signal,
-    Signal,
-) -> Status;
+pub type SvmPrefetchAsyncFn =
+    unsafe extern "C" fn(*mut c_void, usize, Agent, u32, *const Signal, Signal) -> Status;
+pub type SvmDiscardBatchAsyncFn =
+    unsafe extern "C" fn(*mut *mut c_void, *mut usize, u32, u32, *const Signal, Signal) -> Status;
 pub type ProfilingConvertTickToSystemDomainFn =
     unsafe extern "C" fn(Agent, u64, *mut u64) -> Status;
-
 
 /// Dynamically resolved public ROCr entry points.
 ///
@@ -363,7 +347,6 @@ pub struct Symbols {
     pub svm_prefetch_async: SvmPrefetchAsyncFn,
     pub svm_discard_batch_async: SvmDiscardBatchAsyncFn,
     pub profiling_convert_tick_to_system_domain: ProfilingConvertTickToSystemDomainFn,
-
 }
 
 impl fmt::Debug for Symbols {
@@ -416,7 +399,6 @@ impl Symbols {
                 unsafe { std::mem::transmute::<*const c_void, $ty>(pointer) }
             }};
         }
-
 
         Ok(Arc::new(Self {
             _keepalive: keepalive,
@@ -525,7 +507,6 @@ impl Symbols {
                 @rocm714 "hsa_amd_profiling_convert_tick_to_system_domain",
                 ProfilingConvertTickToSystemDomainFn
             ),
-
         }))
     }
 }

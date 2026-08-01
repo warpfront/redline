@@ -240,8 +240,7 @@ pub type HipGreenCtxCreateFn =
 
 pub type HipExecutionCtxDestroyFn = unsafe extern "C" fn(HipExecutionCtx) -> HipError;
 
-pub type HipDeviceGetExecutionCtxFn =
-    unsafe extern "C" fn(*mut HipExecutionCtx, c_int) -> HipError;
+pub type HipDeviceGetExecutionCtxFn = unsafe extern "C" fn(*mut HipExecutionCtx, c_int) -> HipError;
 
 pub type HipExecutionCtxStreamCreateFn =
     unsafe extern "C" fn(*mut HipStream, HipExecutionCtx, c_uint, c_int) -> HipError;
@@ -252,8 +251,7 @@ pub type HipExecutionCtxGetDevResourceFn = unsafe extern "C" fn(
     c_uint, // HipDevResourceType
 ) -> HipError;
 
-pub type HipExecutionCtxGetDeviceFn =
-    unsafe extern "C" fn(*mut c_int, HipExecutionCtx) -> HipError;
+pub type HipExecutionCtxGetDeviceFn = unsafe extern "C" fn(*mut c_int, HipExecutionCtx) -> HipError;
 
 pub type HipExecutionCtxGetIdFn =
     unsafe extern "C" fn(HipExecutionCtx, *mut c_ulonglong) -> HipError;
@@ -264,13 +262,11 @@ pub type HipStreamGetDevResourceFn = unsafe extern "C" fn(
     c_uint, // HipDevResourceType
 ) -> HipError;
 
-pub type HipExecutionCtxRecordEventFn =
-    unsafe extern "C" fn(HipExecutionCtx, HipEvent) -> HipError;
+pub type HipExecutionCtxRecordEventFn = unsafe extern "C" fn(HipExecutionCtx, HipEvent) -> HipError;
 
 pub type HipExecutionCtxSynchronizeFn = unsafe extern "C" fn(HipExecutionCtx) -> HipError;
 
-pub type HipExecutionCtxWaitEventFn =
-    unsafe extern "C" fn(HipExecutionCtx, HipEvent) -> HipError;
+pub type HipExecutionCtxWaitEventFn = unsafe extern "C" fn(HipExecutionCtx, HipEvent) -> HipError;
 
 /// Dynamically resolved HIP 7.14 execution-context entry points.
 ///

@@ -165,10 +165,7 @@ pub fn resolve_hipcc() -> PathBuf {
             return PathBuf::from(value);
         }
     }
-    for candidate in [
-        "/opt/rocm/core/bin/hipcc",
-        "/opt/rocm/core-7.14/bin/hipcc",
-    ] {
+    for candidate in ["/opt/rocm/core/bin/hipcc", "/opt/rocm/core-7.14/bin/hipcc"] {
         let path = PathBuf::from(candidate);
         if path.exists() {
             return path;

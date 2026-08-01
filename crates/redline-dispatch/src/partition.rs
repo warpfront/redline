@@ -33,20 +33,13 @@ pub struct CuPartition {
 /// Failures from [`validate`].
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum PartitionError {
-    #[error(
-        "equal partition count {parts} does not divide device CU count {device_cu_count}"
-    )]
-    NonDividing {
-        device_cu_count: u32,
-        parts: usize,
-    },
+    #[error("equal partition count {parts} does not divide device CU count {device_cu_count}")]
+    NonDividing { device_cu_count: u32, parts: usize },
     #[error("explicit partition policy is empty")]
     EmptyExplicit,
     #[error("explicit partition at index {index} has zero CU count")]
     ZeroCount { index: usize },
-    #[error(
-        "explicit partition CU sum {sum} does not match device CU count {device_cu_count}"
-    )]
+    #[error("explicit partition CU sum {sum} does not match device CU count {device_cu_count}")]
     SumMismatch { sum: u32, device_cu_count: u32 },
 }
 

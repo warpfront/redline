@@ -302,8 +302,7 @@ mod tests {
 
     #[test]
     fn zero_size_rejected_in_prefetch() {
-        let err = BatchMemPlan::try_new(vec![range(0x1000, 0)], vec![])
-            .expect_err("zero size");
+        let err = BatchMemPlan::try_new(vec![range(0x1000, 0)], vec![]).expect_err("zero size");
         assert_eq!(
             err,
             BatchMemError::ZeroSize {
@@ -331,14 +330,8 @@ mod tests {
     #[test]
     fn overlap_detected_within_prefetch() {
         // [0x1000, 0x1800) and [0x1400, 0x1c00)
-        let err = BatchMemPlan::try_new(
-            vec![
-                range(0x1000, 0x800),
-                range(0x1400, 0x800),
-            ],
-            vec![],
-        )
-        .expect_err("overlap");
+        let err = BatchMemPlan::try_new(vec![range(0x1000, 0x800), range(0x1400, 0x800)], vec![])
+            .expect_err("overlap");
         match err {
             BatchMemError::Overlap {
                 list: BatchMemListKind::Prefetch,
@@ -374,14 +367,8 @@ mod tests {
     #[test]
     fn adjacent_ranges_are_not_overlap() {
         // [0x1000, 0x1800) and [0x1800, 0x2000) touch at the boundary only.
-        let plan = BatchMemPlan::try_new(
-            vec![
-                range(0x1000, 0x800),
-                range(0x1800, 0x800),
-            ],
-            vec![],
-        )
-        .expect("adjacent ok");
+        let plan = BatchMemPlan::try_new(vec![range(0x1000, 0x800), range(0x1800, 0x800)], vec![])
+            .expect("adjacent ok");
         assert!(!plan.is_noop());
         assert_eq!(plan.prefetch().len(), 2);
     }
@@ -411,22 +398,16 @@ mod tests {
     #[test]
     fn unaligned_sizes_and_ptrs_accepted() {
         // Page alignment is intentionally not required (see module docs).
-        let plan = BatchMemPlan::try_new(
-            vec![range(0x1003, 17)],
-            vec![range(0xabcd, 3)],
-        )
-        .expect("unaligned ok");
+        let plan = BatchMemPlan::try_new(vec![range(0x1003, 17)], vec![range(0xabcd, 3)])
+            .expect("unaligned ok");
         assert_eq!(plan.prefetch()[0].size(), 17);
         assert_eq!(plan.discard()[0].device_ptr(), 0xabcd);
     }
 
     #[test]
     fn address_overflow_rejected() {
-        let err = BatchMemPlan::try_new(
-            vec![range(u64::MAX - 8, 16)],
-            vec![],
-        )
-        .expect_err("overflow");
+        let err =
+            BatchMemPlan::try_new(vec![range(u64::MAX - 8, 16)], vec![]).expect_err("overflow");
         match err {
             BatchMemError::AddressOverflow {
                 list: BatchMemListKind::Prefetch,
