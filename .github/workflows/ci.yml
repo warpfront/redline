@@ -11,16 +11,16 @@
 # hipfire-6409 matrix, scripts/6529-*.sh — needs real RDNA hardware and is
 # deliberately NOT run here.
 #
-# Required vs advisory, mirroring engines/hipfire/.github/workflows/ci.yml:
-# `build` and `test` are the load-bearing "is it broken" gates and are intended
-# to be the required status checks on master. `fmt` and `clippy` start advisory
-# because this repo predates CI and carries format/lint debt — measured at the
-# time this file was added: 27 files fail `cargo fmt --check` (14 of them
-# pre-existing, in radiowave / redline-dispatch / redline-observe) and clippy
-# reports 83 warnings with 0 errors, dominated by missing `# Safety` sections on
-# unsafe fns and large `Err` variants. Denying warnings or enforcing
-# workspace-wide rustfmt today would red the build on legacy code and teach
-# everyone to ignore CI. Promote both to required after a dedicated cleanup pass.
+# All four jobs are load-bearing and intended to be required status checks.
+#
+# `fmt` and `clippy` started advisory, because when CI first landed the repo
+# predated it and carried real debt: 17 files failed `cargo fmt --check` and
+# clippy reported 80 warnings, dominated by missing `# Safety` sections on unsafe
+# fns and an oversized `Err` variant. Denying warnings then would have redded the
+# build on legacy code and taught everyone to ignore CI. That debt was paid down
+# in #8, so the gates now enforce what they previously only annotated: rustfmt
+# checks the whole workspace rather than just the files a PR touches, and clippy
+# runs with `-D warnings`.
 
 name: CI
 
@@ -74,30 +74,27 @@ jobs:
         run: cargo test --workspace --locked
 
   fmt:
-    name: rustfmt (advisory)
+    name: rustfmt
     runs-on: ubuntu-latest
-    # Advisory: enforced on files changed by this PR only, so new work stays
-    # clean without the pre-existing workspace churn reding every run. Green
-    # must keep meaning "the load-bearing build+test gates pass".
-    continue-on-error: true
+    # Whole-workspace now that the tree is clean. This previously checked only
+    # the files a PR touched, because a workspace-wide check would have been red
+    # from the day CI landed; that helper script is gone with the debt.
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: bash scripts/ci-rustfmt-changed.sh
+      - run: cargo fmt --all --check
 
   clippy:
-    name: clippy (advisory)
+    name: clippy
     runs-on: ubuntu-latest
-    # Advisory (no -D warnings yet) — annotate lint debt without failing the run.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --locked
+      # -D warnings: the workspace is at zero, so anything new is a regression
+      # introduced by the change under review, not inherited debt.
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
