@@ -27,6 +27,7 @@ pub const hipErrorInvalidHandle: hipError_t = 400;
 pub const hipErrorIllegalState: hipError_t = 401;
 pub const hipErrorLaunchFailure: hipError_t = 719;
 pub const hipErrorNotSupported: hipError_t = 801;
+pub const hipErrorGraphExecUpdateFailure: hipError_t = 910;
 pub const hipErrorStreamCaptureInvalidated: hipError_t = 901;
 pub const hipErrorStreamCaptureUnmatched: hipError_t = 903;
 pub const hipErrorUnknown: hipError_t = 999;
