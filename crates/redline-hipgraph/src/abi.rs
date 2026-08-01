@@ -21,6 +21,11 @@ pub type hipModule_t = *mut c_void;
 
 pub const hipSuccess: hipError_t = 0;
 pub const hipErrorInvalidValue: hipError_t = 1;
+/// `hipErrorOutOfMemory = 2` per `hip_runtime_api.h:293`, aliased there as
+/// `hipErrorMemoryAllocation`. Returned when a translation buffer cannot be
+/// allocated, so allocation failure crosses the ABI as an error rather than
+/// aborting the process inside the interposer.
+pub const hipErrorOutOfMemory: hipError_t = 2;
 pub const hipErrorNotInitialized: hipError_t = 3;
 pub const hipErrorInvalidImage: hipError_t = 200;
 pub const hipErrorInvalidHandle: hipError_t = 400;

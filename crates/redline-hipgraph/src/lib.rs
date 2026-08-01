@@ -2350,6 +2350,131 @@ pub(crate) unsafe fn translate_native_dependencies(
         .collect()
 }
 
+/// Translate a node handle that may or may not be ours.
+///
+/// The rule the whole interposer rests on is that one of our heap pointers must
+/// never reach HIP, and that rule does not care whether the *other* arguments to
+/// the call were ours. An all-or-nothing `if !is_graph(primary) { forward }`
+/// early return reintroduces exactly the type confusion this module exists to
+/// remove whenever a caller mixes a foreign primary handle with one of our
+/// secondary handles. Translate per argument instead.
+///
+/// Three cases, and the third is the subtle one:
+///
+/// 1. Not ours — pass through untouched. A process may legitimately hold both
+///    native handles and ours, and HIP is the right component to reject a
+///    genuinely invalid handle, once it has stopped being *our* pointer.
+/// 2. Ours with a native shadow — hand over the shadow.
+/// 3. Ours with NO native shadow (`native_node == 0`) — yield null, never the
+///    input. Falling through to the input here would hand HIP our heap pointer,
+///    which is precisely the bug this module exists to remove. There is nothing
+///    valid to forward, so null lets HIP fail the call cleanly with an invalid
+///    -value error instead of dereferencing our allocation.
+pub(crate) fn native_node_or_passthrough(node: hipGraphNode_t) -> hipGraphNode_t {
+    match node_snapshot(node) {
+        Some(handle) if handle.native_node != 0 => handle.native_node as hipGraphNode_t,
+        Some(_) => std::ptr::null_mut(),
+        None => node,
+    }
+}
+
+/// Translate a graph handle that may or may not be ours. See
+/// [`native_node_or_passthrough`] for the three cases, including why a graph of
+/// ours without a native shadow yields null rather than our own pointer.
+pub(crate) fn native_graph_or_passthrough(graph: hipGraph_t) -> hipGraph_t {
+    match graph_handle(graph) {
+        Some(handle) => match lock(&handle.state).native_graph {
+            0 => std::ptr::null_mut(),
+            native => native as hipGraph_t,
+        },
+        None => graph,
+    }
+}
+
+/// Translate an exec handle that may or may not be ours. See
+/// [`native_node_or_passthrough`] for the three cases, including why an exec of
+/// ours without a native shadow yields null rather than our own pointer.
+pub(crate) fn native_exec_or_passthrough(exec: hipGraphExec_t) -> hipGraphExec_t {
+    match exec_handle(exec) {
+        Some(handle) => match lock(&handle.state).native_exec {
+            0 => std::ptr::null_mut(),
+            native => native as hipGraphExec_t,
+        },
+        None => exec,
+    }
+}
+
+/// Element-wise translation of a dependency array, passing foreign nodes through.
+///
+/// [`translate_native_dependencies`] rejects the whole call when any element is
+/// not one of ours, which is right when we are building our own retained plan
+/// and wrong when we are merely forwarding. Nodes reachable through a wrapper we
+/// created for a native child graph or clone are legitimately foreign, so
+/// rejecting them turns a call HIP would have accepted into an error.
+///
+/// Returns `None` when there is nothing to translate, so callers can forward the
+/// original pointer rather than the address of an empty `Vec`.
+pub(crate) unsafe fn translate_dependencies_passthrough(
+    dependencies: *const hipGraphNode_t,
+    count: usize,
+) -> Result<Option<Vec<hipGraphNode_t>>, hipError_t> {
+    /// Refuse to mirror an array that cannot plausibly be a real dependency list.
+    ///
+    /// `count` is caller-controlled and arrives across the C ABI unvalidated. A
+    /// dependency array is one `hipGraphNode_t` per node the caller already owns,
+    /// so four million entries is already far past any graph a program can build;
+    /// beyond that the count is a bug or an attack, and mirroring it would turn a
+    /// bad argument into an allocation large enough to abort the process. Reject
+    /// instead, and let the caller return the error across the ABI.
+    const MAX_DEPENDENCIES: usize = 4_000_000;
+
+    if dependencies.is_null() || count == 0 {
+        return Ok(None);
+    }
+    if count > MAX_DEPENDENCIES {
+        return Err(hipErrorInvalidValue);
+    }
+    let slice = unsafe { std::slice::from_raw_parts(dependencies, count) };
+    // Fallible reservation: an allocation failure here must surface as an error
+    // across the ABI, never as an abort inside a `collect`.
+    let mut translated = Vec::new();
+    if translated.try_reserve_exact(count).is_err() {
+        return Err(hipErrorOutOfMemory);
+    }
+    translated.extend(slice.iter().map(|node| native_node_or_passthrough(*node)));
+    Ok(Some(translated))
+}
+
+/// Return one of *our* node handles for a native node owned by `graph`.
+///
+/// Introspection calls (`hipGraphGetNodes` and friends) hand arrays of nodes back
+/// to the application, which will then pass them straight back into this API. If
+/// we publish a raw native pointer the application holds a handle we cannot
+/// translate later, so the escape is only deferred, not avoided. Reuse the
+/// existing wrapper when we already have one and mint one otherwise, so a native
+/// node is interned exactly once per owning graph.
+///
+/// Returns the input unchanged when `graph` is not ours or the node is null —
+/// there is no wrapper to mint against a graph we do not own.
+pub(crate) fn intern_native_node(graph: hipGraph_t, native: hipGraphNode_t) -> hipGraphNode_t {
+    if native.is_null() {
+        return native;
+    }
+    let Some(handle) = graph_handle(graph) else {
+        return native;
+    };
+    let mut state = lock(&handle.state);
+    let wanted = native as usize;
+    let existing =
+        state.node_handles.iter().copied().find(|key| {
+            node_snapshot(*key as hipGraphNode_t).is_some_and(|n| n.native_node == wanted)
+        });
+    match existing {
+        Some(key) => key as hipGraphNode_t,
+        None => allocate_node(graph as usize, &mut state, None, wanted),
+    }
+}
+
 pub(crate) fn finish_native_only_node(
     graph: hipGraph_t,
     native_node: hipGraphNode_t,
