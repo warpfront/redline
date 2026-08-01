@@ -21,11 +21,13 @@ pub type hipModule_t = *mut c_void;
 
 pub const hipSuccess: hipError_t = 0;
 pub const hipErrorInvalidValue: hipError_t = 1;
-/// `hipErrorOutOfMemory = 2` per `hip_runtime_api.h:293`, aliased there as
-/// `hipErrorMemoryAllocation`. Returned when a translation buffer cannot be
-/// allocated, so allocation failure crosses the ABI as an error rather than
-/// aborting the process inside the interposer.
-pub const hipErrorOutOfMemory: hipError_t = 2;
+/// `hipErrorOutOfMemory` (2) and `hipErrorStreamCaptureInvalidated` (901) used
+/// to live here. Both became unreachable with native handle identity: the first
+/// backed a dependency-array mirror that no longer exists, and the second was
+/// returned only when our own capture bookkeeping failed while HIP had produced
+/// no graph — a state that can no longer occur, because HIP's own status now
+/// governs end-of-capture and our modelling limits merely force native replay.
+/// Re-add them from `hip_runtime_api.h` if a real caller appears.
 pub const hipErrorNotInitialized: hipError_t = 3;
 pub const hipErrorInvalidImage: hipError_t = 200;
 pub const hipErrorInvalidHandle: hipError_t = 400;
@@ -33,7 +35,6 @@ pub const hipErrorIllegalState: hipError_t = 401;
 pub const hipErrorLaunchFailure: hipError_t = 719;
 pub const hipErrorNotSupported: hipError_t = 801;
 pub const hipErrorGraphExecUpdateFailure: hipError_t = 910;
-pub const hipErrorStreamCaptureInvalidated: hipError_t = 901;
 pub const hipErrorStreamCaptureUnmatched: hipError_t = 903;
 pub const hipErrorUnknown: hipError_t = 999;
 

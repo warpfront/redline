@@ -110,24 +110,19 @@ struct NodeMeta {
     block: [u16; 3],
     dyn_group: u32,
 }
-
+/// Everything we model about one graph.
+///
+/// The native graph pointer is the table key, not a field: the handle the
+/// application holds *is* the native graph, so storing it here would be storing
+/// the key inside the value. Node bookkeeping is likewise keyed natively in
+/// [`Registry::nodes`], so there is no per-graph list of wrapper addresses to
+/// keep in sync.
 pub(crate) struct GraphState {
     pub(crate) graph: Graph,
     pub(crate) node_meta: BTreeMap<NodeId, NodeMeta>,
-    pub(crate) node_handles: Vec<usize>,
-    pub(crate) native_graph: usize,
+    /// Our lowered PM4 plan is stale or was never valid for this graph, so
+    /// replay must fall back to the native path.
     pub(crate) force_native: bool,
-}
-
-pub(crate) struct GraphHandle {
-    pub(crate) state: Mutex<GraphState>,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct NodeHandle {
-    pub(crate) owner: usize,
-    pub(crate) node: Option<NodeId>,
-    pub(crate) native_node: usize,
 }
 
 pub(crate) struct ExecState {
@@ -135,29 +130,55 @@ pub(crate) struct ExecState {
     pub(crate) replay: Option<Pm4GraphReplay>,
     pub(crate) dirty: bool,
     pub(crate) node_meta: BTreeMap<NodeId, NodeMeta>,
+    /// Native node pointer -> our retained-plan node. One map now that node
+    /// identity is native on both sides; the old pair of maps existed only to
+    /// bridge our wrapper addresses to native ones.
     pub(crate) nodes: HashMap<usize, NodeId>,
-    pub(crate) native_nodes: HashMap<usize, usize>,
-    pub(crate) native_exec: usize,
     pub(crate) force_native: bool,
 }
 
-pub(crate) struct ExecHandle {
-    pub(crate) state: Mutex<ExecState>,
-}
+// SAFETY: `GraphState` and `ExecState` reach across threads because the HIP
+// graph API lets any thread call any entry point with any handle. They hold raw
+// GPU pointers — `NonNull<Queue>` in the replay path and `Option<NonNull<u8>>`
+// for kernarg buffers — which are not `Send` on their own.
+//
+// Two facts make the assertion sound rather than convenient:
+//
+//  1. Every field is reached only through the owning `Mutex`, so dereferences of
+//     those pointers are serialized. Nothing hands out an interior reference
+//     that outlives the guard.
+//  2. The pointers address device-visible queue and kernarg memory whose
+//     validity is tied to the `Runtime`, which outlives every graph and is
+//     itself shared across threads.
+//
+// This does not introduce a new assumption: the previous design boxed the same
+// state and stored only its address in a `HashSet<usize>`, so the state was
+// already shared across threads with no compiler check at all. Keying the
+// registry natively puts the state in a `static`, which forces the assertion to
+// be written down. That is an improvement — the obligation was always there.
+unsafe impl Send for GraphState {}
+unsafe impl Send for ExecState {}
 
-#[derive(Clone, Copy)]
+/// In-flight stream capture.
+///
+/// Capture is the one place our state legitimately exists before any native
+/// object does: `hipStreamBeginCapture` returns no graph, so there is nothing to
+/// key on until `hipStreamEndCapture` produces the native graph. The state is
+/// therefore held here, keyed by stream, and adopted into the registry under its
+/// native pointer at end-of-capture. The application never sees a handle in
+/// between, so it never sees one of ours.
+#[derive(Clone)]
 struct CaptureState {
-    graph: usize,
-    last_node: usize,
+    provisional: Arc<Mutex<GraphState>>,
+    /// Previous node in the captured chain, for dependency edges. Our own node
+    /// id, because captured nodes have no native identity until reconciliation.
+    last_node: Option<NodeId>,
     invalid: bool,
     native_active: bool,
 }
 
 #[derive(Default)]
 struct HandleSets {
-    graphs: HashSet<usize>,
-    nodes: HashSet<usize>,
-    execs: HashSet<usize>,
     owned_modules: HashSet<usize>,
     owned_functions: HashSet<usize>,
 }
@@ -169,6 +190,9 @@ struct Global {
     fatbins: Mutex<HashMap<usize, Arc<FatBinaryRecord>>>,
     static_functions: Mutex<HashMap<usize, Arc<StaticFunctionRecord>>>,
     handles: Mutex<HandleSets>,
+    /// Graph, node and exec state keyed by NATIVE handle. See the handle
+    /// identity section below for why this is not a set of our own pointers.
+    registry: Mutex<Registry>,
     captures: Mutex<HashMap<usize, CaptureState>>,
 }
 
@@ -491,75 +515,162 @@ pub unsafe extern "C" fn __hipRegisterFunction(
     hgdbg!("__hipRegisterFunction host_function={host_function:p} device_name={symbol}");
 }
 
+// ---------------------------------------------------------------------------
+// Handle identity
+//
+// The application holds REAL native handles. Everything we know about a graph,
+// node or exec lives in a side table keyed by the native pointer.
+//
+// The interposer used to hand out `Box::into_raw` pointers to its own state and
+// keep the native object inside. That made every hipGraph entry point we did
+// not export a memory-corruption bug: the call reached HIP carrying our heap
+// pointer, which HIP dereferenced as its own type. It also made handle lifetime
+// inexpressible — the registry was a set of bare addresses, so a lookup tested
+// membership under a lock, dropped it, and then dereferenced a pointer nothing
+// was keeping alive.
+//
+// Keying by the native pointer removes both. Our pointer can never reach HIP
+// because the application never has one, an entry point we have not thought of
+// degrades to lost acceleration instead of corruption, and a stale handle is a
+// clean table miss instead of a use-after-free. `Arc` gives the state a real
+// lifetime: a lookup clones the handle out from under the registry lock, so the
+// state stays alive for the duration of the call even if another thread
+// destroys the graph concurrently.
+// ---------------------------------------------------------------------------
+
+/// What we know about one native node.
+#[derive(Clone, Copy)]
+pub(crate) struct NodeRecord {
+    /// Native graph that owns it.
+    pub(crate) graph: usize,
+    /// Our retained-plan node, when this node is modelled. `None` for nodes that
+    /// exist only natively (every node type we do not lower to PM4).
+    pub(crate) node: Option<NodeId>,
+}
+
+#[derive(Default)]
+pub(crate) struct Registry {
+    graphs: HashMap<usize, Arc<Mutex<GraphState>>>,
+    execs: HashMap<usize, Arc<Mutex<ExecState>>>,
+    nodes: HashMap<usize, NodeRecord>,
+}
+
 pub(crate) fn is_graph(handle: hipGraph_t) -> bool {
-    !handle.is_null() && lock(&global().handles).graphs.contains(&(handle as usize))
+    !handle.is_null()
+        && lock(&global().registry)
+            .graphs
+            .contains_key(&(handle as usize))
 }
 
 pub(crate) fn is_exec(handle: hipGraphExec_t) -> bool {
-    !handle.is_null() && lock(&global().handles).execs.contains(&(handle as usize))
+    !handle.is_null()
+        && lock(&global().registry)
+            .execs
+            .contains_key(&(handle as usize))
 }
 
-pub(crate) fn node_snapshot(handle: hipGraphNode_t) -> Option<NodeHandle> {
-    if handle.is_null() || !lock(&global().handles).nodes.contains(&(handle as usize)) {
+/// Look up a node we are tracking. A miss simply means the node is not modelled
+/// by us — the caller forwards it to HIP unchanged, which is always safe now
+/// that the pointer is HIP's own.
+pub(crate) fn node_record(handle: hipGraphNode_t) -> Option<NodeRecord> {
+    if handle.is_null() {
         return None;
     }
-    Some(unsafe { *(handle.cast::<NodeHandle>()) })
+    lock(&global().registry)
+        .nodes
+        .get(&(handle as usize))
+        .copied()
 }
 
-pub(crate) fn graph_handle(handle: hipGraph_t) -> Option<&'static GraphHandle> {
-    is_graph(handle).then(|| unsafe { &*handle.cast::<GraphHandle>() })
+/// Clone the state handle out from under the registry lock.
+///
+/// The returned `Arc` keeps the state alive for the whole call, so a concurrent
+/// destroy can remove the table entry without pulling the memory out from under
+/// us. Never lock the returned state while still holding the registry lock.
+pub(crate) fn graph_state(handle: hipGraph_t) -> Option<Arc<Mutex<GraphState>>> {
+    if handle.is_null() {
+        return None;
+    }
+    lock(&global().registry)
+        .graphs
+        .get(&(handle as usize))
+        .cloned()
 }
 
-pub(crate) fn exec_handle(handle: hipGraphExec_t) -> Option<&'static ExecHandle> {
-    is_exec(handle).then(|| unsafe { &*handle.cast::<ExecHandle>() })
+pub(crate) fn exec_state(handle: hipGraphExec_t) -> Option<Arc<Mutex<ExecState>>> {
+    if handle.is_null() {
+        return None;
+    }
+    lock(&global().registry)
+        .execs
+        .get(&(handle as usize))
+        .cloned()
 }
 
-pub(crate) fn allocate_graph(native_graph: usize) -> hipGraph_t {
-    let handle = Box::into_raw(Box::new(GraphHandle {
-        state: Mutex::new(GraphState {
-            graph: Graph::new(),
-            node_meta: BTreeMap::new(),
-            node_handles: Vec::new(),
-            native_graph,
-            force_native: false,
-        }),
-    }))
-    .cast::<c_void>();
-    lock(&global().handles).graphs.insert(handle as usize);
-    handle
+/// Start tracking a native graph. Returns the state so the caller can populate
+/// it without a second lookup.
+pub(crate) fn register_graph(native_graph: usize) -> Arc<Mutex<GraphState>> {
+    let state = Arc::new(Mutex::new(GraphState {
+        graph: Graph::new(),
+        node_meta: BTreeMap::new(),
+        force_native: false,
+    }));
+    lock(&global().registry)
+        .graphs
+        .insert(native_graph, Arc::clone(&state));
+    state
 }
 
-pub(crate) fn allocate_node(
-    graph_key: usize,
-    state: &mut GraphState,
-    node: Option<NodeId>,
-    native_node: usize,
-) -> hipGraphNode_t {
-    let handle = Box::into_raw(Box::new(NodeHandle {
-        owner: graph_key,
-        node,
-        native_node,
-    }))
-    .cast::<c_void>();
-    lock(&global().handles).nodes.insert(handle as usize);
-    state.node_handles.push(handle as usize);
-    handle
+/// Adopt an already-built state for a native graph, used by stream capture,
+/// where the state exists before the native graph does.
+pub(crate) fn adopt_graph(native_graph: usize, state: Arc<Mutex<GraphState>>) {
+    lock(&global().registry).graphs.insert(native_graph, state);
 }
 
-fn allocate_exec(state: ExecState) -> hipGraphExec_t {
-    let handle = Box::into_raw(Box::new(ExecHandle {
-        state: Mutex::new(state),
-    }))
-    .cast::<c_void>();
-    lock(&global().handles).execs.insert(handle as usize);
-    handle
+pub(crate) fn register_node(native_node: usize, graph: usize, node: Option<NodeId>) {
+    if native_node == 0 {
+        return;
+    }
+    lock(&global().registry)
+        .nodes
+        .insert(native_node, NodeRecord { graph, node });
+}
+
+pub(crate) fn register_exec(native_exec: usize, state: ExecState) -> Arc<Mutex<ExecState>> {
+    let state = Arc::new(Mutex::new(state));
+    lock(&global().registry)
+        .execs
+        .insert(native_exec, Arc::clone(&state));
+    state
+}
+
+/// Stop tracking a graph and every node belonging to it.
+///
+/// Removal from the table is the whole of destruction: there is no wrapper
+/// allocation to free, so the double-free and ABA classes that came with owning
+/// the handle simply do not exist. In-flight callers holding a cloned `Arc`
+/// finish safely against state that is no longer reachable.
+pub(crate) fn unregister_graph(native_graph: usize) {
+    let mut registry = lock(&global().registry);
+    registry.graphs.remove(&native_graph);
+    registry
+        .nodes
+        .retain(|_, record| record.graph != native_graph);
+}
+
+pub(crate) fn unregister_node(native_node: usize) {
+    lock(&global().registry).nodes.remove(&native_node);
+}
+
+pub(crate) fn unregister_exec(native_exec: usize) {
+    lock(&global().registry).execs.remove(&native_exec);
 }
 
 fn dependency_nodes(
     graph_key: usize,
     dependencies: *const hipGraphNode_t,
     count: usize,
-) -> Result<Vec<NodeHandle>, hipError_t> {
+) -> Result<Vec<(hipGraphNode_t, Option<NodeRecord>)>, hipError_t> {
     if count == 0 {
         return Ok(Vec::new());
     }
@@ -567,16 +678,13 @@ fn dependency_nodes(
         return Err(hipErrorInvalidValue);
     }
     let dependencies = unsafe { std::slice::from_raw_parts(dependencies, count) };
-    dependencies
+    Ok(dependencies
         .iter()
         .map(|&handle| {
-            let node = node_snapshot(handle).ok_or(hipErrorInvalidHandle)?;
-            if node.owner != graph_key {
-                return Err(hipErrorInvalidHandle);
-            }
-            Ok(node)
+            let record = node_record(handle).filter(|record| record.graph == graph_key);
+            (handle, record)
         })
-        .collect()
+        .collect())
 }
 
 const MAX_KERNARG_BYTES: usize = 1 << 20;
@@ -823,43 +931,47 @@ fn function_record(function: hipFunction_t) -> Option<FunctionRecord> {
 pub(crate) unsafe fn native_graph_create(flags: u32) -> Result<usize, hipError_t> {
     type Function = unsafe extern "C" fn(*mut hipGraph_t, u32) -> hipError_t;
     let Some(function) = (unsafe { real_symbol::<Function>(b"hipGraphCreate\0") }) else {
-        return Ok(0);
+        return Err(hipErrorNotSupported);
     };
     let mut graph = ptr::null_mut();
     let status = unsafe { function(&mut graph, flags) };
-    if status == hipSuccess {
-        Ok(graph as usize)
-    } else {
-        Err(status)
+    if status != hipSuccess {
+        return Err(status);
     }
+    if graph.is_null() {
+        return Err(hipErrorUnknown);
+    }
+    Ok(graph as usize)
 }
 
-unsafe fn native_graph_destroy(graph: usize) {
+unsafe fn native_graph_destroy(graph: usize) -> hipError_t {
     type Function = unsafe extern "C" fn(hipGraph_t) -> hipError_t;
-    if graph != 0 {
-        if let Some(function) = unsafe { real_symbol::<Function>(b"hipGraphDestroy\0") } {
-            let _ = unsafe { function(graph as hipGraph_t) };
-        }
+    if graph == 0 {
+        return hipSuccess;
+    }
+    match unsafe { real_symbol::<Function>(b"hipGraphDestroy\0") } {
+        Some(function) => unsafe { function(graph as hipGraph_t) },
+        None => hipErrorInvalidHandle,
     }
 }
 
-unsafe fn native_exec_destroy(exec: usize) {
+unsafe fn native_exec_destroy(exec: usize) -> hipError_t {
     type Function = unsafe extern "C" fn(hipGraphExec_t) -> hipError_t;
-    if exec != 0 {
-        if let Some(function) = unsafe { real_symbol::<Function>(b"hipGraphExecDestroy\0") } {
-            let _ = unsafe { function(exec as hipGraphExec_t) };
-        }
+    if exec == 0 {
+        return hipSuccess;
+    }
+    match unsafe { real_symbol::<Function>(b"hipGraphExecDestroy\0") } {
+        Some(function) => unsafe { function(exec as hipGraphExec_t) },
+        None => hipErrorInvalidHandle,
     }
 }
 
 unsafe fn native_kernel_node(
-    state: &GraphState,
-    dependencies: &[NodeHandle],
+    graph: usize,
+    dependencies: *const hipGraphNode_t,
+    dependency_count: usize,
     params: *const hipKernelNodeParams,
 ) -> Result<usize, hipError_t> {
-    if state.native_graph == 0 {
-        return Ok(0);
-    }
     type Function = unsafe extern "C" fn(
         *mut hipGraphNode_t,
         hipGraph_t,
@@ -868,33 +980,25 @@ unsafe fn native_kernel_node(
         *const hipKernelNodeParams,
     ) -> hipError_t;
     let Some(function) = (unsafe { real_symbol::<Function>(b"hipGraphAddKernelNode\0") }) else {
-        return Ok(0);
+        return Err(hipErrorNotSupported);
     };
-    let native_dependencies = dependencies
-        .iter()
-        .map(|dependency| dependency.native_node as hipGraphNode_t)
-        .collect::<Vec<_>>();
-    if native_dependencies
-        .iter()
-        .any(|dependency| dependency.is_null())
-    {
-        return Ok(0);
-    }
     let mut node = ptr::null_mut();
     let status = unsafe {
         function(
             &mut node,
-            state.native_graph as hipGraph_t,
-            native_dependencies.as_ptr(),
-            native_dependencies.len(),
+            graph as hipGraph_t,
+            dependencies,
+            dependency_count,
             params,
         )
     };
-    if status == hipSuccess {
-        Ok(node as usize)
-    } else {
-        Err(status)
+    if status != hipSuccess {
+        return Err(status);
     }
+    if node.is_null() {
+        return Err(hipErrorUnknown);
+    }
+    Ok(node as usize)
 }
 
 unsafe fn add_kernel_node_internal(
@@ -902,76 +1006,57 @@ unsafe fn add_kernel_node_internal(
     dependencies: *const hipGraphNode_t,
     dependency_count: usize,
     params: *const hipKernelNodeParams,
-    shadow_native: bool,
 ) -> Result<hipGraphNode_t, hipError_t> {
     if params.is_null() {
         return Err(hipErrorInvalidValue);
     }
     let graph_key = graph as usize;
-    let graph_handle = graph_handle(graph).ok_or(hipErrorInvalidHandle)?;
+    let graph_state = graph_state(graph).ok_or(hipErrorInvalidHandle)?;
+    let native_node =
+        unsafe { native_kernel_node(graph_key, dependencies, dependency_count, params) }?;
     let dependencies = dependency_nodes(graph_key, dependencies, dependency_count)?;
     let params_value = unsafe { *params };
     let function = function_record(params_value.func);
-    let function_resolved = function.is_some();
-    let mut state = lock(&graph_handle.state);
-    let native_node = if shadow_native {
-        unsafe { native_kernel_node(&state, &dependencies, params) }.unwrap_or(0)
-    } else {
-        0
-    };
-
     let own_dependencies = dependencies
         .iter()
-        .map(|dependency| dependency.node)
+        .map(|(_, record)| {
+            (*record)
+                .filter(|record| record.graph == graph_key)
+                .and_then(|record| record.node)
+        })
         .collect::<Option<Vec<_>>>();
-    let own_result = match (function, own_dependencies) {
-        (Some(function), Some(own_dependencies)) => {
-            match unsafe { build_node_meta(&function, params_value) } {
-                Ok((launch, meta)) => {
-                    let result = if own_dependencies.is_empty() {
-                        state.graph.kernel(launch, [])
-                    } else {
-                        state.graph.kernel_after(launch, [], own_dependencies)
-                    };
-                    result.map(|node| (node, meta)).ok()
+
+    let modelled_node = {
+        let mut state = lock(&graph_state);
+        let own_result = match (function, own_dependencies) {
+            (Some(function), Some(own_dependencies)) => {
+                match unsafe { build_node_meta(&function, params_value) } {
+                    Ok((launch, meta)) => {
+                        let result = if own_dependencies.is_empty() {
+                            state.graph.kernel(launch, [])
+                        } else {
+                            state.graph.kernel_after(launch, [], own_dependencies)
+                        };
+                        result.map(|node| (node, meta)).ok()
+                    }
+                    Err(_) => None,
                 }
-                Err(_) => None,
+            }
+            _ => None,
+        };
+        match own_result {
+            Some((node, meta)) => {
+                state.node_meta.insert(node, meta);
+                Some(node)
+            }
+            None => {
+                state.force_native = true;
+                None
             }
         }
-        _ => None,
     };
-    let pm4_appended = own_result.is_some();
-
-    let result = match own_result {
-        Some((node, meta)) => {
-            state.node_meta.insert(node, meta);
-            Ok(allocate_node(
-                graph_key,
-                &mut state,
-                Some(node),
-                native_node,
-            ))
-        }
-        None if native_node != 0 => {
-            state.force_native = true;
-            Ok(allocate_node(graph_key, &mut state, None, native_node))
-        }
-        None => Err(hipErrorNotSupported),
-    };
-    if !shadow_native {
-        hgdbg!(
-            "append_capture_kernel function={:p} function_record={} pm4_node={} appended_nodes={}",
-            params_value.func,
-            if function_resolved {
-                "resolved"
-            } else {
-                "none"
-            },
-            if pm4_appended { "appended" } else { "none" },
-            state.node_meta.len()
-        );
-    }
-    result
+    register_node(native_node, graph_key, modelled_node);
+    Ok(native_node as hipGraphNode_t)
 }
 
 #[unsafe(no_mangle)]
@@ -979,15 +1064,12 @@ pub unsafe extern "C" fn hipGraphCreate(graph: *mut hipGraph_t, flags: u32) -> h
     if graph.is_null() {
         return hipErrorInvalidValue;
     }
-    if flags != 0 {
-        type Function = unsafe extern "C" fn(*mut hipGraph_t, u32) -> hipError_t;
-        return match unsafe { real_symbol::<Function>(b"hipGraphCreate\0") } {
-            Some(function) => unsafe { function(graph, flags) },
-            None => hipErrorInvalidValue,
-        };
-    }
-    let native = unsafe { native_graph_create(flags) }.unwrap_or(0);
-    unsafe { *graph = allocate_graph(native) };
+    let native = match unsafe { native_graph_create(flags) } {
+        Ok(native) => native,
+        Err(status) => return status,
+    };
+    register_graph(native);
+    unsafe { *graph = native as hipGraph_t };
     hipSuccess
 }
 
@@ -1017,7 +1099,7 @@ pub unsafe extern "C" fn hipGraphAddKernelNode(
             None => hipErrorInvalidHandle,
         };
     }
-    match unsafe { add_kernel_node_internal(graph, dependencies, dependency_count, params, true) } {
+    match unsafe { add_kernel_node_internal(graph, dependencies, dependency_count, params) } {
         Ok(result) => {
             unsafe { *node = result };
             hipSuccess
@@ -1049,67 +1131,39 @@ pub unsafe extern "C" fn hipGraphAddDependencies(
         return hipErrorInvalidValue;
     }
     let graph_key = graph as usize;
-    let graph_handle = graph_handle(graph).expect("owned graph checked");
-    let from_slice = if count == 0 {
-        &[][..]
-    } else {
-        unsafe { std::slice::from_raw_parts(from, count) }
+    let Some(graph_state) = graph_state(graph) else {
+        return hipErrorInvalidHandle;
     };
-    let to_slice = if count == 0 {
-        &[][..]
-    } else {
-        unsafe { std::slice::from_raw_parts(to, count) }
+    let from_nodes = match dependency_nodes(graph_key, from, count) {
+        Ok(nodes) => nodes,
+        Err(status) => return status,
     };
-    let mut pairs = Vec::with_capacity(count);
-    for (&from, &to) in from_slice.iter().zip(to_slice) {
-        let Some(from) = node_snapshot(from) else {
-            return hipErrorInvalidHandle;
-        };
-        let Some(to) = node_snapshot(to) else {
-            return hipErrorInvalidHandle;
-        };
-        if from.owner != graph_key || to.owner != graph_key {
-            return hipErrorInvalidHandle;
-        }
-        pairs.push((from, to));
+    let to_nodes = match dependency_nodes(graph_key, to, count) {
+        Ok(nodes) => nodes,
+        Err(status) => return status,
+    };
+
+    type Function = unsafe extern "C" fn(
+        hipGraph_t,
+        *const hipGraphNode_t,
+        *const hipGraphNode_t,
+        usize,
+    ) -> hipError_t;
+    let Some(function) = (unsafe { real_symbol::<Function>(b"hipGraphAddDependencies\0") }) else {
+        return hipErrorNotSupported;
+    };
+    let native_status = unsafe { function(graph, from, to, count) };
+    if native_status != hipSuccess {
+        return native_status;
     }
 
-    let mut state = lock(&graph_handle.state);
-    let mut native_ok = false;
-    if state.native_graph != 0
-        && pairs
-            .iter()
-            .all(|(from, to)| from.native_node != 0 && to.native_node != 0)
-    {
-        type Function = unsafe extern "C" fn(
-            hipGraph_t,
-            *const hipGraphNode_t,
-            *const hipGraphNode_t,
-            usize,
-        ) -> hipError_t;
-        if let Some(function) = unsafe { real_symbol::<Function>(b"hipGraphAddDependencies\0") } {
-            let native_from = pairs
-                .iter()
-                .map(|(from, _)| from.native_node as hipGraphNode_t)
-                .collect::<Vec<_>>();
-            let native_to = pairs
-                .iter()
-                .map(|(_, to)| to.native_node as hipGraphNode_t)
-                .collect::<Vec<_>>();
-            native_ok = unsafe {
-                function(
-                    state.native_graph as hipGraph_t,
-                    native_from.as_ptr(),
-                    native_to.as_ptr(),
-                    count,
-                )
-            } == hipSuccess;
-        }
-    }
-
+    let mut state = lock(&graph_state);
     let mut own_ok = true;
-    for (from, to) in &pairs {
-        match (from.node, to.node) {
+    for ((_, from), (_, to)) in from_nodes.iter().zip(&to_nodes) {
+        match (
+            from.and_then(|record| record.node),
+            to.and_then(|record| record.node),
+        ) {
             (Some(from), Some(to)) => {
                 if state.graph.recorder().depends_on(to, from).is_err() {
                     own_ok = false;
@@ -1119,14 +1173,10 @@ pub unsafe extern "C" fn hipGraphAddDependencies(
             _ => own_ok = false,
         }
     }
-    if own_ok {
-        hipSuccess
-    } else if native_ok {
+    if !own_ok {
         state.force_native = true;
-        hipSuccess
-    } else {
-        hipErrorNotSupported
     }
+    hipSuccess
 }
 
 fn build_pm4_replay(
@@ -1167,7 +1217,7 @@ unsafe fn native_instantiate(
     buffer_size: usize,
 ) -> Result<usize, hipError_t> {
     if native_graph == 0 {
-        return Ok(0);
+        return Err(hipErrorInvalidHandle);
     }
     type Function = unsafe extern "C" fn(
         *mut hipGraphExec_t,
@@ -1177,7 +1227,7 @@ unsafe fn native_instantiate(
         usize,
     ) -> hipError_t;
     let Some(function) = (unsafe { real_symbol::<Function>(b"hipGraphInstantiate\0") }) else {
-        return Ok(0);
+        return Err(hipErrorNotSupported);
     };
     let mut exec = ptr::null_mut();
     let status = unsafe {
@@ -1189,11 +1239,13 @@ unsafe fn native_instantiate(
             buffer_size,
         )
     };
-    if status == hipSuccess {
-        Ok(exec as usize)
-    } else {
-        Err(status)
+    if status != hipSuccess {
+        return Err(status);
     }
+    if exec.is_null() {
+        return Err(hipErrorUnknown);
+    }
+    Ok(exec as usize)
 }
 
 #[unsafe(no_mangle)]
@@ -1228,11 +1280,34 @@ pub unsafe extern "C" fn hipGraphInstantiate(
     if !error_node.is_null() {
         unsafe { *error_node = ptr::null_mut() };
     }
-    let graph_handle = graph_handle(graph).expect("owned graph checked");
-    let state = lock(&graph_handle.state);
-    let native_exec =
-        unsafe { native_instantiate(state.native_graph, ptr::null_mut(), log_buffer, buffer_size) }
-            .unwrap_or(0);
+    let Some(graph_state) = graph_state(graph) else {
+        return hipErrorInvalidHandle;
+    };
+    let initial_force_native = lock(&graph_state).force_native;
+    let native_exec = match unsafe {
+        native_instantiate(graph as usize, error_node, log_buffer, buffer_size)
+    } {
+        Ok(native_exec) => native_exec,
+        Err(status) => {
+            hgdbg!(
+                "hipGraphInstantiate graph={graph:p} build_pm4_replay=skipped force_native={initial_force_native} native_exec=false"
+            );
+            return status;
+        }
+    };
+    let nodes = {
+        let registry = lock(&global().registry);
+        registry
+            .nodes
+            .iter()
+            .filter_map(|(&native_node, record)| {
+                (record.graph == graph as usize)
+                    .then_some(record.node.map(|node| (native_node, node)))
+                    .flatten()
+            })
+            .collect::<HashMap<_, _>>()
+    };
+    let state = lock(&graph_state);
     let own_exec = state.graph.instantiate().ok();
     if own_exec.is_none() && native_exec == 0 {
         hgdbg!(
@@ -1276,29 +1351,17 @@ pub unsafe extern "C" fn hipGraphInstantiate(
         "hipGraphInstantiate graph={graph:p} build_pm4_replay={pm4_build} force_native={force_native} native_exec={}",
         native_exec != 0
     );
-    let mut nodes = HashMap::new();
-    let mut native_nodes = HashMap::new();
-    for &node_key in &state.node_handles {
-        if let Some(node) = node_snapshot(node_key as hipGraphNode_t) {
-            if let Some(id) = node.node {
-                nodes.insert(node_key, id);
-            }
-            if node.native_node != 0 {
-                native_nodes.insert(node_key, node.native_node);
-            }
-        }
-    }
-    let exec = allocate_exec(ExecState {
+    let exec_state = ExecState {
         exec: own_exec,
         replay,
         dirty: false,
         node_meta: state.node_meta.clone(),
         nodes,
-        native_nodes,
-        native_exec,
         force_native,
-    });
-    unsafe { *output = exec };
+    };
+    drop(state);
+    register_exec(native_exec, exec_state);
+    unsafe { *output = native_exec as hipGraphExec_t };
     hipSuccess
 }
 
@@ -1323,17 +1386,20 @@ pub unsafe extern "C" fn hipGraphLaunch(exec: hipGraphExec_t, stream: hipStream_
             None => hipErrorInvalidHandle,
         };
     }
-    let exec_handle = exec_handle(exec).expect("owned exec checked");
-    let mut state = lock(&exec_handle.state);
+    let Some(exec_state) = exec_state(exec) else {
+        return hipErrorInvalidHandle;
+    };
+    let mut state = lock(&exec_state);
+    let native_exec = exec as usize;
     if state.force_native {
         hgdbg!("hipGraphLaunch exec={exec:p} stream={stream:p} branch=native_launch(force_native)");
-        return unsafe { native_launch(state.native_exec, stream) };
+        return unsafe { native_launch(native_exec, stream) };
     }
     let Some(plan) = state.exec.as_ref() else {
         hgdbg!(
             "hipGraphLaunch exec={exec:p} stream={stream:p} branch=native_launch(no redline plan)"
         );
-        return unsafe { native_launch(state.native_exec, stream) };
+        return unsafe { native_launch(native_exec, stream) };
     };
     if state.dirty {
         match build_pm4_replay(plan, &state.node_meta) {
@@ -1341,12 +1407,12 @@ pub unsafe extern "C" fn hipGraphLaunch(exec: hipGraphExec_t, stream: hipStream_
                 state.replay = Some(replay);
                 state.dirty = false;
             }
-            Err(_) if state.native_exec != 0 => {
+            Err(_) if native_exec != 0 => {
                 state.force_native = true;
                 hgdbg!(
                     "hipGraphLaunch exec={exec:p} stream={stream:p} branch=native_launch(pm4 rebuild failed)"
                 );
-                return unsafe { native_launch(state.native_exec, stream) };
+                return unsafe { native_launch(native_exec, stream) };
             }
             Err(status) => {
                 hgdbg!(
@@ -1356,7 +1422,6 @@ pub unsafe extern "C" fn hipGraphLaunch(exec: hipGraphExec_t, stream: hipStream_
             }
         }
     }
-    let native_exec = state.native_exec;
     let Some(replay) = state.replay.as_mut() else {
         return if native_exec != 0 {
             hgdbg!(
@@ -1413,45 +1478,32 @@ pub unsafe extern "C" fn hipGraphExecKernelNodeSetParams(
             None => hipErrorInvalidHandle,
         };
     }
-    let exec_handle = exec_handle(exec).expect("owned exec checked");
-    let mut state = lock(&exec_handle.state);
-    let node_key = node as usize;
-    let native_status = match (
-        state.native_exec,
-        state.native_nodes.get(&node_key).copied(),
-        unsafe {
-            real_symbol::<
-                unsafe extern "C" fn(
-                    hipGraphExec_t,
-                    hipGraphNode_t,
-                    *const hipKernelNodeParams,
-                ) -> hipError_t,
-            >(b"hipGraphExecKernelNodeSetParams\0")
-        },
-    ) {
-        (exec, Some(native_node), Some(function)) if exec != 0 => unsafe {
-            function(
-                exec as hipGraphExec_t,
-                native_node as hipGraphNode_t,
-                params,
-            )
-        },
-        _ => hipErrorNotSupported,
-    };
-    let Some(&node_id) = state.nodes.get(&node_key) else {
-        if native_status == hipSuccess {
-            state.force_native = true;
-            return hipSuccess;
-        }
+    let Some(exec_state) = exec_state(exec) else {
         return hipErrorInvalidHandle;
+    };
+    type Function = unsafe extern "C" fn(
+        hipGraphExec_t,
+        hipGraphNode_t,
+        *const hipKernelNodeParams,
+    ) -> hipError_t;
+    let native_status =
+        match unsafe { real_symbol::<Function>(b"hipGraphExecKernelNodeSetParams\0") } {
+            Some(function) => unsafe { function(exec, node, params) },
+            None => hipErrorNotSupported,
+        };
+    if native_status != hipSuccess {
+        return native_status;
+    }
+    let mut state = lock(&exec_state);
+    let node_key = node as usize;
+    let Some(&node_id) = state.nodes.get(&node_key) else {
+        state.force_native = true;
+        return hipSuccess;
     };
     let params_value = unsafe { *params };
     let Some(function) = function_record(params_value.func) else {
-        if native_status == hipSuccess {
-            state.force_native = true;
-            return hipSuccess;
-        }
-        return hipErrorNotSupported;
+        state.force_native = true;
+        return hipSuccess;
     };
     match unsafe { build_node_meta(&function, params_value) } {
         Ok((_, meta)) => {
@@ -1459,11 +1511,10 @@ pub unsafe extern "C" fn hipGraphExecKernelNodeSetParams(
             state.dirty = true;
             hipSuccess
         }
-        Err(_) if native_status == hipSuccess => {
+        Err(_) => {
             state.force_native = true;
             hipSuccess
         }
-        Err(status) => status,
     }
 }
 
@@ -1492,15 +1543,14 @@ pub unsafe extern "C" fn hipGraphExecUpdate(
     if !update_result.is_null() {
         unsafe { *update_result = hipGraphExecUpdateErrorNotSupported };
     }
-    let Some(graph_handle) = graph_handle(graph) else {
+    let Some(graph_state) = graph_state(graph) else {
         return hipErrorGraphExecUpdateFailure;
     };
-    let exec_handle = exec_handle(exec).expect("owned exec checked");
-    let graph_state = lock(&graph_handle.state);
-    let mut exec_state = lock(&exec_handle.state);
-    if graph_state.native_graph == 0 || exec_state.native_exec == 0 {
+    let Some(exec_state) = exec_state(exec) else {
         return hipErrorGraphExecUpdateFailure;
-    }
+    };
+    let graph_state = lock(&graph_state);
+    let mut exec_state = lock(&exec_state);
     type Function = unsafe extern "C" fn(
         hipGraphExec_t,
         hipGraph_t,
@@ -1511,20 +1561,14 @@ pub unsafe extern "C" fn hipGraphExecUpdate(
         return hipErrorGraphExecUpdateFailure;
     };
     // HIP's hipGraphExecUpdate requires a valid hipGraphNode_t* out-param; passing
-    // null here made the real runtime reject the call with hipErrorInvalidValue(1),
-    // which callers (e.g. llama.cpp ggml-cuda.cu) treat as fatal rather than as a
-    // recoverable update failure. Supply a local slot instead. The node handle is a
-    // NATIVE node, so it is deliberately not propagated back to the caller's
-    // error_node (already set to null above) to avoid handing out a foreign handle.
+    // null here makes the real runtime reject the call with
+    // hipErrorInvalidValue(1). Supply a local slot, then publish the native node
+    // identity to the caller when it requested that result.
     let mut native_error_node: hipGraphNode_t = ptr::null_mut();
-    let status = unsafe {
-        function(
-            exec_state.native_exec as hipGraphExec_t,
-            graph_state.native_graph as hipGraph_t,
-            &mut native_error_node,
-            update_result,
-        )
-    };
+    let status = unsafe { function(exec, graph, &mut native_error_node, update_result) };
+    if !error_node.is_null() {
+        unsafe { *error_node = native_error_node };
+    }
 
     // ---- PM4 graph-exec UPDATE -------------------------------------------
     // Callers such as llama.cpp re-capture and update every iteration because
@@ -1647,14 +1691,8 @@ pub unsafe extern "C" fn hipGraphExecDestroy(exec: hipGraphExec_t) -> hipError_t
             None => hipErrorInvalidHandle,
         };
     }
-    lock(&global().handles).execs.remove(&(exec as usize));
-    let handle = unsafe { Box::from_raw(exec.cast::<ExecHandle>()) };
-    let state = handle
-        .state
-        .into_inner()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    unsafe { native_exec_destroy(state.native_exec) };
-    hipSuccess
+    unregister_exec(exec as usize);
+    unsafe { native_exec_destroy(exec as usize) }
 }
 
 #[unsafe(no_mangle)]
@@ -1669,23 +1707,8 @@ pub unsafe extern "C" fn hipGraphDestroy(graph: hipGraph_t) -> hipError_t {
             None => hipErrorInvalidHandle,
         };
     }
-    lock(&global().handles).graphs.remove(&(graph as usize));
-    let handle = unsafe { Box::from_raw(graph.cast::<GraphHandle>()) };
-    let state = handle
-        .state
-        .into_inner()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    {
-        let mut handles = lock(&global().handles);
-        for node in &state.node_handles {
-            handles.nodes.remove(node);
-        }
-    }
-    for node in state.node_handles {
-        drop(unsafe { Box::from_raw((node as hipGraphNode_t).cast::<NodeHandle>()) });
-    }
-    unsafe { native_graph_destroy(state.native_graph) };
-    hipSuccess
+    unregister_graph(graph as usize);
+    unsafe { native_graph_destroy(graph as usize) }
 }
 
 fn load_redline_code_object(code: Arc<[u8]>) -> Result<ModuleRecord, hipError_t> {
@@ -1899,14 +1922,14 @@ pub unsafe extern "C" fn hipModuleGetFunction(
 }
 
 unsafe fn append_capture_kernel(
-    capture: CaptureState,
+    capture: &CaptureState,
     function: hipFunction_t,
     grid: dim3,
     block: dim3,
     kernel_params: *mut *mut c_void,
     extra: *mut *mut c_void,
     shared_mem: u32,
-) -> Result<hipGraphNode_t, hipError_t> {
+) -> Result<NodeId, hipError_t> {
     let params = hipKernelNodeParams {
         blockDim: block,
         extra,
@@ -1915,21 +1938,37 @@ unsafe fn append_capture_kernel(
         kernelParams: kernel_params,
         sharedMemBytes: shared_mem,
     };
-    let dependency = capture.last_node as hipGraphNode_t;
-    let (dependencies, count) = if dependency.is_null() {
-        (ptr::null(), 0)
-    } else {
-        (&dependency as *const hipGraphNode_t, 1)
+    let function = function_record(function);
+    let function_resolved = function.is_some();
+    let mut state = lock(&capture.provisional);
+    let own_result = function.and_then(|function| {
+        let (launch, meta) = unsafe { build_node_meta(&function, params) }.ok()?;
+        let node = match capture.last_node {
+            Some(dependency) => state.graph.kernel_after(launch, [], [dependency]).ok()?,
+            None => state.graph.kernel(launch, []).ok()?,
+        };
+        Some((node, meta))
+    });
+    let pm4_appended = own_result.is_some();
+    let result = match own_result {
+        Some((node, meta)) => {
+            state.node_meta.insert(node, meta);
+            Ok(node)
+        }
+        None => Err(hipErrorNotSupported),
     };
-    unsafe {
-        add_kernel_node_internal(
-            capture.graph as hipGraph_t,
-            dependencies,
-            count,
-            &params,
-            false,
-        )
-    }
+    hgdbg!(
+        "append_capture_kernel function={:p} function_record={} pm4_node={} appended_nodes={}",
+        params.func,
+        if function_resolved {
+            "resolved"
+        } else {
+            "none"
+        },
+        if pm4_appended { "appended" } else { "none" },
+        state.node_meta.len()
+    );
+    result
 }
 
 #[unsafe(no_mangle)]
@@ -1956,18 +1995,23 @@ pub unsafe extern "C" fn hipStreamBeginCapture(stream: hipStream_t, mode: i32) -
         return native_status;
     }
 
-    let graph = allocate_graph(0);
+    let provisional = Arc::new(Mutex::new(GraphState {
+        graph: Graph::new(),
+        node_meta: BTreeMap::new(),
+        force_native: false,
+    }));
     lock(&global().captures).insert(
         stream_key,
         CaptureState {
-            graph: graph as usize,
-            last_node: 0,
+            provisional: Arc::clone(&provisional),
+            last_node: None,
             invalid: false,
             native_active: true,
         },
     );
     hgdbg!(
-        "hipStreamBeginCapture stream={stream:p} graph={graph:p} real_symbol={resolution} native_status={native_status} redline_capture=created native_shadow=true"
+        "hipStreamBeginCapture stream={stream:p} provisional={:p} real_symbol={resolution} native_status={native_status} redline_capture=created native_shadow=true",
+        Arc::as_ptr(&provisional)
     );
     hipSuccess
 }
@@ -1989,7 +2033,7 @@ pub unsafe extern "C" fn hipLaunchKernel(
         usize,
         hipStream_t,
     ) -> hipError_t;
-    let capture = lock(&global().captures).get(&(stream as usize)).copied();
+    let capture = lock(&global().captures).get(&(stream as usize)).cloned();
     let Some(capture) = capture else {
         return match unsafe { real_symbol::<Function>(b"hipLaunchKernel\0") } {
             Some(function) => unsafe {
@@ -2032,7 +2076,7 @@ pub unsafe extern "C" fn hipLaunchKernel(
         .map_err(|_| hipErrorInvalidValue)
         .and_then(|shared_mem| unsafe {
             append_capture_kernel(
-                capture,
+                &capture,
                 function_address.cast_mut(),
                 grid,
                 block,
@@ -2044,7 +2088,7 @@ pub unsafe extern "C" fn hipLaunchKernel(
     match own {
         Ok(node) => {
             if let Some(capture) = lock(&global().captures).get_mut(&(stream as usize)) {
-                capture.last_node = node as usize;
+                capture.last_node = Some(node);
             }
             hipSuccess
         }
@@ -2086,7 +2130,7 @@ pub unsafe extern "C" fn hipModuleLaunchKernel(
         *mut *mut c_void,
         *mut *mut c_void,
     ) -> hipError_t;
-    let capture = lock(&global().captures).get(&(stream as usize)).copied();
+    let capture = lock(&global().captures).get(&(stream as usize)).cloned();
     let Some(capture) = capture else {
         return match unsafe { real_symbol::<Function>(b"hipModuleLaunchKernel\0") } {
             Some(real) => unsafe {
@@ -2137,7 +2181,7 @@ pub unsafe extern "C" fn hipModuleLaunchKernel(
     }
     let own = unsafe {
         append_capture_kernel(
-            capture,
+            &capture,
             function,
             dim3::new(grid_x, grid_y, grid_z),
             dim3::new(block_x, block_y, block_z),
@@ -2149,7 +2193,7 @@ pub unsafe extern "C" fn hipModuleLaunchKernel(
     match own {
         Ok(node) => {
             if let Some(capture) = lock(&global().captures).get_mut(&(stream as usize)) {
-                capture.last_node = node as usize;
+                capture.last_node = Some(node);
             }
             hipSuccess
         }
@@ -2173,8 +2217,12 @@ unsafe fn captured_native_node_count(graph: hipGraph_t) -> Option<usize> {
     (unsafe { function(graph, ptr::null_mut(), &mut count) } == hipSuccess).then_some(count)
 }
 
-unsafe fn reconcile_captured_native_nodes(state: &mut GraphState) -> bool {
-    if state.native_graph == 0 {
+unsafe fn reconcile_captured_native_nodes(
+    native_graph: hipGraph_t,
+    state: &GraphState,
+    pairings: &mut Vec<(usize, NodeId)>,
+) -> bool {
+    if native_graph.is_null() {
         return false;
     }
     type GetNodes = unsafe extern "C" fn(hipGraph_t, *mut hipGraphNode_t, *mut usize) -> hipError_t;
@@ -2186,26 +2234,14 @@ unsafe fn reconcile_captured_native_nodes(state: &mut GraphState) -> bool {
         return false;
     };
     let mut count = 0_usize;
-    if unsafe {
-        get_nodes(
-            state.native_graph as hipGraph_t,
-            ptr::null_mut(),
-            &mut count,
-        )
-    } != hipSuccess
-        || count != state.node_handles.len()
+    if unsafe { get_nodes(native_graph, ptr::null_mut(), &mut count) } != hipSuccess
+        || count != state.node_meta.len()
     {
         return false;
     }
     let mut native_nodes = vec![ptr::null_mut(); count];
     if count != 0
-        && unsafe {
-            get_nodes(
-                state.native_graph as hipGraph_t,
-                native_nodes.as_mut_ptr(),
-                &mut count,
-            )
-        } != hipSuccess
+        && unsafe { get_nodes(native_graph, native_nodes.as_mut_ptr(), &mut count) } != hipSuccess
     {
         return false;
     }
@@ -2218,12 +2254,14 @@ unsafe fn reconcile_captured_native_nodes(state: &mut GraphState) -> bool {
             return false;
         }
     }
-    for (&redline_node, &native_node) in state.node_handles.iter().zip(&native_nodes) {
-        if !lock(&global().handles).nodes.contains(&redline_node) {
-            return false;
-        }
-        unsafe { (*(redline_node as *mut NodeHandle)).native_node = native_node as usize };
-    }
+    pairings.extend(
+        state
+            .node_meta
+            .keys()
+            .copied()
+            .zip(native_nodes)
+            .map(|(node, native)| (native as usize, node)),
+    );
     true
 }
 
@@ -2251,44 +2289,45 @@ pub unsafe extern "C" fn hipStreamEndCapture(
     let mut native_graph = ptr::null_mut();
     let mut native_status = hipErrorNotSupported;
     let mut native_resolution = SymbolResolution::Missing;
-    if capture.native_active {
-        type Function = unsafe extern "C" fn(hipStream_t, *mut hipGraph_t) -> hipError_t;
-        let (function, resolution) =
-            unsafe { real_symbol_with_resolution::<Function>(b"hipStreamEndCapture\0") };
-        let Some(function) = function else {
-            hgdbg!(
-                "hipStreamEndCapture stream={stream:p} real_symbol={resolution} native_status={native_status} native_graph={native_graph:p}"
-            );
-            let _ = unsafe { hipGraphDestroy(capture.graph as hipGraph_t) };
-            return native_status;
-        };
-        native_resolution = resolution;
-        native_status = unsafe { function(stream, &mut native_graph) };
-        if native_status != hipSuccess {
-            hgdbg!(
-                "hipStreamEndCapture stream={stream:p} real_symbol={resolution} native_status={native_status} native_graph={native_graph:p}"
-            );
-            let _ = unsafe { hipGraphDestroy(capture.graph as hipGraph_t) };
-            return native_status;
-        }
+    if !capture.native_active {
+        hgdbg!(
+            "hipStreamEndCapture stream={stream:p} real_symbol={native_resolution} native_status={native_status} native_graph={native_graph:p}"
+        );
+        return native_status;
     }
-    let graph = capture.graph as hipGraph_t;
-    let Some(handle) = graph_handle(graph) else {
-        if !native_graph.is_null() {
-            unsafe { native_graph_destroy(native_graph as usize) };
-        }
-        return hipErrorUnknown;
+
+    type Function = unsafe extern "C" fn(hipStream_t, *mut hipGraph_t) -> hipError_t;
+    let (function, resolution) =
+        unsafe { real_symbol_with_resolution::<Function>(b"hipStreamEndCapture\0") };
+    let Some(function) = function else {
+        hgdbg!(
+            "hipStreamEndCapture stream={stream:p} real_symbol={resolution} native_status={native_status} native_graph={native_graph:p}"
+        );
+        return native_status;
     };
+    native_resolution = resolution;
+    native_status = unsafe { function(stream, &mut native_graph) };
+    if native_status != hipSuccess {
+        hgdbg!(
+            "hipStreamEndCapture stream={stream:p} real_symbol={resolution} native_status={native_status} native_graph={native_graph:p}"
+        );
+        return native_status;
+    }
+    if native_graph.is_null() {
+        return hipErrorUnknown;
+    }
+
+    let native_graph_key = native_graph as usize;
+    adopt_graph(native_graph_key, Arc::clone(&capture.provisional));
+    let mut pairings = Vec::new();
     let (redline_nodes, reconcile, topology_matches, force_native) = {
-        let mut state = lock(&handle.state);
-        state.native_graph = native_graph as usize;
-        let reconcile = if capture.native_active && !capture.invalid {
-            Some(unsafe { reconcile_captured_native_nodes(&mut state) })
+        let mut state = lock(&capture.provisional);
+        let reconcile = if !capture.invalid {
+            Some(unsafe { reconcile_captured_native_nodes(native_graph, &state, &mut pairings) })
         } else {
             None
         };
-        let topology_matches =
-            !capture.native_active || (!capture.invalid && reconcile == Some(true));
+        let topology_matches = !capture.invalid && reconcile == Some(true);
         state.force_native |= capture.invalid || !topology_matches;
         (
             state.node_meta.len(),
@@ -2297,6 +2336,9 @@ pub unsafe extern "C" fn hipStreamEndCapture(
             state.force_native,
         )
     };
+    for (native_node, node) in pairings {
+        register_node(native_node, native_graph_key, Some(node));
+    }
     let native_nodes = if hg_debug_enabled() {
         unsafe { captured_native_node_count(native_graph) }
     } else {
@@ -2306,11 +2348,7 @@ pub unsafe extern "C" fn hipStreamEndCapture(
         "hipStreamEndCapture stream={stream:p} real_symbol={native_resolution} native_status={native_status} native_graph={native_graph:p} native_nodes={native_nodes:?} redline_nodes={redline_nodes} reconcile={reconcile:?} invalid={} topology_matches={topology_matches} force_native={force_native}",
         capture.invalid
     );
-    if capture.invalid && native_graph.is_null() {
-        let _ = unsafe { hipGraphDestroy(graph) };
-        return hipErrorStreamCaptureInvalidated;
-    }
-    unsafe { *output = graph };
+    unsafe { *output = native_graph };
     hipSuccess
 }
 
@@ -2338,141 +2376,10 @@ pub(crate) unsafe fn translate_native_dependencies(
     dependencies: *const hipGraphNode_t,
     count: usize,
 ) -> Result<Vec<hipGraphNode_t>, hipError_t> {
-    dependency_nodes(graph_key, dependencies, count)?
+    Ok(dependency_nodes(graph_key, dependencies, count)?
         .into_iter()
-        .map(|node| {
-            if node.native_node == 0 {
-                Err(hipErrorNotSupported)
-            } else {
-                Ok(node.native_node as hipGraphNode_t)
-            }
-        })
-        .collect()
-}
-
-/// Translate a node handle that may or may not be ours.
-///
-/// The rule the whole interposer rests on is that one of our heap pointers must
-/// never reach HIP, and that rule does not care whether the *other* arguments to
-/// the call were ours. An all-or-nothing `if !is_graph(primary) { forward }`
-/// early return reintroduces exactly the type confusion this module exists to
-/// remove whenever a caller mixes a foreign primary handle with one of our
-/// secondary handles. Translate per argument instead.
-///
-/// Three cases, and the third is the subtle one:
-///
-/// 1. Not ours — pass through untouched. A process may legitimately hold both
-///    native handles and ours, and HIP is the right component to reject a
-///    genuinely invalid handle, once it has stopped being *our* pointer.
-/// 2. Ours with a native shadow — hand over the shadow.
-/// 3. Ours with NO native shadow (`native_node == 0`) — yield null, never the
-///    input. Falling through to the input here would hand HIP our heap pointer,
-///    which is precisely the bug this module exists to remove. There is nothing
-///    valid to forward, so null lets HIP fail the call cleanly with an invalid
-///    -value error instead of dereferencing our allocation.
-pub(crate) fn native_node_or_passthrough(node: hipGraphNode_t) -> hipGraphNode_t {
-    match node_snapshot(node) {
-        Some(handle) if handle.native_node != 0 => handle.native_node as hipGraphNode_t,
-        Some(_) => std::ptr::null_mut(),
-        None => node,
-    }
-}
-
-/// Translate a graph handle that may or may not be ours. See
-/// [`native_node_or_passthrough`] for the three cases, including why a graph of
-/// ours without a native shadow yields null rather than our own pointer.
-pub(crate) fn native_graph_or_passthrough(graph: hipGraph_t) -> hipGraph_t {
-    match graph_handle(graph) {
-        Some(handle) => match lock(&handle.state).native_graph {
-            0 => std::ptr::null_mut(),
-            native => native as hipGraph_t,
-        },
-        None => graph,
-    }
-}
-
-/// Translate an exec handle that may or may not be ours. See
-/// [`native_node_or_passthrough`] for the three cases, including why an exec of
-/// ours without a native shadow yields null rather than our own pointer.
-pub(crate) fn native_exec_or_passthrough(exec: hipGraphExec_t) -> hipGraphExec_t {
-    match exec_handle(exec) {
-        Some(handle) => match lock(&handle.state).native_exec {
-            0 => std::ptr::null_mut(),
-            native => native as hipGraphExec_t,
-        },
-        None => exec,
-    }
-}
-
-/// Element-wise translation of a dependency array, passing foreign nodes through.
-///
-/// [`translate_native_dependencies`] rejects the whole call when any element is
-/// not one of ours, which is right when we are building our own retained plan
-/// and wrong when we are merely forwarding. Nodes reachable through a wrapper we
-/// created for a native child graph or clone are legitimately foreign, so
-/// rejecting them turns a call HIP would have accepted into an error.
-///
-/// Returns `None` when there is nothing to translate, so callers can forward the
-/// original pointer rather than the address of an empty `Vec`.
-pub(crate) unsafe fn translate_dependencies_passthrough(
-    dependencies: *const hipGraphNode_t,
-    count: usize,
-) -> Result<Option<Vec<hipGraphNode_t>>, hipError_t> {
-    /// Refuse to mirror an array that cannot plausibly be a real dependency list.
-    ///
-    /// `count` is caller-controlled and arrives across the C ABI unvalidated. A
-    /// dependency array is one `hipGraphNode_t` per node the caller already owns,
-    /// so four million entries is already far past any graph a program can build;
-    /// beyond that the count is a bug or an attack, and mirroring it would turn a
-    /// bad argument into an allocation large enough to abort the process. Reject
-    /// instead, and let the caller return the error across the ABI.
-    const MAX_DEPENDENCIES: usize = 4_000_000;
-
-    if dependencies.is_null() || count == 0 {
-        return Ok(None);
-    }
-    if count > MAX_DEPENDENCIES {
-        return Err(hipErrorInvalidValue);
-    }
-    let slice = unsafe { std::slice::from_raw_parts(dependencies, count) };
-    // Fallible reservation: an allocation failure here must surface as an error
-    // across the ABI, never as an abort inside a `collect`.
-    let mut translated = Vec::new();
-    if translated.try_reserve_exact(count).is_err() {
-        return Err(hipErrorOutOfMemory);
-    }
-    translated.extend(slice.iter().map(|node| native_node_or_passthrough(*node)));
-    Ok(Some(translated))
-}
-
-/// Return one of *our* node handles for a native node owned by `graph`.
-///
-/// Introspection calls (`hipGraphGetNodes` and friends) hand arrays of nodes back
-/// to the application, which will then pass them straight back into this API. If
-/// we publish a raw native pointer the application holds a handle we cannot
-/// translate later, so the escape is only deferred, not avoided. Reuse the
-/// existing wrapper when we already have one and mint one otherwise, so a native
-/// node is interned exactly once per owning graph.
-///
-/// Returns the input unchanged when `graph` is not ours or the node is null —
-/// there is no wrapper to mint against a graph we do not own.
-pub(crate) fn intern_native_node(graph: hipGraph_t, native: hipGraphNode_t) -> hipGraphNode_t {
-    if native.is_null() {
-        return native;
-    }
-    let Some(handle) = graph_handle(graph) else {
-        return native;
-    };
-    let mut state = lock(&handle.state);
-    let wanted = native as usize;
-    let existing =
-        state.node_handles.iter().copied().find(|key| {
-            node_snapshot(*key as hipGraphNode_t).is_some_and(|n| n.native_node == wanted)
-        });
-    match existing {
-        Some(key) => key as hipGraphNode_t,
-        None => allocate_node(graph as usize, &mut state, None, wanted),
-    }
+        .map(|(native, _)| native)
+        .collect())
 }
 
 pub(crate) fn finish_native_only_node(
@@ -2480,13 +2387,18 @@ pub(crate) fn finish_native_only_node(
     native_node: hipGraphNode_t,
     output: *mut hipGraphNode_t,
 ) -> hipError_t {
-    let Some(handle) = graph_handle(graph) else {
+    if output.is_null() {
+        return hipErrorInvalidValue;
+    }
+    if native_node.is_null() {
+        return hipErrorUnknown;
+    }
+    let Some(graph_state) = graph_state(graph) else {
         return hipErrorInvalidHandle;
     };
-    let mut state = lock(&handle.state);
-    state.force_native = true;
-    let node = allocate_node(graph as usize, &mut state, None, native_node as usize);
-    unsafe { *output = node };
+    lock(&graph_state).force_native = true;
+    register_node(native_node as usize, graph as usize, None);
+    unsafe { *output = native_node };
     hipSuccess
 }
 
@@ -2518,13 +2430,6 @@ macro_rules! unsupported_pointer_node {
             if output.is_null() {
                 return hipErrorInvalidValue;
             }
-            let Some(handle) = graph_handle(graph) else {
-                return hipErrorInvalidHandle;
-            };
-            let native_graph = lock(&handle.state).native_graph;
-            if native_graph == 0 {
-                return hipErrorNotSupported;
-            }
             let native_dependencies =
                 match unsafe { translate_native_dependencies(graph as usize, dependencies, count) }
                 {
@@ -2538,7 +2443,7 @@ macro_rules! unsupported_pointer_node {
             let status = unsafe {
                 function(
                     &mut native_node,
-                    native_graph as hipGraph_t,
+                    graph,
                     native_dependencies.as_ptr(),
                     count,
                     params,
@@ -2581,17 +2486,6 @@ pub unsafe extern "C" fn hipGraphAddChildGraphNode(
     if output.is_null() {
         return hipErrorInvalidValue;
     }
-    let Some(parent_handle) = graph_handle(graph) else {
-        return hipErrorInvalidHandle;
-    };
-    let Some(child_handle) = graph_handle(child) else {
-        return hipErrorNotSupported;
-    };
-    let parent_native = lock(&parent_handle.state).native_graph;
-    let child_native = lock(&child_handle.state).native_graph;
-    if parent_native == 0 || child_native == 0 {
-        return hipErrorNotSupported;
-    }
     let native_dependencies =
         match unsafe { translate_native_dependencies(graph as usize, dependencies, count) } {
             Ok(dependencies) => dependencies,
@@ -2605,10 +2499,10 @@ pub unsafe extern "C" fn hipGraphAddChildGraphNode(
     let status = unsafe {
         function(
             &mut native_node,
-            parent_native as hipGraph_t,
+            graph,
             native_dependencies.as_ptr(),
             count,
-            child_native as hipGraph_t,
+            child,
         )
     };
     if status == hipSuccess {
@@ -2741,10 +2635,10 @@ fn is_pm4(exec: u64) -> bool {
     let Ok(exec) = py_pointer(exec, "exec handle") else {
         return false;
     };
-    let Some(handle) = exec_handle(exec) else {
+    let Some(state) = exec_state(exec) else {
         return false;
     };
-    let state = lock(&handle.state);
+    let state = lock(&state);
     !state.force_native && state.replay.is_some()
 }
 
@@ -2800,6 +2694,124 @@ mod tests {
     #[test]
     fn versioned_lookup_includes_native_capture_abi() {
         assert!(HIP_SYMBOL_VERSIONS.contains(&b"hip_4.3\0".as_slice()));
+    }
+
+    /// A state handle obtained before a concurrent destroy stays usable.
+    ///
+    /// This is the property the old design could not provide. Lookups tested
+    /// membership in a `HashSet<usize>`, dropped the lock, and then dereferenced
+    /// the raw pointer as a fabricated `&'static`, so a destroy landing in that
+    /// window freed the state under an in-flight caller. Keying natively and
+    /// handing back an `Arc` makes the window harmless: unregistering removes
+    /// the table entry, and the state itself lives until the last user lets go.
+    #[test]
+    fn state_survives_concurrent_unregister() {
+        let key = 0x5245_444C_0000_1001_usize;
+        let graph = key as hipGraph_t;
+        register_graph(key);
+
+        let held = graph_state(graph).expect("just registered");
+        unregister_graph(key);
+
+        // Gone from the table...
+        assert!(!is_graph(graph));
+        assert!(graph_state(graph).is_none());
+        // ...but the handle we already took is still sound to use.
+        lock(&held).force_native = true;
+        assert!(lock(&held).force_native);
+    }
+
+    /// Unregistering a graph must take its nodes with it, or a later native
+    /// pointer landing on a recycled address would inherit a stale record and
+    /// resolve to the wrong graph.
+    #[test]
+    fn unregistering_a_graph_drops_its_nodes() {
+        let graph_key = 0x5245_444C_0000_2001_usize;
+        let mine = 0x5245_444C_0000_2002_usize;
+        let other_graph = 0x5245_444C_0000_2003_usize;
+        let theirs = 0x5245_444C_0000_2004_usize;
+
+        register_graph(graph_key);
+        register_graph(other_graph);
+        register_node(mine, graph_key, None);
+        register_node(theirs, other_graph, None);
+
+        unregister_graph(graph_key);
+
+        assert!(node_record(mine as hipGraphNode_t).is_none());
+        let survivor = node_record(theirs as hipGraphNode_t).expect("other graph untouched");
+        assert_eq!(survivor.graph, other_graph);
+
+        unregister_graph(other_graph);
+    }
+
+    /// A node we do not model is a miss, not an error. Callers forward such a
+    /// handle to HIP unchanged, which is only safe because it is HIP's own
+    /// pointer — the whole point of native identity.
+    #[test]
+    fn unknown_handles_are_misses_not_errors() {
+        let stranger = 0x5245_444C_0000_3001_usize;
+        assert!(node_record(stranger as hipGraphNode_t).is_none());
+        assert!(graph_state(stranger as hipGraph_t).is_none());
+        assert!(exec_state(stranger as hipGraphExec_t).is_none());
+        assert!(!is_graph(stranger as hipGraph_t));
+        assert!(!is_exec(stranger as hipGraphExec_t));
+        // Null is a miss too, never a panic.
+        assert!(node_record(ptr::null_mut()).is_none());
+        assert!(graph_state(ptr::null_mut()).is_none());
+        assert!(!is_graph(ptr::null_mut()));
+    }
+
+    /// Hammer the registry from several threads to shake out lock-order
+    /// inversions and use-after-free. Every thread churns its own keys while
+    /// reading a shared one, so a deadlock hangs the test and a freed state
+    /// trips the assertion or the allocator. No GPU involved.
+    #[test]
+    fn concurrent_churn_is_sound() {
+        const THREADS: usize = 8;
+        const ITERATIONS: usize = 200;
+
+        let shared = 0x5245_444C_0000_4000_usize;
+        register_graph(shared);
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|t| {
+                std::thread::spawn(move || {
+                    for i in 0..ITERATIONS {
+                        let key = 0x5245_444C_0001_0000_usize + t * ITERATIONS + i;
+                        let node = key | 0x1000_0000_0000;
+
+                        let state = register_graph(key);
+                        register_node(node, key, None);
+                        lock(&state).force_native = true;
+
+                        // Read the shared entry while other threads churn.
+                        if let Some(shared_state) = graph_state(shared as hipGraph_t) {
+                            let _ = lock(&shared_state).force_native;
+                        }
+
+                        assert_eq!(
+                            node_record(node as hipGraphNode_t).map(|r| r.graph),
+                            Some(key)
+                        );
+
+                        // Take a handle, then destroy underneath it.
+                        let doomed = graph_state(key as hipGraph_t).expect("registered above");
+                        unregister_graph(key);
+                        assert!(
+                            lock(&doomed).force_native,
+                            "state outlived its registration"
+                        );
+                        assert!(node_record(node as hipGraphNode_t).is_none());
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("worker panicked");
+        }
+        unregister_graph(shared);
     }
 
     #[test]
