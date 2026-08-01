@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
 
 use radiowave::{
-    resolve_hipcc, ArchProfile, CampaignLedger, CampaignStarted, CandidateSubmission,
-    CandidateVerdict, CompileRequest, Compiler, Inspector, KernelReport, ResourceAssessment,
-    ResourceContract, SchedulerProfile, Wavefront, support_header_path,
+    ArchProfile, CampaignLedger, CampaignStarted, CandidateSubmission, CandidateVerdict,
+    CompileRequest, Compiler, Inspector, KernelReport, ResourceAssessment, ResourceContract,
+    SchedulerProfile, Wavefront, resolve_hipcc, support_header_path,
 };
 use std::env;
 use std::error::Error;
@@ -39,7 +39,9 @@ fn compile(args: Vec<OsString>) -> Result<(), Box<dyn Error>> {
     let mut arch = env::var("RADIOWAVE_ARCH").ok();
     let mut wavefront = Wavefront::Wave32;
     let mut scheduler_profile = SchedulerProfile::Default;
-    let mut hipcc = env::var_os("HIPCC").filter(|v| !v.is_empty()).map(PathBuf::from);
+    let mut hipcc = env::var_os("HIPCC")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
     let mut manifest = None;
     let mut defines = Vec::new();
     let mut extra_args = Vec::new();

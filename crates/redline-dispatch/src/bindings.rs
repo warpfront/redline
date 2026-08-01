@@ -286,8 +286,8 @@ impl PreparedPlanStamp {
             if *expected != current {
                 return Err(PreparedPlanInvalidation::ArtifactChanged {
                     kernel: kernel.clone(),
-                    prepared: *expected,
-                    current,
+                    prepared: Box::new(*expected),
+                    current: Box::new(current),
                 });
             }
         }
@@ -325,8 +325,8 @@ pub enum PreparedPlanInvalidation {
     #[error("kernel artifact {kernel:?} changed generation or bytes")]
     ArtifactChanged {
         kernel: String,
-        prepared: KernelArtifactIdentity,
-        current: KernelArtifactIdentity,
+        prepared: Box<KernelArtifactIdentity>,
+        current: Box<KernelArtifactIdentity>,
     },
 }
 

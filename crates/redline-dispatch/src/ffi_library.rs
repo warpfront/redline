@@ -98,8 +98,7 @@ pub type HipLibraryGetKernelFn =
     unsafe extern "C" fn(*mut HipKernel, HipLibrary, *const c_char) -> HipError;
 
 /// `hipLibraryGetKernelCount`
-pub type HipLibraryGetKernelCountFn =
-    unsafe extern "C" fn(*mut c_uint, HipLibrary) -> HipError;
+pub type HipLibraryGetKernelCountFn = unsafe extern "C" fn(*mut c_uint, HipLibrary) -> HipError;
 
 /// `hipLibraryGetGlobal` — `__device__` global lookup.
 pub type HipLibraryGetGlobalFn =

@@ -281,3 +281,46 @@ a proof. A mismatch would associate the wrong native node with a modelled node
 and mis-target a later parameter update. Capture produces a linear chain so the
 orders coincide in practice. Fixing it properly means matching on kernel identity
 rather than position, and is deliberately not in this change.
+
+### Cross-architecture validation (added after merge)
+
+The redesign was originally verified on gfx1201 only. Re-run across the full RDNA
+lineup on hipx, master `4a8b21a` (fabricated handles + 72 shims) against the
+redesign, median of 5 runs at `GRAPH_M=1000`, `CORRECT=true` in every run:
+
+| arch | gen | mode | stock | master | redesign | delta |
+|---|---|---|---:|---:|---:|---:|
+| gfx1010 | RDNA1 | explicit | 283.6 µs | 235.4 (1.20×) | 235.3 (1.21×) | −0.0% |
+| gfx1010 | RDNA1 | capture  | 284.4 µs | 235.2 (1.21×) | 232.7 (1.22×) | −1.1% |
+| gfx1030 | RDNA2 | explicit | 287.1 µs | 210.5 (1.36×) | 210.5 (1.36×) | +0.0% |
+| gfx1030 | RDNA2 | capture  | 288.2 µs | 210.0 (1.37×) | 210.4 (1.37×) | +0.2% |
+| gfx1100 | RDNA3 | explicit | 198.8 µs | 98.4 (2.02×) | 98.6 (2.02×) | +0.2% |
+| gfx1100 | RDNA3 | capture  | 198.9 µs | 98.3 (2.02×) | 97.4 (2.04×) | −0.9% |
+| gfx1201 | RDNA4 | explicit | 168.7 µs | 91.3 (1.85×) | 84.0 (2.01×) | −8.0% |
+| gfx1201 | RDNA4 | capture  | 169.5 µs | 85.9 (1.97×) | 87.3 (1.94×) | +1.6% |
+
+Every RDNA generation from 1 through 4 is correct and free of regression; the
+worst case is +1.6% and within run-to-run noise. The gfx1151 Strix Halo APU on
+the same host is deny-listed and was not exercised.
+
+Note the speedup is strongly architecture-dependent — 1.2× on RDNA1 versus 2.0×
+on RDNA3 — which is a property of the workload and the baseline runtime, not of
+this change: master shows the same spread.
+
+#### Operational note: `ROCR_VISIBLE_DEVICES` and `HIP_VISIBLE_DEVICES` do not compose
+
+The first attempt at this matrix produced no output on two of three cards. The
+cause was setting BOTH variables to the same index: `ROCR_VISIBLE_DEVICES=2`
+filters ROCr down to a single agent, after which `HIP_VISIBLE_DEVICES=2` selects
+index 2 of a one-device list and finds nothing. It appeared to work on the first
+card only because `0` is consistent under either interpretation.
+
+Set `ROCR_VISIBLE_DEVICES` to pick the physical device and leave
+`HIP_VISIBLE_DEVICES=0`, since HIP enumerates through ROCr and inherits the
+filter. This is the same index-drift hazard the device resolver exists to remove,
+encountered while validating a different change.
+
+On this host the ROCr GPU-agent order and the HIP device order happen to agree
+(`bdfid` 26112/48896/28160/39168 = buses `0x66`/`0xBF`/`0x6E`/`0x99`), but
+rocm-smi's order does NOT: its `GPU[1]` is the RX 5700 XT that HIP calls
+`hip[2]`. Never anchor on a rocm-smi index.

@@ -310,6 +310,12 @@ impl SingleQueuePm4Ib {
     /// Replay once and return ROCr's GPU timestamp span around the vendor AQL
     /// packet. The packet contains exactly one PM4 indirect buffer, so this is
     /// the retained graph's GPU execution interval rather than a host clock.
+    ///
+    /// # Safety
+    ///
+    /// All code, kernarg, and pointee addresses encoded in the retained IB
+    /// must remain live and GPU-accessible until this returns `Ok`. After an
+    /// error they must remain live through this object's destruction.
     pub unsafe fn replay_and_wait_profiled(&mut self) -> Result<GpuMultiQueueTiming, ReplayError> {
         let frequency_hz = self
             .timestamp_frequency_hz
@@ -2908,12 +2914,12 @@ fn validate_derived_policy_shape(
             });
         }
         for (phase_index, (phase, phase_policies)) in phases.iter().zip(dispatches).enumerate() {
-            for lane in 0..2 {
-                if phase_policies[lane].len() != phase.lanes[lane].len() {
+            for (lane, policies) in phase_policies.iter().enumerate() {
+                if policies.len() != phase.lanes[lane].len() {
                     return Err(ReplayError::PolicyShapeMismatch {
                         detail: format!(
                             "{label} phase {phase_index} lane {lane} has {} policies, {} dispatches",
-                            phase_policies[lane].len(),
+                            policies.len(),
                             phase.lanes[lane].len()
                         ),
                     });

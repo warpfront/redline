@@ -75,6 +75,14 @@ impl Pm4GraphReplay {
     /// Device pointers embedded in the retained kernarg bytes must remain live
     /// and GPU-accessible until this method returns. After an error, they must
     /// remain live through destruction of this replay object.
+    ///
+    /// # Safety
+    ///
+    /// Caller must uphold the same lifetime contract as
+    /// [`SingleQueuePm4Ib::replay_and_wait`]: every code object, kernarg
+    /// allocation, and device pointer encoded in the retained IB stays live and
+    /// GPU-accessible until this returns `Ok`, and after an error through
+    /// destruction of this object.
     pub unsafe fn replay_and_wait(&mut self) -> Result<(), GraphPm4Error> {
         // SAFETY: forwarded from this method's caller. Kernarg allocations and
         // code objects are retained by this object.

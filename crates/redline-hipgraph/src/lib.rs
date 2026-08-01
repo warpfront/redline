@@ -329,14 +329,14 @@ pub(crate) unsafe fn real_symbol<T: Copy>(name: &'static [u8]) -> Option<T> {
 fn open_libamdhip64() -> usize {
     let mut handle = unsafe {
         libc::dlopen(
-            b"libamdhip64.so\0".as_ptr().cast(),
+            c"libamdhip64.so".as_ptr(),
             libc::RTLD_NOW | libc::RTLD_NOLOAD,
         )
     };
     if handle.is_null() {
         handle = unsafe {
             libc::dlopen(
-                b"libamdhip64.so.7\0".as_ptr().cast(),
+                c"libamdhip64.so.7".as_ptr(),
                 libc::RTLD_NOW | libc::RTLD_NOLOAD,
             )
         };
@@ -344,7 +344,7 @@ fn open_libamdhip64() -> usize {
     if handle.is_null() {
         handle = unsafe {
             libc::dlopen(
-                b"libamdhip64.so\0".as_ptr().cast(),
+                c"libamdhip64.so".as_ptr(),
                 libc::RTLD_NOW | libc::RTLD_GLOBAL,
             )
         };
@@ -416,6 +416,19 @@ unsafe fn resolve_real_symbol_uncached(name: &'static [u8]) -> ResolvedSymbol {
     }
 }
 
+/// Compiler-emitted fat-binary registration interposer (HIP runtime ABI).
+///
+/// Forwards to native `__hipRegisterFatBinary`, then optionally captures the
+/// clang offload bundle into our side table keyed by the returned modules handle.
+///
+/// # Safety
+///
+/// `data` must be null or point to a readable compiler-emitted
+/// `__fatBinC_Wrapper_t` (24 bytes at HIP field offsets). When non-null, the
+/// wrapper's `binary` field (if used) must reference a readable clang offload
+/// bundle or code object for the lifetime of this call. The caller must uphold
+/// the native HIP registration ABI; we resolve and invoke the real symbol via
+/// `dlsym` against a still-loaded `libamdhip64`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __hipRegisterFatBinary(data: *const c_void) -> *mut *mut c_void {
     type Function = unsafe extern "C" fn(*const c_void) -> *mut *mut c_void;
@@ -456,6 +469,21 @@ pub unsafe extern "C" fn __hipRegisterFatBinary(data: *const c_void) -> *mut *mu
     modules
 }
 
+/// Compiler-emitted device-function registration interposer (HIP runtime ABI).
+///
+/// Forwards all arguments to native `__hipRegisterFunction`, then records the
+/// host→device symbol mapping when `modules` was previously captured by
+/// [`__hipRegisterFatBinary`].
+///
+/// # Safety
+///
+/// All pointer arguments must satisfy the native HIP `__hipRegisterFunction`
+/// contract: `modules` is the handle returned by fat-binary registration (or
+/// null); `host_function` is the host stub address; `device_name` is null or a
+/// valid NUL-terminated C string readable for this call; `device_function` and
+/// the optional `tid`/`bid`/`block_dim`/`grid_dim`/`wsize` pointers are null or
+/// valid for the types HIP expects. The real symbol is resolved via `dlsym`
+/// against a still-loaded `libamdhip64`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __hipRegisterFunction(
     modules: *mut *mut c_void,
@@ -1059,6 +1087,14 @@ unsafe fn add_kernel_node_internal(
     Ok(native_node as hipGraphNode_t)
 }
 
+/// Create a native HIP graph and register it in our side table.
+///
+/// # Safety
+///
+/// `graph` must be non-null and point to writable storage for one `hipGraph_t`
+/// for the duration of the call. On success the written handle is a live native
+/// HIP graph (not a Redline-owned pointer); the caller owns it under the usual
+/// HIP destroy rules. Forwards to native `hipGraphCreate` via `dlsym`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipGraphCreate(graph: *mut hipGraph_t, flags: u32) -> hipError_t {
     if graph.is_null() {
@@ -1073,6 +1109,22 @@ pub unsafe extern "C" fn hipGraphCreate(graph: *mut hipGraph_t, flags: u32) -> h
     hipSuccess
 }
 
+/// Add a kernel node to a graph (HIP `hipGraphAddKernelNode` ABI).
+///
+/// When `graph` is in our side table we also model the node for PM4 replay;
+/// otherwise the call is forwarded unchanged. The returned node handle is always
+/// the native HIP node pointer.
+///
+/// # Safety
+///
+/// `node` must be non-null and writable for one `hipGraphNode_t`. `graph` must
+/// be null or a live native `hipGraph_t`. If `dependency_count > 0`,
+/// `dependencies` must point to `dependency_count` readable live native node
+/// handles belonging to `graph`. `params` must be null or point to a valid
+/// `hipKernelNodeParams`; when non-null, `params.kernelParams` / `params.extra`
+/// and `params.func` must satisfy the native HIP kernel-node contract (valid
+/// function handle; parameter array readable for packing). Real symbol via
+/// `dlsym` when unmodeled or for the native add path.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipGraphAddKernelNode(
     node: *mut hipGraphNode_t,
@@ -1108,6 +1160,14 @@ pub unsafe extern "C" fn hipGraphAddKernelNode(
     }
 }
 
+/// Add dependency edges on a graph (HIP `hipGraphAddDependencies` ABI).
+///
+/// # Safety
+///
+/// `graph` must be null or a live native `hipGraph_t`. When `count > 0`, `from`
+/// and `to` must each point to `count` readable live native `hipGraphNode_t`
+/// values that belong to `graph`. A graph absent from our side table is
+/// forwarded to native HIP unchanged.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipGraphAddDependencies(
     graph: hipGraph_t,
@@ -1248,6 +1308,19 @@ unsafe fn native_instantiate(
     Ok(exec as usize)
 }
 
+/// Instantiate a graph exec (HIP `hipGraphInstantiate` ABI).
+///
+/// For modeled graphs, builds a Redline PM4 plan alongside the native exec and
+/// registers the native exec pointer in `exec_state`. Unmodeled graphs forward.
+///
+/// # Safety
+///
+/// `output` must be non-null and writable for one `hipGraphExec_t`. `graph` must
+/// be null or a live native `hipGraph_t`. `error_node`, when non-null, must be
+/// writable for one `hipGraphNode_t`. `log_buffer`, when non-null, must point to
+/// at least `buffer_size` writable bytes as required by native HIP. On success
+/// `*output` holds a live native exec the caller must destroy with
+/// `hipGraphExecDestroy`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipGraphInstantiate(
     output: *mut hipGraphExec_t,
@@ -1376,6 +1449,18 @@ unsafe fn native_launch(exec: usize, stream: hipStream_t) -> hipError_t {
     }
 }
 
+/// Launch a graph exec on a stream (HIP `hipGraphLaunch` ABI).
+///
+/// Modeled execs may run retained PM4 replay; otherwise native launch is used.
+/// Handles absent from `exec_state` forward to HIP unchanged.
+///
+/// # Safety
+///
+/// `exec` must be null or a live native `hipGraphExec_t`. `stream` must be null
+/// (default stream) or a live native `hipStream_t`. For PM4 replay, all device
+/// pointers captured in the exec's kernargs must remain valid until the launch
+/// completes (this path currently waits on Redline's queue before returning).
+/// Native fallback invokes real `hipGraphLaunch` via `dlsym`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipGraphLaunch(exec: hipGraphExec_t, stream: hipStream_t) -> hipError_t {
     if !is_exec(exec) {
@@ -1458,6 +1543,18 @@ pub unsafe extern "C" fn hipGraphLaunch(exec: hipGraphExec_t, stream: hipStream_
     }
 }
 
+/// Update kernel-node parameters on an instantiated exec (HIP ABI).
+///
+/// Always forwards to native first; on success, refreshes our PM4 node meta when
+/// the exec and node are modelled. Unmodeled execs forward only.
+///
+/// # Safety
+///
+/// `exec` must be null or a live native `hipGraphExec_t`. `node` must be null or
+/// a live native node belonging to that exec. `params` must be non-null and
+/// point to a valid `hipKernelNodeParams`; its `func`, `kernelParams`, and
+/// `extra` fields must satisfy the native HIP set-params contract (readable
+/// parameter storage for packing). Real symbol via `dlsym`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipGraphExecKernelNodeSetParams(
     exec: hipGraphExec_t,
@@ -1518,6 +1615,18 @@ pub unsafe extern "C" fn hipGraphExecKernelNodeSetParams(
     }
 }
 
+/// Topology update of an exec from a graph (HIP `hipGraphExecUpdate` ABI).
+///
+/// Modeled execs run native update then mark force-native (unless
+/// `REDLINE_FORCE_REPLAY`); unmodeled execs forward unchanged.
+///
+/// # Safety
+///
+/// `exec` must be null or a live native `hipGraphExec_t`. `graph` must be null
+/// or a live native `hipGraph_t`. `error_node`, when non-null, must be writable
+/// for one `hipGraphNode_t`. `update_result`, when non-null, must be writable
+/// for one `i32` (HIP update-result enum). Real symbol via `dlsym` on the
+/// unmodeled path and for the native update of modeled execs.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipGraphExecUpdate(
     exec: hipGraphExec_t,
@@ -1679,6 +1788,15 @@ published measurements."
     status
 }
 
+/// Destroy a graph exec (HIP `hipGraphExecDestroy` ABI).
+///
+/// Drops our side-table entry when present, then destroys the native exec.
+///
+/// # Safety
+///
+/// `exec` must be null or a live native `hipGraphExec_t` not concurrently in
+/// use. After success the handle must not be used again. Unmodeled handles
+/// forward to native destroy via `dlsym`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipGraphExecDestroy(exec: hipGraphExec_t) -> hipError_t {
     if exec.is_null() {
@@ -1695,6 +1813,16 @@ pub unsafe extern "C" fn hipGraphExecDestroy(exec: hipGraphExec_t) -> hipError_t
     unsafe { native_exec_destroy(exec as usize) }
 }
 
+/// Destroy a graph (HIP `hipGraphDestroy` ABI).
+///
+/// Unregisters side-table state (and its nodes) when present, then destroys the
+/// native graph.
+///
+/// # Safety
+///
+/// `graph` must be null or a live native `hipGraph_t` not concurrently in use.
+/// After success the handle and its nodes must not be used again. Unmodeled
+/// handles forward to native destroy via `dlsym`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipGraphDestroy(graph: hipGraph_t) -> hipError_t {
     if graph.is_null() {
@@ -1768,6 +1896,17 @@ unsafe fn finish_module_load(
     hipSuccess
 }
 
+/// Load a module from an in-memory image (HIP `hipModuleLoadData` ABI).
+///
+/// Attempts native load when available and always tries to parse the image for
+/// Redline; the returned handle is the native module when HIP succeeds.
+///
+/// # Safety
+///
+/// `output` must be non-null and writable for one `hipModule_t`. `image` must be
+/// non-null and point to a complete readable HIP/HSA code object or clang
+/// offload bundle (length discoverable by the image headers). On success
+/// `*output` is a live module the caller must unload.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipModuleLoadData(
     output: *mut hipModule_t,
@@ -1787,6 +1926,15 @@ pub unsafe extern "C" fn hipModuleLoadData(
     unsafe { finish_module_load(output, image, native) }
 }
 
+/// Load a module with options (HIP `hipModuleLoadDataEx` ABI).
+///
+/// # Safety
+///
+/// `output` must be non-null and writable for one `hipModule_t`. `image` must be
+/// non-null and point to a complete readable code object/bundle. When
+/// `option_count > 0`, `options` must point to `option_count` readable option
+/// enums and `option_values` to `option_count` corresponding value pointers as
+/// required by native HIP. On success `*output` is a live module to unload.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipModuleLoadDataEx(
     output: *mut hipModule_t,
@@ -1818,6 +1966,16 @@ pub unsafe extern "C" fn hipModuleLoadDataEx(
     unsafe { finish_module_load(output, image, native) }
 }
 
+/// Unload a module (HIP `hipModuleUnload` ABI).
+///
+/// Removes our module/function side-table entries; for native-backed modules
+/// also calls HIP unload.
+///
+/// # Safety
+///
+/// `module` must be null or a live `hipModule_t` (native or Redline-owned token)
+/// not concurrently in use. After success the handle and any functions derived
+/// from it must not be used. Unmodeled handles forward via `dlsym`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipModuleUnload(module: hipModule_t) -> hipError_t {
     if module.is_null() {
@@ -1868,6 +2026,15 @@ pub unsafe extern "C" fn hipModuleUnload(module: hipModule_t) -> hipError_t {
     hipSuccess
 }
 
+/// Look up a function in a module (HIP `hipModuleGetFunction` ABI).
+///
+/// # Safety
+///
+/// `output` must be non-null and writable for one `hipFunction_t`. `module` must
+/// be a live module handle. `name` must be a valid NUL-terminated C string
+/// naming a kernel in that module. On success `*output` is a live function
+/// handle valid until the module is unloaded. Unmodeled modules forward via
+/// `dlsym`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipModuleGetFunction(
     output: *mut hipFunction_t,
@@ -1971,6 +2138,16 @@ unsafe fn append_capture_kernel(
     result
 }
 
+/// Begin stream capture (HIP `hipStreamBeginCapture` ABI).
+///
+/// Forwards to native capture, then opens a provisional Redline graph model
+/// keyed by the stream until [`hipStreamEndCapture`].
+///
+/// # Safety
+///
+/// `stream` must be null (legacy default stream, if HIP allows capture on it)
+/// or a live native `hipStream_t` not already capturing under HIP's rules.
+/// `mode` must be a valid `hipStreamCaptureMode` value. Real symbol via `dlsym`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipStreamBeginCapture(stream: hipStream_t, mode: i32) -> hipError_t {
     let stream_key = stream as usize;
@@ -2016,6 +2193,19 @@ pub unsafe extern "C" fn hipStreamBeginCapture(stream: hipStream_t, mode: i32) -
     hipSuccess
 }
 
+/// Launch a kernel by host function pointer (HIP `hipLaunchKernel` ABI).
+///
+/// Outside capture, forwards to native. During an active Redline capture on
+/// `stream`, also appends a modelled kernel node after the native capture launch.
+///
+/// # Safety
+///
+/// `function_address` must be a host function pointer previously registered
+/// with HIP (or null only if native HIP accepts it). `kernel_params`, when
+/// non-null, must point to a readable NULL-terminated array of argument
+/// pointers whose pointees remain valid for packing/launch. `stream` must be
+/// null or a live native stream. Grid/block dims follow the HIP launch contract.
+/// Real symbol via `dlsym`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipLaunchKernel(
     function_address: *const c_void,
@@ -2102,8 +2292,23 @@ pub unsafe extern "C" fn hipLaunchKernel(
     }
 }
 
+/// Launch a module function (HIP `hipModuleLaunchKernel` ABI).
+///
+/// Outside capture, forwards to native. During capture on `stream`, also
+/// appends a modelled kernel after the native path.
+///
+/// Argument count mirrors the HIP runtime launch ABI (grid/block dims split).
+///
+/// # Safety
+///
+/// `function` must be null or a live `hipFunction_t`. Exactly one of
+/// `kernel_params` / `extra` is used per HIP rules: `kernel_params` is a
+/// NULL-terminated array of argument pointers when non-null; `extra` is the
+/// HIP config buffer pair when non-null. Pointees must remain valid for
+/// packing/launch. `stream` must be null or a live native stream. Real symbol
+/// via `dlsym`.
 #[unsafe(no_mangle)]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // HIP `hipModuleLaunchKernel` ABI
 pub unsafe extern "C" fn hipModuleLaunchKernel(
     function: hipFunction_t,
     grid_x: u32,
@@ -2265,6 +2470,18 @@ unsafe fn reconcile_captured_native_nodes(
     true
 }
 
+/// End stream capture (HIP `hipStreamEndCapture` ABI).
+///
+/// Completes native capture, adopts the returned native graph into our side
+/// table with the provisional model, and pairs native nodes when topologies
+/// match.
+///
+/// # Safety
+///
+/// `output` must be non-null and writable for one `hipGraph_t`. `stream` must
+/// be a stream currently capturing under HIP (or our bookkeeping), or the call
+/// forwards unmatched to native. On success `*output` is a live native graph
+/// the caller owns. Real symbol via `dlsym`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipStreamEndCapture(
     stream: hipStream_t,
@@ -2352,6 +2569,14 @@ pub unsafe extern "C" fn hipStreamEndCapture(
     hipSuccess
 }
 
+/// Query whether a stream is capturing (HIP `hipStreamIsCapturing` ABI).
+///
+/// # Safety
+///
+/// `status` must be non-null and writable for one `i32` (`hipStreamCaptureStatus`).
+/// `stream` must be null or a live native `hipStream_t`. If we hold capture state
+/// for the stream we write `Active` without calling HIP; otherwise forwards via
+/// `dlsym`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipStreamIsCapturing(stream: hipStream_t, status: *mut i32) -> hipError_t {
     if status.is_null() {
@@ -2402,8 +2627,29 @@ pub(crate) fn finish_native_only_node(
     hipSuccess
 }
 
+/// Add a non-kernel pointer-params node (memcpy/memset/host) and force native.
+///
+/// Expansions forward to `$symbol`, register the native node without a PM4
+/// model, and set `force_native` on the owning graph when we model it.
+///
+/// # Safety
+///
+/// Each expansion is an `unsafe extern "C"` HIP ABI interposer. Callers must
+/// satisfy the native `$symbol` contract: `output` null or writable for one
+/// `hipGraphNode_t`; `graph` null or a live native graph; when `count > 0`,
+/// `dependencies` points to `count` live native nodes of that graph; `params`
+/// is null or a valid pointer to the node-type-specific params struct HIP
+/// expects for `$symbol`. Real symbol via `dlsym`.
 macro_rules! unsupported_pointer_node {
     ($name:ident, $symbol:literal) => {
+        /// HIP ABI interposer generated by [`unsupported_pointer_node`].
+        ///
+        /// # Safety
+        ///
+        /// Same contract as the native `$symbol` entry point: `output` must be
+        /// null or writable; `graph` and dependency nodes must be live native
+        /// handles when non-null; `params` must match the HIP params layout for
+        /// this node kind. See the macro docs for full preconditions.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $name(
             output: *mut hipGraphNode_t,
@@ -2462,6 +2708,17 @@ unsupported_pointer_node!(hipGraphAddMemcpyNode, b"hipGraphAddMemcpyNode\0");
 unsupported_pointer_node!(hipGraphAddMemsetNode, b"hipGraphAddMemsetNode\0");
 unsupported_pointer_node!(hipGraphAddHostNode, b"hipGraphAddHostNode\0");
 
+/// Add a child-graph node (HIP `hipGraphAddChildGraphNode` ABI).
+///
+/// Always forces native replay for the parent graph when modelled; the child
+/// handle is the native node.
+///
+/// # Safety
+///
+/// `output` must be non-null and writable for one `hipGraphNode_t`. `graph` and
+/// `child` must each be null or a live native `hipGraph_t`. When `count > 0`,
+/// `dependencies` must point to `count` live native nodes of `graph`. Real
+/// symbol via `dlsym`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hipGraphAddChildGraphNode(
     output: *mut hipGraphNode_t,
@@ -2822,7 +3079,7 @@ mod tests {
         // recipes. A GPU is not required — only the loader-visible library.
         let handle = unsafe {
             libc::dlopen(
-                b"libamdhip64.so\0".as_ptr().cast(),
+                c"libamdhip64.so".as_ptr(),
                 libc::RTLD_NOW | libc::RTLD_LOCAL,
             )
         };

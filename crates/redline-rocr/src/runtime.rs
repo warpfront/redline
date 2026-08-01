@@ -1035,11 +1035,7 @@ impl AqlQueue {
     ///
     /// See [`Self::create_with_cu_mask`] for `HSA_STATUS_CU_MASK_REDUCED`
     /// semantics (effective-mask read-back and empty-mask rejection).
-    fn set_cu_mask(
-        &mut self,
-        device: &GpuDevice,
-        cu_mask: &[bool],
-    ) -> Result<(), RuntimeError> {
+    fn set_cu_mask(&mut self, device: &GpuDevice, cu_mask: &[bool]) -> Result<(), RuntimeError> {
         let cu_count = device.compute_unit_count()? as usize;
         let (num_bits, words) = pack_cu_mask_words(cu_mask);
         let cu_mask_ptr = if num_bits == 0 {
@@ -1081,13 +1077,12 @@ impl AqlQueue {
             // observable through the broken get path).
             let from_hsa = self.cu_mask_from_hsa(device)?;
             let requested_norm = normalize_cu_mask(requested, cu_count);
-            let effective = if cu_mask_is_all_enabled(&from_hsa)
-                && !cu_mask_is_all_enabled(&requested_norm)
-            {
-                requested_norm
-            } else {
-                from_hsa
-            };
+            let effective =
+                if cu_mask_is_all_enabled(&from_hsa) && !cu_mask_is_all_enabled(&requested_norm) {
+                    requested_norm
+                } else {
+                    from_hsa
+                };
             if effective.iter().all(|enabled| !*enabled) {
                 return Err(RuntimeError::CuMaskEmptyAfterReduce);
             }
@@ -1126,9 +1121,12 @@ impl AqlQueue {
     }
 
     fn cu_mask_from_hsa(&self, device: &GpuDevice) -> Result<Vec<bool>, RuntimeError> {
-        let runtime = self.runtime.as_ref().ok_or(RuntimeError::InvalidRuntimeObject(
-            "queue runtime is not retained",
-        ))?;
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or(RuntimeError::InvalidRuntimeObject(
+                "queue runtime is not retained",
+            ))?;
         if !Arc::ptr_eq(runtime, &device.runtime) {
             return Err(RuntimeError::InvalidRuntimeObject(
                 "CU mask query device belongs to another HSA runtime",
@@ -1146,11 +1144,7 @@ impl AqlQueue {
         let status = unsafe {
             (runtime.symbols.queue_cu_get_mask)(self.raw.as_ptr(), num_bits, words.as_mut_ptr())
         };
-        check_status(
-            &runtime.symbols,
-            "hsa_amd_queue_cu_get_mask",
-            status,
-        )?;
+        check_status(&runtime.symbols, "hsa_amd_queue_cu_get_mask", status)?;
         Ok(unpack_cu_mask_words(&words, cu_count as usize))
     }
 
@@ -1794,8 +1788,8 @@ impl KernargPool {
                 ));
             }
         };
-        if pointer.as_ptr() as usize % required_alignment != 0
-            || pointer.as_ptr() as usize % self.inner.alignment != 0
+        if !(pointer.as_ptr() as usize).is_multiple_of(required_alignment)
+            || !(pointer.as_ptr() as usize).is_multiple_of(self.inner.alignment)
         {
             // SAFETY: pointer came from the matching allocation function.
             let _ =
@@ -2056,7 +2050,7 @@ impl DevicePool {
         let pointer = NonNull::new(pointer.cast::<u8>()).ok_or(
             RuntimeError::InvalidRuntimeObject("device memory-pool allocation returned null"),
         )?;
-        if pointer.as_ptr() as usize % self.inner.alignment != 0 {
+        if !(pointer.as_ptr() as usize).is_multiple_of(self.inner.alignment) {
             // SAFETY: pointer came from the matching allocation function.
             let _ =
                 unsafe { (self.inner.runtime.symbols.memory_pool_free)(pointer.as_ptr().cast()) };
@@ -2381,12 +2375,11 @@ fn unwrap_clang_offload_bundle(code: Arc<[u8]>) -> Result<Arc<[u8]>, RuntimeErro
         if id
             .windows(b"amdgcn-amd-amdhsa".len())
             .any(|window| window == b"amdgcn-amd-amdhsa")
+            && amdgpu.replace((offset, end)).is_some()
         {
-            if amdgpu.replace((offset, end)).is_some() {
-                return Err(RuntimeError::InvalidOffloadBundle(
-                    "multiple AMDGPU code objects require an explicit target",
-                ));
-            }
+            return Err(RuntimeError::InvalidOffloadBundle(
+                "multiple AMDGPU code objects require an explicit target",
+            ));
         }
     }
     let (start, end) = amdgpu.ok_or(RuntimeError::InvalidOffloadBundle(
@@ -2608,7 +2601,7 @@ fn cu_mask_bit_capacity(bit_len: usize) -> u32 {
     if bit_len == 0 {
         0
     } else {
-        let words = (bit_len + 31) / 32;
+        let words = bit_len.div_ceil(32);
         u32::try_from(words.saturating_mul(32)).unwrap_or(u32::MAX)
     }
 }

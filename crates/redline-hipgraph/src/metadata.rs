@@ -343,10 +343,8 @@ pub(crate) fn select_bundle_code_object<'a>(
             continue;
         }
         let target_arch = gfx_arch_prefix(target);
-        if target_arch == Some(device_arch) {
-            if selected.replace(payload).is_some() {
-                return None;
-            }
+        if target_arch == Some(device_arch) && selected.replace(payload).is_some() {
+            return None;
         }
     }
     selected
@@ -378,11 +376,10 @@ fn unwrap_offload_bundle_for_parse(code: &[u8]) -> Option<&[u8]> {
         if id
             .windows(b"amdgcn-amd-amdhsa".len())
             .any(|window| window == b"amdgcn-amd-amdhsa")
+            && amdgpu.replace((offset, end)).is_some()
         {
-            if amdgpu.replace((offset, end)).is_some() {
-                // Multiple AMDGPU objects: refuse to guess.
-                return None;
-            }
+            // Multiple AMDGPU objects: refuse to guess.
+            return None;
         }
     }
     let (start, end) = amdgpu?;
@@ -1219,17 +1216,13 @@ mod tests {
     fn msgpack_depth_cap_rejects_deep_nesting() {
         // Build 40 nested single-element arrays: [[[[[...]]]]]
         let mut bytes = Vec::new();
-        for _ in 0..40 {
-            bytes.push(0x91); // fixarray of 1
-        }
+        bytes.extend(std::iter::repeat_n(0x91u8, 40)); // fixarray of 1
         bytes.push(0x00); // fixint 0
         assert!(msgpack_parse(&bytes).is_none());
 
         // 16 nested arrays is fine (well under 32)
         let mut shallow = Vec::new();
-        for _ in 0..16 {
-            shallow.push(0x91);
-        }
+        shallow.extend(std::iter::repeat_n(0x91u8, 16));
         shallow.push(0x01);
         assert!(msgpack_parse(&shallow).is_some());
     }
@@ -1249,7 +1242,7 @@ mod tests {
         assert_eq!(layout.symbol, "my_kernel.kd");
         assert_eq!(layout.segment_size, 24);
         let ptr = std::mem::size_of::<usize>();
-        assert_eq!(layout.fields.len(), (24 + ptr - 1) / ptr);
+        assert_eq!(layout.fields.len(), 24usize.div_ceil(ptr));
         assert_eq!(layout.fields[0].offset, 0);
         assert_eq!(layout.fields[0].size, ptr.min(24));
         assert_eq!(layout.fields[0].value_kind, "by_value");

@@ -304,9 +304,13 @@ mod tests {
     fn experimental_const_defaults_match_feature() {
         let _lock = lock_fp8_tests();
         #[cfg(feature = "experimental-fp8")]
-        assert!(EXPERIMENTAL_FP8);
+        const {
+            assert!(EXPERIMENTAL_FP8)
+        };
         #[cfg(not(feature = "experimental-fp8"))]
-        assert!(!EXPERIMENTAL_FP8);
+        const {
+            assert!(!EXPERIMENTAL_FP8)
+        };
         // Runtime defaults off regardless of feature (when no other test holds it).
         assert!(!RUNTIME_ENABLE.load(Ordering::SeqCst));
     }
@@ -404,18 +408,26 @@ mod tests {
     fn build_ocp_recipes_cover_cvt_and_wmma() {
         let recipes = build_ocp_recipes();
         assert_eq!(recipes.len(), 4);
-        assert!(recipes
-            .iter()
-            .any(|r| r.format == Fp8Format::E4M3Ocp && !r.wmma));
-        assert!(recipes
-            .iter()
-            .any(|r| r.format == Fp8Format::E5M2Ocp && !r.wmma));
-        assert!(recipes
-            .iter()
-            .any(|r| r.format == Fp8Format::E4M3Ocp && r.wmma));
-        assert!(recipes
-            .iter()
-            .any(|r| r.format == Fp8Format::E5M2Ocp && r.wmma));
+        assert!(
+            recipes
+                .iter()
+                .any(|r| r.format == Fp8Format::E4M3Ocp && !r.wmma)
+        );
+        assert!(
+            recipes
+                .iter()
+                .any(|r| r.format == Fp8Format::E5M2Ocp && !r.wmma)
+        );
+        assert!(
+            recipes
+                .iter()
+                .any(|r| r.format == Fp8Format::E4M3Ocp && r.wmma)
+        );
+        assert!(
+            recipes
+                .iter()
+                .any(|r| r.format == Fp8Format::E5M2Ocp && r.wmma)
+        );
         for r in &recipes {
             assert!(!r.source_variant.is_empty());
         }
@@ -510,11 +522,7 @@ mod tests {
                 return Some(pb);
             }
         }
-        for cand in [
-            "/opt/rocm/core/bin/hipcc",
-            "/opt/rocm/bin/hipcc",
-            "hipcc",
-        ] {
+        for cand in ["/opt/rocm/core/bin/hipcc", "/opt/rocm/bin/hipcc", "hipcc"] {
             if cand.contains('/') {
                 let pb = std::path::PathBuf::from(cand);
                 if pb.is_file() {
