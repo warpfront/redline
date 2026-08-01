@@ -62,9 +62,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # The whole workspace test suite is host-side: PM4 packet encoding,
-      # stream validation, device-identity resolution, manifest parsing,
-      # recipe certification. None of it touches /dev/kfd.
+      # The workspace test suite is host-side: PM4 packet encoding, stream
+      # validation, device-identity resolution, manifest parsing, recipe
+      # certification. None of it touches /dev/kfd. The handful of tests that
+      # need an installed toolchain probe for it and skip when absent — the
+      # hipcc checks in radiowave, and redline-hipgraph's RTLD_LOCAL symbol
+      # resolution test, which needs libamdhip64.so loader-visible but no GPU.
+      # Tests that genuinely dispatch are opt-in behind REDLINE_TEST_HIP /
+      # REDLINE_TEST_AQL and stay off here.
       - name: Run workspace tests
         run: cargo test --workspace --locked
 
