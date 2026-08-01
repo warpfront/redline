@@ -11,6 +11,7 @@
 
 mod abi;
 mod metadata;
+mod shims;
 
 pub use abi::{
     dim3, hipError_t, hipFunction_t, hipGraph_t, hipGraphExec_t, hipGraphNode_t,
@@ -110,38 +111,38 @@ struct NodeMeta {
     dyn_group: u32,
 }
 
-struct GraphState {
-    graph: Graph,
-    node_meta: BTreeMap<NodeId, NodeMeta>,
-    node_handles: Vec<usize>,
-    native_graph: usize,
-    force_native: bool,
+pub(crate) struct GraphState {
+    pub(crate) graph: Graph,
+    pub(crate) node_meta: BTreeMap<NodeId, NodeMeta>,
+    pub(crate) node_handles: Vec<usize>,
+    pub(crate) native_graph: usize,
+    pub(crate) force_native: bool,
 }
 
-struct GraphHandle {
-    state: Mutex<GraphState>,
+pub(crate) struct GraphHandle {
+    pub(crate) state: Mutex<GraphState>,
 }
 
 #[derive(Clone, Copy)]
-struct NodeHandle {
-    owner: usize,
-    node: Option<NodeId>,
-    native_node: usize,
+pub(crate) struct NodeHandle {
+    pub(crate) owner: usize,
+    pub(crate) node: Option<NodeId>,
+    pub(crate) native_node: usize,
 }
 
-struct ExecState {
-    exec: Option<GraphExec>,
-    replay: Option<Pm4GraphReplay>,
-    dirty: bool,
-    node_meta: BTreeMap<NodeId, NodeMeta>,
-    nodes: HashMap<usize, NodeId>,
-    native_nodes: HashMap<usize, usize>,
-    native_exec: usize,
-    force_native: bool,
+pub(crate) struct ExecState {
+    pub(crate) exec: Option<GraphExec>,
+    pub(crate) replay: Option<Pm4GraphReplay>,
+    pub(crate) dirty: bool,
+    pub(crate) node_meta: BTreeMap<NodeId, NodeMeta>,
+    pub(crate) nodes: HashMap<usize, NodeId>,
+    pub(crate) native_nodes: HashMap<usize, usize>,
+    pub(crate) native_exec: usize,
+    pub(crate) force_native: bool,
 }
 
-struct ExecHandle {
-    state: Mutex<ExecState>,
+pub(crate) struct ExecHandle {
+    pub(crate) state: Mutex<ExecState>,
 }
 
 #[derive(Clone, Copy)]
@@ -212,11 +213,11 @@ static HG_DEBUG_ENABLED: LazyLock<bool> =
     LazyLock::new(|| std::env::var_os("REDLINE_HG_DEBUG").is_some());
 static FATBIN_REGISTRATION_COUNT: AtomicU64 = AtomicU64::new(0);
 
-fn global() -> &'static Global {
+pub(crate) fn global() -> &'static Global {
     &GLOBAL
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -297,7 +298,7 @@ unsafe fn real_symbol_with_resolution<T: Copy>(
     )
 }
 
-unsafe fn real_symbol<T: Copy>(name: &'static [u8]) -> Option<T> {
+pub(crate) unsafe fn real_symbol<T: Copy>(name: &'static [u8]) -> Option<T> {
     unsafe { real_symbol_with_resolution(name) }.0
 }
 
@@ -490,30 +491,30 @@ pub unsafe extern "C" fn __hipRegisterFunction(
     hgdbg!("__hipRegisterFunction host_function={host_function:p} device_name={symbol}");
 }
 
-fn is_graph(handle: hipGraph_t) -> bool {
+pub(crate) fn is_graph(handle: hipGraph_t) -> bool {
     !handle.is_null() && lock(&global().handles).graphs.contains(&(handle as usize))
 }
 
-fn is_exec(handle: hipGraphExec_t) -> bool {
+pub(crate) fn is_exec(handle: hipGraphExec_t) -> bool {
     !handle.is_null() && lock(&global().handles).execs.contains(&(handle as usize))
 }
 
-fn node_snapshot(handle: hipGraphNode_t) -> Option<NodeHandle> {
+pub(crate) fn node_snapshot(handle: hipGraphNode_t) -> Option<NodeHandle> {
     if handle.is_null() || !lock(&global().handles).nodes.contains(&(handle as usize)) {
         return None;
     }
     Some(unsafe { *(handle.cast::<NodeHandle>()) })
 }
 
-fn graph_handle(handle: hipGraph_t) -> Option<&'static GraphHandle> {
+pub(crate) fn graph_handle(handle: hipGraph_t) -> Option<&'static GraphHandle> {
     is_graph(handle).then(|| unsafe { &*handle.cast::<GraphHandle>() })
 }
 
-fn exec_handle(handle: hipGraphExec_t) -> Option<&'static ExecHandle> {
+pub(crate) fn exec_handle(handle: hipGraphExec_t) -> Option<&'static ExecHandle> {
     is_exec(handle).then(|| unsafe { &*handle.cast::<ExecHandle>() })
 }
 
-fn allocate_graph(native_graph: usize) -> hipGraph_t {
+pub(crate) fn allocate_graph(native_graph: usize) -> hipGraph_t {
     let handle = Box::into_raw(Box::new(GraphHandle {
         state: Mutex::new(GraphState {
             graph: Graph::new(),
@@ -528,7 +529,7 @@ fn allocate_graph(native_graph: usize) -> hipGraph_t {
     handle
 }
 
-fn allocate_node(
+pub(crate) fn allocate_node(
     graph_key: usize,
     state: &mut GraphState,
     node: Option<NodeId>,
@@ -819,7 +820,7 @@ fn function_record(function: hipFunction_t) -> Option<FunctionRecord> {
         .clone()
 }
 
-unsafe fn native_graph_create(flags: u32) -> Result<usize, hipError_t> {
+pub(crate) unsafe fn native_graph_create(flags: u32) -> Result<usize, hipError_t> {
     type Function = unsafe extern "C" fn(*mut hipGraph_t, u32) -> hipError_t;
     let Some(function) = (unsafe { real_symbol::<Function>(b"hipGraphCreate\0") }) else {
         return Ok(0);
@@ -2332,7 +2333,7 @@ pub unsafe extern "C" fn hipStreamIsCapturing(stream: hipStream_t, status: *mut 
     }
 }
 
-unsafe fn translate_native_dependencies(
+pub(crate) unsafe fn translate_native_dependencies(
     graph_key: usize,
     dependencies: *const hipGraphNode_t,
     count: usize,
@@ -2349,7 +2350,7 @@ unsafe fn translate_native_dependencies(
         .collect()
 }
 
-fn finish_native_only_node(
+pub(crate) fn finish_native_only_node(
     graph: hipGraph_t,
     native_node: hipGraphNode_t,
     output: *mut hipGraphNode_t,
