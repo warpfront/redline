@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
+#
+# GPU-free continuous integration.
+#
+# Redline loads the public ROCr/HSA runtime via dlopen at *runtime*
+# (crates/redline-rocr uses libloading; there is no build.rs and no link-time
+# -lhsa-runtime64), so the entire workspace compiles and unit-tests on a stock
+# runner with no GPU and no ROCm installed. Everything that actually dispatches
+# — the C-ABI smoke harnesses under crates/redline-capi/examples, the
+# hipfire-6409 matrix, scripts/6529-*.sh — needs real RDNA hardware and is
+# deliberately NOT run here.
+#
+# Required vs advisory, mirroring engines/hipfire/.github/workflows/ci.yml:
+# `build` and `test` are the load-bearing "is it broken" gates and are intended
+# to be the required status checks on master. `fmt` and `clippy` start advisory
+# because this repo predates CI and carries format/lint debt — measured at the
+# time this file was added: 27 files fail `cargo fmt --check` (14 of them
+# pre-existing, in radiowave / redline-dispatch / redline-observe) and clippy
+# reports 83 warnings with 0 errors, dominated by missing `# Safety` sections on
+# unsafe fns and large `Err` variants. Denying warnings or enforcing
+# workspace-wide rustfmt today would red the build on legacy code and teach
+# everyone to ignore CI. Promote both to required after a dedicated cleanup pass.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+# Supersede in-flight runs when a PR gets new pushes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # NOTE: deliberately NOT setting `RUSTFLAGS: -D warnings` yet. See the header.
+
+jobs:
+  build:
+    name: build (workspace, no GPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # --all-targets so examples and test targets are type-checked too: the
+      # crates/*/examples binaries are how contributors exercise real hardware,
+      # and a broken example is a broken repro.
+      - name: Build workspace (lib + bins + examples + tests)
+        run: cargo build --release --workspace --all-targets --locked
+
+  test:
+    name: unit tests (no GPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The whole workspace test suite is host-side: PM4 packet encoding,
+      # stream validation, device-identity resolution, manifest parsing,
+      # recipe certification. None of it touches /dev/kfd.
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
+
+  fmt:
+    name: rustfmt (advisory)
+    runs-on: ubuntu-latest
+    # Advisory: enforced on files changed by this PR only, so new work stays
+    # clean without the pre-existing workspace churn reding every run. Green
+    # must keep meaning "the load-bearing build+test gates pass".
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: bash scripts/ci-rustfmt-changed.sh
+
+  clippy:
+    name: clippy (advisory)
+    runs-on: ubuntu-latest
+    # Advisory (no -D warnings yet) — annotate lint debt without failing the run.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked
