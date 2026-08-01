@@ -4,8 +4,11 @@
 # Version script for the interposer. Each symbol MUST sit in the same version
 # node the real libamdhip64 assigns it, or a versioned reference from the
 # application will not bind to our definition and the interposition silently
-# does nothing. Tags here were taken from `readelf --dyn-syms` on the shipped
-# runtime, not from the header or from guesswork.
+# does nothing. Tags come from `readelf --dyn-syms` on the shipped runtime.
+#
+# Under native handle identity a symbol we do NOT export is safe: the call
+# reaches real HIP with a real HIP handle and simply runs unaccelerated. That
+# is why this list shrank when the translating shims collapsed.
 
 hip_4.2 {
     global:
@@ -40,13 +43,8 @@ hip_4.4 {
         hipGraphAddDependencies;
         hipGraphAddEmptyNode;
         hipGraphExecKernelNodeSetParams;
-        hipGraphGetNodes;
-        hipGraphGetRootNodes;
-        hipGraphKernelNodeGetParams;
         hipGraphKernelNodeSetParams;
-        hipGraphMemcpyNodeGetParams;
         hipGraphMemcpyNodeSetParams;
-        hipGraphMemsetNodeGetParams;
         hipGraphMemsetNodeSetParams;
 };
 
@@ -58,12 +56,8 @@ hip_4.5 {
         hipGraphAddHostNode;
         hipGraphAddMemcpyNodeFromSymbol;
         hipGraphAddMemcpyNodeToSymbol;
-        hipGraphChildGraphNodeGetGraph;
-        hipGraphClone;
         hipGraphDestroyNode;
-        hipGraphEventRecordNodeGetEvent;
         hipGraphEventRecordNodeSetEvent;
-        hipGraphEventWaitNodeGetEvent;
         hipGraphEventWaitNodeSetEvent;
         hipGraphExecChildGraphNodeSetParams;
         hipGraphExecEventRecordNodeSetEvent;
@@ -75,23 +69,16 @@ hip_4.5 {
         hipGraphExecMemcpyNodeSetParamsToSymbol;
         hipGraphExecMemsetNodeSetParams;
         hipGraphExecUpdate;
-        hipGraphGetEdges;
-        hipGraphHostNodeGetParams;
         hipGraphHostNodeSetParams;
         hipGraphInstantiateWithFlags;
         hipGraphMemcpyNodeSetParams1D;
         hipGraphMemcpyNodeSetParamsFromSymbol;
         hipGraphMemcpyNodeSetParamsToSymbol;
-        hipGraphNodeFindInClone;
-        hipGraphNodeGetDependencies;
-        hipGraphNodeGetDependentNodes;
-        hipGraphNodeGetType;
         hipGraphRemoveDependencies;
 };
 
 hip_5.0 {
     global:
-        hipGraphKernelNodeGetAttribute;
         hipGraphKernelNodeSetAttribute;
 };
 
@@ -99,18 +86,12 @@ hip_5.3 {
     global:
         hipGraphAddExternalSemaphoresSignalNode;
         hipGraphAddExternalSemaphoresWaitNode;
-        hipGraphDebugDotPrint;
         hipGraphExecExternalSemaphoresSignalNodeSetParams;
         hipGraphExecExternalSemaphoresWaitNodeSetParams;
-        hipGraphExternalSemaphoresSignalNodeGetParams;
         hipGraphExternalSemaphoresSignalNodeSetParams;
-        hipGraphExternalSemaphoresWaitNodeGetParams;
         hipGraphExternalSemaphoresWaitNodeSetParams;
         hipGraphKernelNodeCopyAttributes;
-        hipGraphNodeGetEnabled;
         hipGraphNodeSetEnabled;
-        hipGraphReleaseUserObject;
-        hipGraphRetainUserObject;
         hipGraphUpload;
 };
 
@@ -119,8 +100,6 @@ hip_5.5 {
         hipGraphAddMemAllocNode;
         hipGraphAddMemFreeNode;
         hipGraphAddNode;
-        hipGraphMemAllocNodeGetParams;
-        hipGraphMemFreeNodeGetParams;
 };
 
 hip_6.1 {
@@ -130,7 +109,6 @@ hip_6.1 {
 
 hip_6.2 {
     global:
-        hipGraphExecGetFlags;
         hipGraphExecNodeSetParams;
         hipGraphNodeSetParams;
 };
@@ -138,7 +116,6 @@ hip_6.2 {
 hip_6.4 {
     global:
         hipGraphAddBatchMemOpNode;
-        hipGraphBatchMemOpNodeGetParams;
         hipGraphBatchMemOpNodeSetParams;
         hipGraphExecBatchMemOpNodeSetParams;
 };
