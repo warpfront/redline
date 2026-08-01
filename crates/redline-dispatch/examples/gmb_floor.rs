@@ -156,6 +156,8 @@ fn dispatch_gmb(
 
 /// Build a retained PM4 IB of `count` gmb_noop dispatches against `out`.
 /// `fence` inserts the correct RMW dependency boundary between dispatches.
+// Argument list mirrors the PM4 IB build ABI (device/pool/exec + launch params).
+#[allow(clippy::too_many_arguments)]
 fn build_ib(
     device: &GpuDevice,
     pool: &KernargPool,
@@ -197,7 +199,8 @@ fn build_ib(
     };
     Ok((ib, karg))
 }
-
+// Mirrors the gmb_floor microbench ABI (device resources + launch params + reps).
+#[allow(clippy::too_many_arguments)]
 fn measure(
     device: &GpuDevice,
     device_pool: &DevicePool,
@@ -257,7 +260,8 @@ fn measure(
         .all(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) == final_expected);
     Ok((median(ts) / count as f64, correct && final_correct))
 }
-
+// Mirrors the gmb_floor microbench ABI (device resources + launch params + reps).
+#[allow(clippy::too_many_arguments)]
 fn measure_profiled_pm4(
     device: &GpuDevice,
     device_pool: &DevicePool,
@@ -306,7 +310,8 @@ fn measure_profiled_pm4(
     }
     Ok((median(samples) / count as f64, correct))
 }
-
+// Mirrors the gmb_floor microbench ABI (device resources + launch params + reps).
+#[allow(clippy::too_many_arguments)]
 fn measure_profiled_pm4_independent(
     device: &GpuDevice,
     device_pool: &DevicePool,
@@ -374,6 +379,8 @@ fn measure_profiled_pm4_independent(
 /// `SingleQueueBatchGraph` (BoundarySerialized), which exposes GPU timestamps.
 /// This isolates GPU dispatch time from the host submit+wait overhead of the
 /// PM4 host-latency arms — the fair basis versus Vulkan's GPU timestamp.
+// Mirrors the gmb_floor microbench ABI (device resources + launch params + reps).
+#[allow(clippy::too_many_arguments)]
 fn measure_gpuspan(
     device: &GpuDevice,
     device_pool: &DevicePool,
@@ -439,6 +446,8 @@ fn measure_gpuspan(
 /// redline "serial": submit each dispatch as its OWN retained 1-dispatch IB
 /// (N submit+wait cycles), host-timed. This is redline with no batching — the
 /// raw per-submission cost, the direct analogue of hip_direct (no graph).
+// Mirrors the gmb_floor microbench ABI (device resources + launch params + reps).
+#[allow(clippy::too_many_arguments)]
 fn measure_serial(
     device: &GpuDevice,
     device_pool: &DevicePool,
@@ -508,6 +517,8 @@ fn measure_serial(
 /// kernel-dispatch packets (`SingleQueueBatchGraph`), host-timed. Same batching
 /// as the PM4 IB, but standard AQL packets instead of a CP-streamed PM4 IB —
 /// isolates the AQL-packet-processing overhead the PM4 IB removes.
+// Mirrors the gmb_floor microbench ABI (device resources + launch params + reps).
+#[allow(clippy::too_many_arguments)]
 fn measure_aql_host(
     device: &GpuDevice,
     device_pool: &DevicePool,

@@ -291,7 +291,7 @@ impl PreparedAqlPlan {
         let state = self
             .stamp
             .validate(plan, bindings, kernels.artifact_catalog())
-            .map_err(GenericAqlError::Invalidated)?;
+            .map_err(GenericAqlError::from)?;
         let phase_nodes = &self.phase_nodes;
         self.graph
             .patch_kernargs(|phase_index, lane, dispatch_index, kernarg| {
@@ -461,13 +461,15 @@ fn has_cross_token_raw(plan: &CompiledPlan) -> bool {
     false
 }
 
+type LoweredPhases = (Vec<TwoQueuePhase>, Vec<[Vec<NodeId>; 2]>);
+
 fn lower_phases(
     device: &GpuDevice,
     pool: &KernargPool,
     plan: &CompiledPlan,
     bindings: &ReplayBindings,
     kernels: &AqlKernelCatalog,
-) -> Result<(Vec<TwoQueuePhase>, Vec<[Vec<NodeId>; 2]>), GenericAqlError> {
+) -> Result<LoweredPhases, GenericAqlError> {
     if plan.dispatches().is_empty() {
         return Err(GenericAqlError::EmptyPlan);
     }
@@ -698,7 +700,13 @@ pub enum GenericAqlError {
     #[error("AQL visibility derivation failed: {0}")]
     Visibility(#[from] crate::VisibilityError),
     #[error("prepared AQL plan was invalidated: {0}")]
-    Invalidated(#[from] PreparedPlanInvalidation),
+    Invalidated(Box<PreparedPlanInvalidation>),
+}
+
+impl From<PreparedPlanInvalidation> for GenericAqlError {
+    fn from(value: PreparedPlanInvalidation) -> Self {
+        Self::Invalidated(Box::new(value))
+    }
 }
 
 #[cfg(test)]

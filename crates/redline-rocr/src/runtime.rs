@@ -1788,8 +1788,8 @@ impl KernargPool {
                 ));
             }
         };
-        if pointer.as_ptr() as usize % required_alignment != 0
-            || pointer.as_ptr() as usize % self.inner.alignment != 0
+        if !(pointer.as_ptr() as usize).is_multiple_of(required_alignment)
+            || !(pointer.as_ptr() as usize).is_multiple_of(self.inner.alignment)
         {
             // SAFETY: pointer came from the matching allocation function.
             let _ =
@@ -2050,7 +2050,7 @@ impl DevicePool {
         let pointer = NonNull::new(pointer.cast::<u8>()).ok_or(
             RuntimeError::InvalidRuntimeObject("device memory-pool allocation returned null"),
         )?;
-        if pointer.as_ptr() as usize % self.inner.alignment != 0 {
+        if !(pointer.as_ptr() as usize).is_multiple_of(self.inner.alignment) {
             // SAFETY: pointer came from the matching allocation function.
             let _ =
                 unsafe { (self.inner.runtime.symbols.memory_pool_free)(pointer.as_ptr().cast()) };
@@ -2375,12 +2375,11 @@ fn unwrap_clang_offload_bundle(code: Arc<[u8]>) -> Result<Arc<[u8]>, RuntimeErro
         if id
             .windows(b"amdgcn-amd-amdhsa".len())
             .any(|window| window == b"amdgcn-amd-amdhsa")
+            && amdgpu.replace((offset, end)).is_some()
         {
-            if amdgpu.replace((offset, end)).is_some() {
-                return Err(RuntimeError::InvalidOffloadBundle(
-                    "multiple AMDGPU code objects require an explicit target",
-                ));
-            }
+            return Err(RuntimeError::InvalidOffloadBundle(
+                "multiple AMDGPU code objects require an explicit target",
+            ));
         }
     }
     let (start, end) = amdgpu.ok_or(RuntimeError::InvalidOffloadBundle(
@@ -2602,7 +2601,7 @@ fn cu_mask_bit_capacity(bit_len: usize) -> u32 {
     if bit_len == 0 {
         0
     } else {
-        let words = (bit_len + 31) / 32;
+        let words = bit_len.div_ceil(32);
         u32::try_from(words.saturating_mul(32)).unwrap_or(u32::MAX)
     }
 }

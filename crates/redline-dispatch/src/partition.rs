@@ -67,7 +67,7 @@ pub fn validate(
                 device_cu_count,
                 parts: n,
             })?;
-            if n_u32 == 0 || device_cu_count % n_u32 != 0 {
+            if n_u32 == 0 || !device_cu_count.is_multiple_of(n_u32) {
                 return Err(PartitionError::NonDividing {
                     device_cu_count,
                     parts: n,

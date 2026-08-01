@@ -355,28 +355,27 @@ fn validate_kernel_contracts(recorder: &Recorder) -> Result<(), CompileError> {
                 })?;
         }
         for argument in launch.arguments() {
-            if let KernelArg::ScalarSlot { slot, size } = argument {
-                if let Some(previous) = slots.insert(*slot, *size) {
-                    if previous != *size {
-                        return Err(CompileError::ConflictingScalarSlotSize {
-                            slot: *slot,
-                            first: previous,
-                            second: *size,
-                        });
-                    }
-                }
+            if let KernelArg::ScalarSlot { slot, size } = argument
+                && let Some(previous) = slots.insert(*slot, *size)
+                && previous != *size
+            {
+                return Err(CompileError::ConflictingScalarSlotSize {
+                    slot: *slot,
+                    first: previous,
+                    second: *size,
+                });
             }
         }
         let identity = (
             launch.kernarg_abi().map(|abi| abi.hash()),
             launch.artifact_identity(),
         );
-        if let Some(previous) = kernels.insert(launch.kernel().to_owned(), identity) {
-            if previous != identity {
-                return Err(CompileError::ConflictingKernelIdentity {
-                    kernel: launch.kernel().to_owned(),
-                });
-            }
+        if let Some(previous) = kernels.insert(launch.kernel().to_owned(), identity)
+            && previous != identity
+        {
+            return Err(CompileError::ConflictingKernelIdentity {
+                kernel: launch.kernel().to_owned(),
+            });
         }
     }
     Ok(())

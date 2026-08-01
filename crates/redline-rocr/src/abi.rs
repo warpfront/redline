@@ -598,7 +598,7 @@ mod tests {
                     ptr::null()
                 } else {
                     // Any non-null stand-in; never invoked.
-                    1usize as *const c_void
+                    ptr::dangling::<c_void>()
                 }
             })
         }

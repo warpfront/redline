@@ -2033,7 +2033,7 @@ impl PackedArguments {
                     let Some(replay_bindings) = replay_bindings else {
                         return Err(HipBackendError::DynamicScalarNotBound { slot: *slot });
                     };
-                    let bytes = replay_bindings.scalar(*slot).ok_or_else(|| {
+                    let bytes = replay_bindings.scalar(*slot).ok_or({
                         HipBackendError::ReplayBindings(ReplayBindingError::ScalarNotBound {
                             slot: *slot,
                         })

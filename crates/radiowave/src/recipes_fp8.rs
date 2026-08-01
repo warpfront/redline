@@ -304,9 +304,13 @@ mod tests {
     fn experimental_const_defaults_match_feature() {
         let _lock = lock_fp8_tests();
         #[cfg(feature = "experimental-fp8")]
-        assert!(EXPERIMENTAL_FP8);
+        const {
+            assert!(EXPERIMENTAL_FP8)
+        };
         #[cfg(not(feature = "experimental-fp8"))]
-        assert!(!EXPERIMENTAL_FP8);
+        const {
+            assert!(!EXPERIMENTAL_FP8)
+        };
         // Runtime defaults off regardless of feature (when no other test holds it).
         assert!(!RUNTIME_ENABLE.load(Ordering::SeqCst));
     }

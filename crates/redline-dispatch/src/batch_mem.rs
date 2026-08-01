@@ -255,11 +255,9 @@ fn validate_range_list(
 
     // Pairwise half-open overlap: [a, a+sa) ∩ [b, b+sb) ≠ ∅.
     // Order-independent; original indices are reported for diagnostics.
-    for i in 0..ranges.len() {
-        let a = ranges[i];
+    for (i, a) in ranges.iter().enumerate() {
         let a_end = a.end_exclusive().expect("validated non-overflow");
-        for j in (i + 1)..ranges.len() {
-            let b = ranges[j];
+        for (j, b) in ranges.iter().enumerate().skip(i + 1) {
             let b_end = b.end_exclusive().expect("validated non-overflow");
             let overlaps = a.device_ptr < b_end && b.device_ptr < a_end;
             if overlaps {
