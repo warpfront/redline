@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev> -->
 
-# Ready-to-post upstream drafts — 2026-08-16
+# Ready-to-post upstream drafts — updated 2026-08-23
 
 Three drafts, each backed only by measurements taken on this fleet. Nothing here
 is inference or extrapolation; every number below was produced by a probe in
@@ -377,20 +377,144 @@ exhaustion, 3 means it reported an error, 139 means it reproduced).
 
 ---
 
+## 5. REPLY for `ROCm/ROCm#6529` — rev 4, READY TO POST
+
+**Target:** `ROCm/ROCm#6529` (now `ROCm/legacy-rocm-build`). State 2026-08-23:
+OPEN, `status: triage`, assignee `@schung-amd`, **1 comment**, untouched since
+2026-08-04. lhl's direct question in `#6409` has been unanswered for 26 days.
+
+Rev 3 was blocked because it argued from "we cannot reproduce this," which was
+false. Rev 4 leads with the correction instead of burying it.
+
+---
+
+Answering your direct question first, and correcting my own earlier silence: **yes,
+I have seen this, on my own gfx1100, before you filed.** An RX 7900 XTX here
+logged **78 address-zero page faults on 2026-07-23 between 13:37:49 and
+16:44:44**, across **8 distinct PIDs**, escalating into **29 MES `REMOVE_QUEUE`
+failures and 24 MODE1 full-device resets**. Every sampled fault carries your
+exact tuple: address `0x0`, client `SQC (data) (0xa)`,
+`GCVM_L2_PROTECTION_FAULT_STATUS:0x00801431`, `PERMISSION_FAULTS 0x3`,
+`MAPPING_ERROR 0x0`. That is five days before you opened this issue. I did not
+connect it at the time because nobody looked at the kernel log until later, and
+I should have told you sooner.
+
+I have not reproduced it deliberately since, and I have no recipe. What I do have
+is two negative results that remove two of the three plausible mechanism
+families, and one source answer to your question 4.
+
+**1. Routine mid-IB preemption is not it.** Retained-PM4 IBs of 24000 dispatches
+against 16 competing GPU processes, with SH-register elision on and off. That
+genuinely oversubscribed the device — VRAM 28 MB to 3.89 GB, replay slowing from
+~18 to ~550 us/token — so each IB spanned ~13 s against MES's 10 ms process
+quantum, on the order of 1300 quantum switches inside a single indirect buffer
+and several thousand across the run. **8/8 arms passed with exact results and
+zero new fault lines.** The kernel-source facts that motivated this are still
+facts: `v11_compute_mqd` carries `compute_pgm_lo/hi` and
+`compute_user_data_0..15`, `init_mqd` memsets and never writes them, `update_mqd`
+never writes them, `hqd_load_v11` MMIO-loads only `cp_mqd_base_addr_lo` through
+`CP_HQD_PQ_WPTR_HI`, and the CWSR trap handler saves wave state only. But the
+inference I drew from them is empirically false for the common path: CP/MES
+evidently preserves or correctly re-establishes that state.
+
+**2. Queue / signal / allocation retirement and reuse, in pure HIP, is not
+sufficient either.** This is your leading hypothesis, so I built the smallest
+thing that tests it with **no Redline and no retained PM4 in the process at
+all** — the point being to find out whether this needs a retained-PM4 submitter
+or not. Each cycle creates streams, allocates device buffers, dispatches a real
+kernel that *reads* device memory (the fault client is SQC data, so a shader data
+fetch has to be in the loop), records and waits events, then destroys the queue
+first, then the signal it referenced, then the memory the packets pointed at, so
+the next cycle reuses those rings, doorbells, signal slots and addresses.
+
+On the same card model as your second one, ROCm 7.14.0:
+
+| Arm | Processes | Cycles | Dispatches | Queue create/destroy | Failures | Kernel faults |
+| --- | --- | --- | --- | --- | --- | --- |
+| single | 1 | 20000 | 80000 | 80000 | 0 | 0 |
+| concurrent | 6 | 8000 each | 192000 | 192000 | 0 | 0 |
+
+272000 dispatches and 272000 queue create/destroy pairs across 6 PIDs, clean.
+That does not disprove your hypothesis — it says the *general runtime* reuse path
+is not enough on its own, which pushes the remaining suspicion back toward the
+retained-IB path specifically, or toward a rarer condition than plain recreate
+churn.
+
+**3. Your question 4, from source.** Successful `hsa_queue_destroy` does **not**
+guarantee hardware can no longer reference completion signals, kernargs or
+indirect IBs. `AqlQueue::~AqlQueue` waits for the error handler and frees what
+the *queue object* owns, then `AqlQueue::Inactivate` does
+`active_.exchange(false)` followed by `agent_->driver().DestroyQueue(queue_id_)`;
+`KfdDriver::DestroyQueue` wraps `hsaKmtDestroyQueue`, which issues
+`AMDKFD_IOC_DESTROY_QUEUE` and then does userspace bookkeeping in `free_queue`.
+There is no completion-signal, kernarg or IB walk or drain anywhere on that path.
+Additional software retirement is required before those addresses are safe to
+free or reuse. Unread MES `REMOVE_QUEUE` may drain CP from the hardware's point
+of view, but the userspace ABI does not document destroy as pointee retirement.
+
+**One thing about your controls that may matter.** `rocm-systems#8113`, the
+recycled-completion-signal fix you cite as a precedent, merged to `develop` on
+2026-07-06 but was **not in stock ROCm 7.14.0**. The cherry-pick into
+`release/therock-7.14` (`rocm-systems#10005`) only merged on **2026-08-13**. So
+the four clean 240-row processes per card you ran on production 7.14 did not
+include it, and neither did mine. If that fix is relevant, both of our 7.14
+control sets were run without it.
+
+### What I changed on my side, and what I did not
+
+To be explicit, because it would be easy to misread: **none of this fixes the
+address-zero fault.** The root cause is still unknown. What these do is remove a
+different bug class from suspicion and convert a would-be device reset into a
+named error:
+
+- A **finalize-time PM4 stream validator** that rejects any indirect buffer which
+  could dispatch from a zero program address, and refuses `DISPATCH_DIRECT`
+  without a nonzero program address earlier in the stream. Wired into `finalize_ib`
+  and `build_multi_ib`, so an integrator now gets `RL_ERR_COMPILE` with a reason
+  instead of a fault. This is why I can say construction is ruled out rather than
+  merely audited: both encoders already rejected `code_entry == 0` and null
+  kernarg before any stream mutation, and the validator now enforces it on the
+  finished stream too.
+- **Encoder/device-family mismatch refused at IB construction**, and the two
+  `hipengine_exact*` examples fail closed off gfx12 — they hardcoded gfx12
+  command buffers and would previously have emitted them anywhere.
+- **Ambiguous device selectors refused outright.** Worth flagging for your
+  two-card host specifically: `GpuDevice::name()` is the HSA agent name, so both
+  of your cards report `gfx1100` and any name-based selector is inherently
+  ambiguous there. It now lists every candidate and refuses rather than binding
+  the first match.
+- A **host device manifest** with two refusal tiers, so a machine carrying a
+  shared APU next to discrete boards can mark it as refused for reset-provoking
+  runs while keeping it usable for normal work.
+
+Reproducers and the full investigation record are public, if you want to run any
+of it on your cards:
+
+- Recreate/reuse stress (arm 2 above): `bench/vmm/queue_signal_reuse_stress.cpp`
+- Preemption probe (arm 1 above): `scripts/6529-preemption-probe.sh`
+- Contention A/B harness: `scripts/6529-contention-ab.sh`
+- Investigation record, including the fault-log evidence:
+  `docs/investigations/2026-07-31-rocm-6529-address-zero-sqc-fault.md`
+
+All in https://github.com/warpfront/redline
+
+### What I still cannot answer
+
+Which backend faulted in my 2026-07-23 cluster. The faulting process was
+`hip_dot_path`, whose Redline leg and stock-HIP leg build to the same binary
+name, so the process name does not identify it. The surviving result directories
+from inside that fault window list backends `hip` and `vulkan` with `redline`
+absent, which is *suggestive* of a Redline leg that died without writing results
+— but it is equally consistent with Redline never having been scheduled in that
+run, and I am not going to present it as settled. If it was the stock-HIP leg,
+this fires with no retained-PM4 replay in the process at all, and my arm-2
+negative above becomes much more interesting.
+
+---
+
 ## Still blocked, not drafted here
 
-`ROCm/ROCm#6529` rev 4 remains blocked on the same unknown as before: which
-backend faulted in the 2026-07-23 gfx1100 cluster (redline leg vs stock HIP
-leg). @schung-amd said on 2026-08-04 he was attempting a reproduction and there
-has been no follow-up in the 12 days since. Two facts are now available that
-were not when rev 3 was written and should go into rev 4:
-
-- Successful `hsa_queue_destroy` does **not** retire packet pointees.
-  `AqlQueue::Inactivate` -> `KfdDriver::DestroyQueue` -> `AMDKFD_IOC_DESTROY_QUEUE`
-  performs no completion-signal, kernarg, or IB drain. This answers lhl's
-  question 4 directly.
-- `rocm-systems#8113` (recycled completion signal used for HIP hardware-queue
-  idle/release decisions) merged to `develop` on 2026-07-06 but was **absent
-  from stock ROCm 7.14.0**; the cherry-pick into `release/therock-7.14`
-  (`rocm-systems#10005`) only merged on 2026-08-13. Any 7.14.0-based control run
-  did not include it.
+Nothing. The #6529 reply above supersedes the earlier "blocked" note: the two
+facts that were missing when rev 3 was written (the queue-destroy contract and
+#8113's absence from 7.14.0) are now in rev 4, and the backend question is stated
+as an open unknown rather than gating the whole reply.
