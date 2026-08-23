@@ -1,0 +1,234 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
+//
+// Does hipGraph fence according to the dependency structure it was given?
+//
+// Why this matters:
+//   A hipGraph is an explicit DAG. The runtime therefore knows, before it
+//   submits anything, which dispatches are ordered and which are independent.
+//   If per-dispatch cost is the same whether the graph is a strict serial chain
+//   or N mutually independent nodes, then that structural information is not
+//   being used to relax fencing -- and the cost of the strongest case is being
+//   paid by every case.
+//
+//   This is the difference between "HIP needs a new low-level submission API"
+//   and "HIP already has the information required to fence less". The second is
+//   a far smaller ask, so it is worth establishing which one is true.
+//
+// Arms, all with identical kernels and identical node counts:
+//   chain        node i depends on node i-1. Every dispatch is ordered.
+//   independent  every node depends only on the graph root. Maximum freedom.
+//   fanout-join  independent middle, joined at the end. What a real layer does.
+//
+// Nodes are added explicitly with hipGraphAddKernelNode rather than by stream
+// capture, so the dependency edges are exactly what this file states and not an
+// artifact of capture order.
+//
+// The kernel is a one-workitem atomicAdd, so per-dispatch cost is dominated by
+// submission and fencing rather than compute. Correctness is gated: the counter
+// must equal exactly N * replays in every arm, which also confirms the
+// independent arm really did run every node.
+//
+// Timing is host steady_clock and hipEvent over the same batch, as in
+// aql_dispatch_floor.cpp, with no profiler involved.
+//
+// Build: hipcc --offload-arch=gfx1201 -O3 graph_dependency_fencing.cpp -o gdf
+// Run:   ./gdf [N] [replays] [warmups]
+
+#include <hip/hip_runtime.h>
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+
+#define OK(x)                                                                    \
+    do {                                                                         \
+        hipError_t _e = (x);                                                     \
+        if (_e != hipSuccess) {                                                  \
+            printf("FATAL %s -> %s (%d) at line %d\n", #x, hipGetErrorString(_e), \
+                   (int)_e, __LINE__);                                           \
+            exit(1);                                                             \
+        }                                                                        \
+    } while (0)
+
+__global__ void tick(unsigned long long* counter) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) atomicAdd(counter, 1ull);
+}
+
+static double median(std::vector<double>& v) {
+    if (v.empty()) return 0.0;
+    std::sort(v.begin(), v.end());
+    const size_t m = v.size() / 2;
+    return (v.size() & 1) ? v[m] : 0.5 * (v[m - 1] + v[m]);
+}
+
+enum class Shape { Chain, Independent, FanoutJoin };
+
+// Builds a graph of `n` kernel nodes with the requested dependency structure.
+static hipGraph_t build(int n, Shape shape, unsigned long long* d_counter) {
+    hipGraph_t g = nullptr;
+    OK(hipGraphCreate(&g, 0));
+
+    void* args[1] = {(void*)&d_counter};
+    hipKernelNodeParams np{};
+    np.func = (void*)tick;
+    np.gridDim = dim3(1);
+    np.blockDim = dim3(1);
+    np.sharedMemBytes = 0;
+    np.kernelParams = args;
+    np.extra = nullptr;
+
+    std::vector<hipGraphNode_t> nodes;
+    nodes.reserve(n);
+
+    for (int i = 0; i < n; ++i) {
+        hipGraphNode_t node = nullptr;
+        switch (shape) {
+            case Shape::Chain: {
+                // Strict serial order: depend on the previous node.
+                hipGraphNode_t* dep = (i == 0) ? nullptr : &nodes[i - 1];
+                size_t ndep = (i == 0) ? 0 : 1;
+                OK(hipGraphAddKernelNode(&node, g, dep, ndep, &np));
+                break;
+            }
+            case Shape::Independent: {
+                // No edges at all: every node is a root, all are concurrent.
+                OK(hipGraphAddKernelNode(&node, g, nullptr, 0, &np));
+                break;
+            }
+            case Shape::FanoutJoin: {
+                // All but the last are independent; the last joins them.
+                if (i + 1 < n) {
+                    OK(hipGraphAddKernelNode(&node, g, nullptr, 0, &np));
+                } else {
+                    OK(hipGraphAddKernelNode(&node, g, nodes.data(),
+                                             (size_t)nodes.size(), &np));
+                }
+                break;
+            }
+        }
+        nodes.push_back(node);
+    }
+    return g;
+}
+
+struct Result {
+    double host_us = 0.0;
+    double event_us = 0.0;
+    bool correct = false;
+    unsigned long long counted = 0, expected = 0;
+};
+
+static Result run_shape(int n, int replays, int warmups, Shape shape,
+                        unsigned long long* d_counter) {
+    hipGraph_t g = build(n, shape, d_counter);
+    hipGraphExec_t exec = nullptr;
+    OK(hipGraphInstantiate(&exec, g, nullptr, nullptr, 0));
+
+    hipStream_t s;
+    OK(hipStreamCreate(&s));
+    hipEvent_t e0, e1;
+    OK(hipEventCreate(&e0));
+    OK(hipEventCreate(&e1));
+
+    for (int i = 0; i < warmups; ++i) {
+        OK(hipGraphLaunch(exec, s));
+        OK(hipStreamSynchronize(s));
+    }
+
+    OK(hipMemset(d_counter, 0, sizeof(unsigned long long)));
+    OK(hipDeviceSynchronize());
+
+    std::vector<double> hv, ev;
+    hv.reserve(replays);
+    ev.reserve(replays);
+    for (int i = 0; i < replays; ++i) {
+        OK(hipEventRecord(e0, s));
+        const auto t0 = std::chrono::steady_clock::now();
+        OK(hipGraphLaunch(exec, s));
+        OK(hipStreamSynchronize(s));
+        const auto t1 = std::chrono::steady_clock::now();
+        OK(hipEventRecord(e1, s));
+        OK(hipEventSynchronize(e1));
+        float ms = 0.0f;
+        OK(hipEventElapsedTime(&ms, e0, e1));
+        hv.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count() / n);
+        ev.push_back((double)ms * 1000.0 / n);
+    }
+
+    Result r;
+    OK(hipMemcpy(&r.counted, d_counter, sizeof(r.counted), hipMemcpyDeviceToHost));
+    r.expected = (unsigned long long)n * (unsigned long long)replays;
+    r.correct = (r.counted == r.expected);
+    r.host_us = median(hv);
+    r.event_us = median(ev);
+
+    OK(hipEventDestroy(e0));
+    OK(hipEventDestroy(e1));
+    OK(hipStreamDestroy(s));
+    OK(hipGraphExecDestroy(exec));
+    OK(hipGraphDestroy(g));
+    return r;
+}
+
+int main(int argc, char** argv) {
+    const int n = argc > 1 ? atoi(argv[1]) : 512;
+    const int replays = argc > 2 ? atoi(argv[2]) : 200;
+    const int warmups = argc > 3 ? atoi(argv[3]) : 20;
+
+    OK(hipSetDevice(0));
+    hipDeviceProp_t p;
+    OK(hipGetDeviceProperties(&p, 0));
+    printf("=== %s (%s) ===\n", p.name, p.gcnArchName);
+    printf("N=%d kernel nodes, %d replays (median), %d warmups\n", n, replays, warmups);
+    printf("Same kernel and node count in every arm; only the DAG edges differ.\n\n");
+    printf("  %-14s %9s %9s   %-6s %s\n", "graph shape", "host us", "event us",
+           "gate", "");
+
+    unsigned long long* d = nullptr;
+    OK(hipMalloc(&d, sizeof(unsigned long long)));
+
+    Result chain = run_shape(n, replays, warmups, Shape::Chain, d);
+    printf("  %-14s %9.3f %9.3f   %s\n", "chain", chain.host_us, chain.event_us,
+           chain.correct ? "ok" : "MISMATCH");
+
+    Result indep = run_shape(n, replays, warmups, Shape::Independent, d);
+    printf("  %-14s %9.3f %9.3f   %s\n", "independent", indep.host_us, indep.event_us,
+           indep.correct ? "ok" : "MISMATCH");
+
+    Result fj = run_shape(n, replays, warmups, Shape::FanoutJoin, d);
+    printf("  %-14s %9.3f %9.3f   %s\n", "fanout-join", fj.host_us, fj.event_us,
+           fj.correct ? "ok" : "MISMATCH");
+
+    OK(hipFree(d));
+
+    printf("\n--- reading ---\n");
+    if (!chain.correct || !indep.correct || !fj.correct) {
+        printf("A correctness gate failed; the timings above are not valid.\n");
+        return 2;
+    }
+    const double ratio = indep.host_us > 0.0 ? chain.host_us / indep.host_us : 0.0;
+    printf("chain / independent = %.3fx\n", ratio);
+    if (ratio > 1.10) {
+        printf("The independent graph is measurably cheaper per dispatch, so the\n"
+               "runtime does exploit declared independence on this build.\n");
+    } else if (ratio >= 0.90) {
+        printf("Declaring every node independent neither helps nor hurts, so on\n"
+               "this build the declared dependency structure does not measurably\n"
+               "change per-dispatch cost either way.\n");
+    } else {
+        printf("Declaring nodes independent is %.2fx MORE expensive per dispatch\n"
+               "than a strict serial chain. The cheapest shape here is the fully\n"
+               "ordered one, so on this build the penalty is attached to the\n"
+               "concurrent shape itself rather than to ordering. A plausible\n"
+               "reading is extra submission or cross-queue join machinery for\n"
+               "concurrent nodes, but this probe does not inspect packets and\n"
+               "does not establish the mechanism.\n",
+               ratio > 0.0 ? 1.0 / ratio : 0.0);
+    }
+    printf("\nThis measures cost as a function of declared dependency structure\n"
+           "only. It does not inspect emitted packets and does not identify\n"
+           "which fence or barrier bit is responsible.\n");
+    return 0;
+}
