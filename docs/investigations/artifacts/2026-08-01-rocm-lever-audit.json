@@ -1,0 +1,640 @@
+{
+  "schema_version": 1,
+  "kind": "redline_rocm_lever_audit",
+  "date": "2026-08-01T07:54:23Z",
+  "tree": "/opt/rocm/core-7.14",
+  "method": {
+    "mine": "8 parallel read-only scouts, one per surface slice",
+    "verify": "2 independent adversarial skeptics per high-value finding (lens 1 = does it exist and is it callable; lens 2 = is it genuinely unused and is the value honest), each instructed to refute and to default to refuted when unsure",
+    "adjudication": "existence-refutation kills a finding; value-refutation downgrades it"
+  },
+  "surface": {
+    "hsa_exported": 275,
+    "hsa_amd_exported": 85,
+    "redline_bound": 49,
+    "hsa_unused": 230,
+    "hsa_amd_unused": 67
+  },
+  "counts": {
+    "raw_findings": 83,
+    "high_before_verification": 28,
+    "verdicts_recovered": 55,
+    "verdicts_expected": 56,
+    "survived_high": 1,
+    "downgraded_medium": 5,
+    "downgraded_low": 21,
+    "existence_refuted": 1,
+    "unverified_medium": 40,
+    "unverified_low": 15
+  },
+  "surviving_high": [
+    {
+      "lever": "hipGraphGetNodes + hipGraphNodeGetType + hipGraphKernelNodeGetParams",
+      "slice": "hip_runtime",
+      "surface": "libamdhip64.so exports: `hipGraphGetNodes@@hip_4.4`, `hipGraphNodeGetType@@hip_4.5`, `hipGraphKernelNodeGetParams@@hip_4.4`; decls hip_runtime_api.h:8616,8678,8869. Interposer map crates/redline-hipgraph/redline_hipgraph.map does NOT export them; lib.rs only dlsyms them for private reconcile_captured_native_nodes.",
+      "evidence": "nm: `0000000000560650 T hipGraphGetNodes@@hip_4.4` / `0000000000566b90 T hipGraphNodeGetType@@hip_4.5` / `0000000000562410 T hipGraphKernelNodeGetParams@@hip_4.4`. map globals stop at Create/AddKernel/Instantiate/Launch/\u2026 \u2014 no GetNodes. decode_ab.c:77-83: `HCHECK(hipGraphGetNodes(graph, NULL, &nnodes));` \u2026 `hipGraphNodeGetType(nodes[i], &t)`. lib.rs:2059 uses `real_symbol(...b\"hipGraphGetNodes\\0\")` only internally.",
+      "what_it_enables": "Enumerate nodes of a captured/built graph, classify node types, and read kernel node params (func/grid/block/kernargs) so apps can locate nodes for hipGraphExecKernelNodeSetParams updates.",
+      "relevance_to_redline": "Open problem #5: after hipStreamEndCapture the interposer returns a Redline hipGraph_t. Unmodified apps (and Redline\u2019s own decode_ab/decode_chain_ab examples) immediately call GetNodes/GetType/KernelNodeGetParams; without interposing these, apps either see native-only handles or fail to find Redline nodes, blocking the common capture\u2192find-node\u2192ExecKernelNodeSetParams\u2192Launch loop. Exporting them over Redline GraphState is the single highest-leverage completeness fix.",
+      "effort": "small",
+      "callable": true,
+      "solves_open_problem": "5"
+    }
+  ],
+  "downgraded_medium": [
+    {
+      "lever": "aqlprofile_pmc_create_packets \u2192 start/stop/read PM4 AQL packets",
+      "slice": "profiling",
+      "effort": "large",
+      "callable": true,
+      "why_trimmed": "API is real and unused, but the claim misstates how it integrates with retained-PM4 and overrates value.\n\nUNUSED (true): redline-pub never dlopens libhsa-amd-aqlprofile64.so or calls aqlprofile_pmc_*; only touch is PacketImage::pm4_indirect_buffer layout parity with aqlprofile\u2019s vendor IB packet (packet.rs comments/tests). redline-observe counters go through rocprofiler_configure_callback_dispatch_counting_service + queue interposition, not aqlprofile.\n\nCALLABLE (true): aql_profile_v2.h:392-418 defines aqlprofile_pmc_aql_packets_t {start,stop,read as hsa_ext_amd_aql_pm4_packet_t} and aqlprofil"
+    },
+    {
+      "lever": "Negative answer for #6529: no live HQD/MQD/COMPUTE_PGM/USER_DATA reader in debug stack",
+      "slice": "debug_stack",
+      "effort": "small",
+      "callable": false,
+      "why_trimmed": "Technical negative answer is correct: shipped debug stack cannot read live HQD/MQD/COMPUTE_PGM_*/COMPUTE_USER_DATA. amd_dbgapi_read_register is wave-scoped only and requires a stopped wave (amd-dbgapi.h ~5548-5579; WAVE_NOT_STOPPED); debug-agent dumps only wave hwregs (pc/exec/status/mode/trapsts/m0/ttmp*/s*/v*/flat_scratch/xnack_mask \u2014 README.md); queue_get_info stops at TYPE/ADDRESS/SIZE/OS_ID with QUEUE_INFO_STATE and QUEUE_INFO_ERROR_REASON explicitly unimplemented (known_limitations \u00a71); librocm-dbgapi.so.0.80.0 has no HQD/MQD/COMPUTE_PGM strings; crates/ has zero dbgapi/rocgdb bindings. "
+    },
+    {
+      "lever": "hipExtModuleLaunchKernel / hipExtLaunchKernel",
+      "slice": "hip_runtime",
+      "effort": "small",
+      "callable": true,
+      "why_trimmed": "Gap is real but value=high is inflated. Redline-hipgraph never mentions hipExt* (map exports only hipLaunchKernel/hipModuleLaunchKernel; lib.rs hooks those two at ~1864/1951 into append_capture_kernel). hip_ext.h:56-63/100-103 and hipExtAnyOrderLaunch exist in /opt/rocm/core-7.14. Ext launches during stream capture therefore bypass Redline\u2019s own graph while still hitting real libamdhip64 under native_active shadow capture (BeginCapture always sets native_active=true). EndCapture reconcile then sees topology/node-count mismatch and sets force_native \u2014 correct HIP fallback, not silent incomplete"
+    },
+    {
+      "lever": "hipModuleLoad + hipModuleLoadFatBinary",
+      "slice": "hip_runtime",
+      "effort": "small",
+      "callable": true,
+      "why_trimmed": "hipModuleLoad / hipModuleLoadFatBinary are genuinely not intercepted: redline_hipgraph.map and lib.rs export only hipModuleLoadData/Ex (+ GetFunction/Unload); finish_module_load is wired solely from those two; crate docs and hipgraph-demo README explicitly scope acceleration to hipModuleLoadData* and compiler-registered static fatbins. That gap is real for apps that call hipModuleLoad(path) or hipModuleLoadFatBinary and then graph those hipFunction_t handles.\n\nThe claim is still inflated. Redline already covers the same module/function table for the dominant preload workloads by other routes: "
+    },
+    {
+      "lever": "hipStreamBeginCaptureToGraph + hipStreamGetCaptureInfo_v2",
+      "slice": "hip_runtime",
+      "effort": "medium",
+      "callable": true,
+      "why_trimmed": "Genuine unused gap in redline-hipgraph, but CLAIMED value=high is inflated.\n\nALREADY vs NOT: Redline does NOT implement/export hipStreamBeginCaptureToGraph or hipStreamGetCaptureInfo_v2. redline_hipgraph.map only exports hipStreamBeginCapture/EndCapture/IsCapturing (hip_4.3). CaptureState is inserted solely in hipStreamBeginCapture (lib.rs ~1824-1860) into Global.captures keyed by stream; launches (hipLaunchKernel/hipModuleLaunchKernel) only append PM4 nodes when that map hit succeeds. Repo-wide grep of redline-pub finds zero ToGraph/GetCaptureInfo symbols. Headers confirm APIs at /opt/rocm/co"
+    }
+  ],
+  "downgraded_low": [
+    {
+      "lever": "hsa_amd_queue_create + hsa_amd_queue_create_desc_t",
+      "slice": "hsa_symbols",
+      "why_trimmed": "hsa_amd_queue_create is genuinely unused (in /tmp/hsa_unused.txt; abi binds only hsa_queue_create + hsa_amd_queue_cu_set_mask + hsa_amd_queue_set_priority) and is exported/callable, but the high-value claim is inflated for Redline\u2019s retained-PM4 runtime.\n\nAlready covered without it:\n- QueueSet/AqlQueue create via hsa_queue_create(QUEUE_TYPE_MULTI); CU affinity is create_with_cu_mask = create then "
+    },
+    {
+      "lever": "hsa_amd_signal_create (HSA_AMD_SIGNAL_AMD_GPU_ONLY)",
+      "slice": "hsa_symbols",
+      "why_trimmed": "hsa_amd_signal_create / HSA_AMD_SIGNAL_AMD_GPU_ONLY is genuinely unused (abi binds only hsa_signal_create; CompletionSignal::new uses (1,0,null); symbol is on /tmp/hsa_unused.txt). ROCr selection is also real: hsa_ext_amd.cpp use_default = IPC || GPU_ONLY || !g_use_interrupt_wait; DefaultSignal nulls event_mailbox_ptr while InterruptSignal fills it, and the CP trap path only mailbox-stores/s_sendm"
+    },
+    {
+      "lever": "hsa_amd_register_system_event_handler",
+      "slice": "hsa_symbols",
+      "why_trimmed": "hsa_amd_register_system_event_handler is genuinely exported (@@ROCR_1) and unused by Redline, but the claimed high value for open problem #1 is inflated. Redline already installs a per-queue hsa_queue_create error callback into QueueFaultState (runtime.rs) and already binds hsa_amd_queue_get_info with QUEUE_INFO_VM_FAULT_STATUS/ADDRESS/REASON (abi.rs:77-79,520) \u2014 the same VA + HSA_AMD_MEMORY_FAULT"
+    },
+    {
+      "lever": "hsa_amd_memory_async_copy / _on_engine / _async_batch_copy / copy_engine_status",
+      "slice": "hsa_symbols",
+      "why_trimmed": "Genuinely unused and callable (Redline binds only hsa_memory_copy in abi.rs/runtime.rs; the four SDMA symbols appear in /tmp/hsa_unused.txt and not /tmp/used_all.txt). The high-value claim is still inflated for this runtime.\n\nHot path: retained-PM4 is record-once / replay-many with kernarg patch. DeviceBuffer::copy_from_host/to_host are documented as synchronous setup/teardown after GPU quiescence"
+    },
+    {
+      "lever": "hsa_amd_queue_create (descriptor batch + DEVICE_MEM + SDMA)",
+      "slice": "vendor_headers",
+      "why_trimmed": "hsa_amd_queue_create is genuinely unused (in /tmp/hsa_unused.txt; zero crate hits) and exported (hsa_ext_amd.h:3830\u20133833, ROCR_1). That does not make it high-value for Redline.\n\nRedline already covers the useful compute-queue bits via the classic path: AqlQueue::create \u2192 hsa_queue_create (runtime.rs), then create_with_cu_mask \u2192 hsa_amd_queue_cu_set_mask before first use; hsa_amd_queue_set_priority"
+    },
+    {
+      "lever": "libhsa-amd-aqlprofile64.so beyond mirrored PM4-IB packet",
+      "slice": "vendor_headers",
+      "why_trimmed": "libhsa-amd-aqlprofile64.so is real and Redline does not call it: crates only cite aqlprofile for the vendor AQL+INDIRECT_BUFFER layout (packet.rs pm4_indirect_buffer / pm4_ib_packet_matches_aqlprofile_vendor_layout). No hsa_ven_amd_aqlprofile_* or aqlprofile_pmc_* bindings, no dlopen of libhsa-amd-aqlprofile64.so.\n\nThat does not make the lever high-value for Redline.\n\n1) Equivalent capability alre"
+    },
+    {
+      "lever": "hsa_ven_amd_pcs_* PC sampling (hosttrap + stochastic)",
+      "slice": "vendor_headers",
+      "why_trimmed": "hsa_ven_amd_pcs_* is genuinely unused by Redline (zero crates hits; all 7 symbols in /tmp/hsa_unused.txt; Symbols binds only hsa_amd_profiling_* dispatch timing). Exports and header contract are real: hsa_ven_amd_pc_sampling.h (EXPERIMENTAL), GLOBAL symbols on libhsa-runtime64.so, hosttrap_v1/snapshot_v1 carry pc/exec_mask/wg/hw_id/timestamp/correlation_id. That does NOT make the claim high-value "
+    },
+    {
+      "lever": "hsaKmt* thunk (NOT dynamically exported)",
+      "slice": "thunk_kfd",
+      "why_trimmed": "The packaging fact is real and Redline does not use hsaKmt*: zero matches under crates/; load path is dlopen-only libhsa-runtime64.so (redline-rocr/src/lib.rs); used HSA set is the 49 public symbols in /tmp/used_all.txt; no /dev/kfd or AMDKFD_IOC path in production code. Headers (hsakmt/hsakmt.h), pkgconfig (libhsakmt 1.0.6 -lhsakmt), static T in libhsakmt.a, and LOCAL-only hsaKmt* inside ROCr wit"
+    },
+    {
+      "lever": "AMDKFD_IOC_CREATE_QUEUE (/dev/kfd)",
+      "slice": "thunk_kfd",
+      "why_trimmed": "AMDKFD_IOC_CREATE_QUEUE is a real KFD uapi (kfd_ioctl.h AMDKFD_IOWR(0x02); types COMPUTE/SDMA/COMPUTE_AQL; no flags field) and Redline never opens /dev/kfd or issues it directly\u2014queues come only from hsa_queue_create(QUEUE_TYPE_MULTI) in redline-rocr runtime.rs, which already bottoms out in this ioctl via ROCr/libhsakmt. That does not make the lever useful.\n\n(1) Does not solve ROCm#6529. In-tree i"
+    },
+    {
+      "lever": "AMDKFD_IOC_GET_QUEUE_WAVE_STATE",
+      "slice": "thunk_kfd",
+      "why_trimmed": "AMDKFD_IOC_GET_QUEUE_WAVE_STATE is genuinely unused by Redline (no crates hits for GET_QUEUE_WAVE_STATE / get_queue_wave_state / ctl_stack / wave_state; redline-rocr never opens /dev/kfd or issues KFD ioctls \u2014 queues go through hsa_queue_create). The uapi is real: kfd_ioctl.h exposes struct kfd_ioctl_get_queue_wave_state_args (ctl_stack_address in; ctl_stack_used_size + save_area_used_size out; qu"
+    },
+    {
+      "lever": "kfd_context_save_area_header / HsaUserContextSaveAreaHeader",
+      "slice": "thunk_kfd",
+      "why_trimmed": "Header layout is real and unused by Redline (no CSA/header symbols in crates), but the claimed #6529 benefit is false. COMPUTE_PGM_LO/HI and COMPUTE_USER_DATA are queue SH state, not CWSR wave-save contents. Redline's own 6529 investigation already proved from kernel/trap sources that CWSR saves only VGPR/SGPR/LDS/hwregs (M0/PC/EXEC/\u2026) and has no COMPUTE_PGM/USER_DATA/SET_SH save-restore; MQD SH s"
+    },
+    {
+      "lever": "AMDKFD_IOC_DBG_TRAP / KFD_IOC_DBG_TRAP_GET_QUEUE_SNAPSHOT",
+      "slice": "thunk_kfd",
+      "why_trimmed": "Surface is real and unused by Redline (no DBG_TRAP / GET_QUEUE_SNAPSHOT / hsaKmtDbgGetQueueData / kfd_queue_snapshot in crates/), and callable_today=False is honest: AMDKFD_IOC_DBG_TRAP (kfd_ioctl.h ~0x26) op 13 needs DBG_TRAP_ENABLE + PTRACE_ATTACH + RUNTIME_ENABLE, and hsaKmtDbgGetQueueData is thunk-local (not a libhsa-runtime64 export; brief already notes zero hsaKmt* exports). That does not ma"
+    },
+    {
+      "lever": "rocprofiler_configure_buffer_tracing_service(ROCPROFILER_BUFFER_TRACING_KFD_EVENT_PAGE_FAULT / KFD_PAGE_FAULT)",
+      "slice": "profiling",
+      "why_trimmed": "Surface is real and unused by Redline, but the claimed high-value #6529 lever is inflated. (1) Unused: crates/redline-observe only binds dispatch-counting (`rocprofiler_configure_callback_dispatch_counting_service` / force_configure); zero hits for `rocprofiler_configure_buffer_tracing_service`, `BUFFER_TRACING_KFD`, or page-fault records. (2) API/tool exist: buffer_tracing.h:374-386 & 469-481 pag"
+    },
+    {
+      "lever": "rocprofiler_configure_pc_sampling_service + rocprofiler_query_pc_sampling_agent_configurations",
+      "slice": "profiling",
+      "why_trimmed": "Genuinely unused: crates/redline-observe only wires rocprofiler_configure_callback_dispatch_counting_service (+ ROCTx/AMDSMI); zero matches for rocprofiler_configure_pc_sampling_service, rocprofiler_query_pc_sampling_agent_configurations, host_trap/stochastic PC sample records, or hsa_ven_amd_pcs_* anywhere under crates/. API surface is real (pc_sampling.h experimental; host_trap/stochastic method"
+    },
+    {
+      "lever": "librocm-debug-agent.so via HSA_TOOLS_LIB for zero-code wave dump on queue error / SIGQUIT",
+      "slice": "debug_stack",
+      "why_trimmed": "librocm-debug-agent.so is shipped and genuinely unused by Redline (repo-wide zero hits for HSA_TOOLS_LIB / rocm-debug-agent / dbgapi / ROCM_DEBUG_AGENT; redline-observe only wires roctx/amd-smi/rocprof; queue_error_callback only latches an HSA status). README confirms env-only load via HSA_TOOLS_LIB and wave dumps (pc, MEMORY_VIOLATION/ASSERT_TRAP, SGPR/VGPR/LDS, disassembly) on HSA queue exceptio"
+    },
+    {
+      "lever": "gfx1100 CU-mask vs debugger hard incompatibility",
+      "slice": "debug_stack",
+      "why_trimmed": "amd-dbgapi.h known_limitations \u00a79 (lines 364-369) does state gfx1100/1101/1102 cannot debug CU-masked (or cooperative) queues, and Redline does use hsa_amd_queue_cu_set_mask heavily (runtime.rs create_with_cu_mask, dispatch cu_mask_for_partition / create_queue_set). That does not make this an unused ROCm lever. (1) Redline already binds and exercises queue_cu_{set,get}_mask; PartitionPolicy::None "
+    },
+    {
+      "lever": "libamd_comgr in-process code-object inspect (metadata walk + fatbin lookup + callback disasm)",
+      "slice": "codeobject",
+      "why_trimmed": "libamd_comgr is genuinely unused (repo-wide zero hits for amd_comgr/libamd_comgr/create_disassembly/lookup_code_object) and the claimed exports/APIs exist in /opt/rocm/core-7.14 (amd_comgr.h: FATBIN/EXECUTABLE ~345-420; create_disassembly_info L2453; disassemble_instruction L2510; lookup_code_object L2725; metadata_lookup L2160). That does not make it a high-value Redline lever.\n\nRedline already h"
+    },
+    {
+      "lever": "hipGraphAddEventRecordNode / hipGraphAddEventWaitNode (+ Exec*SetEvent)",
+      "slice": "hip_runtime",
+      "why_trimmed": "hipGraphAddEventRecordNode/WaitNode are real ROCm 7.14 APIs and truly absent from redline-hipgraph (zero matches in crate; redline_hipgraph.map only exports Memcpy/Memset/Host/ChildGraph as non-kernel Add* nodes). That unused fact is correct, but the value claim is inflated for a retained-PM4 runtime.\n\n(1) Missing exports do not create unresolved symbols under LD_PRELOAD: only exported names are i"
+    },
+    {
+      "lever": "HSA_ENABLE_INTERRUPT",
+      "slice": "env_knobs",
+      "why_trimmed": "HSA_ENABLE_INTERRUPT only toggles ROCr's internal g_use_interrupt_wait used by hsa_signal_wait_* / InterruptSignal host waits. Redline never calls those APIs on the hot path: CompletionSignal::wait_timeout and QueueSet::wait_signal(s) are pure host spin/yield loops on hsa_signal_load_scacquire (runtime.rs ~891-935, 1748-1800). Packet comments explicitly describe host-polled completion. hsa_amd_sig"
+    },
+    {
+      "lever": "HSA_ALLOCATE_QUEUE_DEV_MEM",
+      "slice": "env_knobs",
+      "why_trimmed": "HSA_ALLOCATE_QUEUE_DEV_MEM is a real ROCr process-global env flag (rocm-systems flag.h: GetEnvVar(\"HSA_ALLOCATE_QUEUE_DEV_MEM\") \u2192 dev_mem_queue_buf_) that only switches AqlQueue ring-buffer allocation from system_allocator to device finegrain/uncached memory at queue create (commit 3baaa6e; PR/issue ROCR#269). Redline does not set it and has no equivalent: AqlQueue::create uses plain hsa_queue_cre"
+    },
+    {
+      "lever": "HSA_SCRATCH_* / HSA_ENABLE_SCRATCH_* / HSA_NO_SCRATCH_* (scratch control cluster)",
+      "slice": "env_knobs",
+      "why_trimmed": "REFUTED as a useful lever for Redline / #6529. (1) Redline is zero-scratch by contract: pm4.rs/pm4_gfx10.rs fail closed on private_segment_size!=0 or dynamic_callstack; radiowave rejects ScratchMemory; real kernels certify private_segment_bytes=0. Hot path never touches queue private/scratch backing. (2) hsa_amd_agent_set_async_scratch_limit and HSA_SCRATCH_*/HSA_ENABLE_SCRATCH_*/HSA_NO_SCRATCH_* "
+    }
+  ],
+  "existence_refuted": [
+    {
+      "lever": "HSA_ENABLE_MWAITX",
+      "reason": "HSA_ENABLE_MWAITX is a real ROCr env string in /opt/rocm/core-7.14/lib/libhsa-runtime64.so (file off 0x34fd6; adjacent HSA_SIGNAL_WAIT_ABORT_TIMEOUT). Flag::Refresh GetEnvVars it and defaults enable unless value is exactly \"0\" (cmpb $0x30). Runtime ctor also defaults g_use_mwaitx=1 next to g_use_interrupt_wait. BusyWaitSignal::WaitRelaxed contains monitorx/mwaitx gated on that flag. BUT: (1) nm -D"
+    }
+  ],
+  "unverified_findings": [
+    {
+      "lever": "hsa_amd_agent_set_async_scratch_limit + SCRATCH_LIMIT_* agent info",
+      "slice": "hsa_symbols",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Tune per-agent async scratch reclaim threshold: permanent per-queue scratch vs use-once, and reclaim by lowering threshold (may block until in-flight scratch dispatches complete)."
+    },
+    {
+      "lever": "hsa_amd_agent_preload",
+      "slice": "hsa_symbols",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Force early init of clock-sync tables and blit kernel objects for a GPU agent so first real dispatch/copy does not pay lazy setup."
+    },
+    {
+      "lever": "hsa_amd_vmem_* (address_reserve[_align], handle_create/release, map/unmap, set/get_access)",
+      "slice": "hsa_symbols",
+      "value": "medium",
+      "effort": "large",
+      "callable_today": true,
+      "what_it_enables": "CUDA-style virtual memory: reserve VA, back with pool handles, map/unmap subranges, set per-agent access, export/import shareable/fabric handles. Stable VAs independent of physical backing."
+    },
+    {
+      "lever": "hsa_amd_signal_async_handler (+ hsa_amd_async_function)",
+      "slice": "hsa_symbols",
+      "value": "medium",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Register non-blocking completion callbacks on signals; schedule work on ROCr's event thread without a dedicated app waiter thread."
+    },
+    {
+      "lever": "hsa_amd_pointer_info",
+      "slice": "hsa_symbols",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Classify any pointer ROCr knows about: placement, owning agent, access set, VMEM vs pool vs IPC, alloc flags \u2014 without guessing from the allocator API used."
+    },
+    {
+      "lever": "hsa_amd_signal_value_pointer + hsa_amd_signal_get_event_id",
+      "slice": "hsa_symbols",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Map a signal handle to a raw pollable value pointer; recover the KFD event id backing interrupt signals."
+    },
+    {
+      "lever": "HSA_QUEUE_TYPE_COOPERATIVE (via queue create)",
+      "slice": "hsa_symbols",
+      "value": "low",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Create queues that may run cooperative kernels using global wave sync (GWS)."
+    },
+    {
+      "lever": "hsa_amd_agent_preload",
+      "slice": "vendor_headers",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Eager preload of agent clock-sync and blit kernels before first dispatch \u2014 removes first-touch latency from warm paths."
+    },
+    {
+      "lever": "hsa_amd_signal_get_event_id + amd_signal_t layout",
+      "slice": "vendor_headers",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Map HSA completion signals to KFD event IDs for correlation with drm/debugfs/KFD traces; optional direct cast of signal handle to amd_signal_t for mailbox/timestamps without extra API."
+    },
+    {
+      "lever": "Prefetch-metadata ring + amd_launch_descriptor_t (L2 prefetch / CU enable / gran limiter)",
+      "slice": "vendor_headers",
+      "value": "medium",
+      "effort": "large",
+      "callable_today": true,
+      "what_it_enables": "Per-dispatch metadata queue programming: CP-driven L2 tile prefetch before kernel, green-context CU slicing without hsa_amd_queue_cu_set_mask, occupancy cap via granularity limiter."
+    },
+    {
+      "lever": "hsa_system_get_major_extension_table \u2192 AMD_LOADER (0x201)",
+      "slice": "vendor_headers",
+      "value": "medium",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Resolve device VA\u2192host-accessible alias for loaded segments; enumerate loaded code objects/segments for a process \u2014 essential for offline PC\u2192symbol and ATT correlation without parsing ELF alone."
+    },
+    {
+      "lever": "AmdExtTable queue intercept (create/register) + runtime_queue_create_register",
+      "slice": "vendor_headers",
+      "value": "medium",
+      "effort": "large",
+      "callable_today": false,
+      "what_it_enables": "Intercept AQL packet streams (rewrite/observe before CP); global notifier on every queue create \u2014 hipGraph interposer could see foreign queues without LD_PRELOAD of hsa_queue_create alone."
+    },
+    {
+      "lever": "amd_queue_v2_t dual-scratch / async-reclaim observability",
+      "slice": "vendor_headers",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Read CP-updated scratch SRDs, alt-scratch path, per-XCC last-use indices, write/read_dispatch_id, queue_inactive_signal without extra syscalls."
+    },
+    {
+      "lever": "ToolsApiTable scratch alloc/free/async-reclaim event callbacks",
+      "slice": "vendor_headers",
+      "value": "low",
+      "effort": "large",
+      "callable_today": false,
+      "what_it_enables": "Callback-level trace of scratch grow/reclaim concurrent with dispatches (dispatch_id, size, num_slots, USE_ONCE/ALT flags)."
+    },
+    {
+      "lever": "AMDKFD_IOC_SMI_EVENTS (QUEUE_EVICTION / QUEUE_RESTORE)",
+      "slice": "thunk_kfd",
+      "value": "medium",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Anonymous event fd for VMFAULT, page-fault, migrate, and especially queue eviction/restore with trigger codes \u2014 same-process without root; all-process needs superuser."
+    },
+    {
+      "lever": "KFD_IOC_QUEUE_TYPE_COMPUTE + doorbell_offset",
+      "slice": "thunk_kfd",
+      "value": "medium",
+      "effort": "large",
+      "callable_today": true,
+      "what_it_enables": "Userspace PM4 ring with direct doorbell write \u2014 bypass AQL packet format and ROCr packet processors. SDMA queue types also available."
+    },
+    {
+      "lever": "AMDKFD_IOC_UPDATE_QUEUE + queue_priority/percentage",
+      "slice": "thunk_kfd",
+      "value": "low",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Live change of ring base/size, quantum percentage, and 16-level priority without destroy/recreate."
+    },
+    {
+      "lever": "AMDKFD_IOC_SET_CU_MASK",
+      "slice": "thunk_kfd",
+      "value": "low",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Per-queue CU bitmask at KFD level (same mechanism ROCr wraps as hsa_amd_queue_cu_set_mask)."
+    },
+    {
+      "lever": "drm_amdgpu_userq MQD (gfx11)",
+      "slice": "thunk_kfd",
+      "value": "low",
+      "effort": "large",
+      "callable_today": true,
+      "what_it_enables": "DRM userqueue create path with caller-supplied MQD blob (shadow/CSA/EOP VAs) \u2014 parallel to KFD queues, not a full HQD dword programming interface for COMPUTE_PGM_*."
+    },
+    {
+      "lever": "hsaKmtGetQueueInfo \u2192 HsaQueueInfo.UserContextSaveArea",
+      "slice": "thunk_kfd",
+      "value": "medium",
+      "effort": "large",
+      "callable_today": false,
+      "what_it_enables": "If callable, returns CSA pointer and header for a thunk-level queue id \u2014 direct path to post-preempt wave state."
+    },
+    {
+      "lever": "rocprofiler_configure_buffer_tracing_service(ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH)",
+      "slice": "profiling",
+      "value": "medium",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Async buffer of per-dispatch GPU start/end ns plus dispatch_info (agent, queue, kernel_id, dispatch_id). Tool path: rocprofv3 --kernel-trace."
+    },
+    {
+      "lever": "hsa_ven_amd_pcs_{iterate_configuration,create,start,stop,flush,destroy}",
+      "slice": "profiling",
+      "value": "medium",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Direct ROCr PC-sampling extension without loading rocprofiler-sdk; session create/start/stop/flush with client data-ready callback."
+    },
+    {
+      "lever": "aqlprofile_spm_create_packets / rocprofiler_spm_configure_* + ROCPROFILER_SPM_BETA_ENABLED",
+      "slice": "profiling",
+      "value": "medium",
+      "effort": "large",
+      "callable_today": true,
+      "what_it_enables": "Streaming performance monitor: high-rate counter time series (sclk-interval) with per-sample timestamps and optional dispatch_id, via either baked PM4 (aqlprofile) or SDK dispatch SPM service."
+    },
+    {
+      "lever": "rocprofiler_configure_dispatch_thread_trace_service + librocprof-trace-decoder",
+      "slice": "profiling",
+      "value": "medium",
+      "effort": "large",
+      "callable_today": true,
+      "what_it_enables": "Instruction-level Advanced Thread Trace (ATT) with SE shader data decoded via librocprof-trace-decoder; dispatch callback chooses which launches to trace."
+    },
+    {
+      "lever": "rocprofiler_configure_device_counting_service + rocprofiler_sample_device_counting_service",
+      "slice": "profiling",
+      "value": "medium",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Non-serializing, on-demand agent-wide PMC reads while the GPU runs\u2014no per-kernel barrier pairs."
+    },
+    {
+      "lever": "rocprofv3 --kfd-queue-trace / ROCPROFILER_BUFFER_TRACING_KFD_EVENT_QUEUE",
+      "slice": "profiling",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Timeline of KFD queue evict/restore (CWSR/SVM/TTM/suspend)\u2014not doorbell writes."
+    },
+    {
+      "lever": "rocprofv3-avail list/info {--pmc,--spm,--pc-sampling,--spm-config}",
+      "slice": "profiling",
+      "value": "low",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Read-only inventory of which counters, SPM configs, and PC-sampling methods the installed driver/agent actually expose before wiring redline-observe."
+    },
+    {
+      "lever": "amd-dbgapi wave PC/SGPR/exec read API (attach + stop required)",
+      "slice": "debug_stack",
+      "value": "medium",
+      "effort": "large",
+      "callable_today": true,
+      "what_it_enables": "Programmatic stop-the-world inspection of wave architectural state (PC proves where waves actually execute; SGPRs hold values loaded from USER_DATA at wave launch). Useful for a custom #6529/fault harness or watchpoints on suspect host buffers."
+    },
+    {
+      "lever": "WAVE_STOP / packet_list AQL-only; PM4 queue type enum exists but unsupported",
+      "slice": "debug_stack",
+      "value": "medium",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Confirms debug stack can see waves on Redline's actual queue type (AQL). Pure PM4 OS queues (type 257) are a dead end for wave debug. queue_packet_list can dump AQL ring bytes (read/write packet ids) for hang diagnosis."
+    },
+    {
+      "lever": "Precise memory / precise ALU exception mode (dbgapi + debug-agent)",
+      "slice": "debug_stack",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "When a memory violation stop is catchable, better correlation of PC to the load that touched VA 0 vs a later insn."
+    },
+    {
+      "lever": "amd_queue_t / amd_queue_v2_t extended queue shared memory (unused by Redline)",
+      "slice": "debug_stack",
+      "value": "medium",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Host-side read of CP-visible queue control block: doorbell/dispatch ids, scratch RSRC + backing VA/size, apertures, inactive signal, trap-handler enable bits \u2014 without KFD. Observability for scratch exhaustion and async reclaim; possible correlation if #6529 is retirement/reuse of queue-adjacent BOs."
+    },
+    {
+      "lever": "HSA_ENABLE_DEBUG=1 for dispatch/workgroup association on late attach",
+      "slice": "debug_stack",
+      "value": "low",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Richer debug-agent/rocgdb/dbgapi dumps (which dispatch/packet a wave belongs to) even if tool attaches after queues already launched."
+    },
+    {
+      "lever": "rocgdb interactive GPU debugger (PTRACE + dbgapi backend)",
+      "slice": "debug_stack",
+      "value": "low",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Interactive breakpoints/watchpoints/wave inspection for HIP/AQL apps. Manual #6529 sessions if fault can be caught as wave memory violation under debugger (CU mask off)."
+    },
+    {
+      "lever": "Process freeze + PROCESS_INFO_CORE_STATE GPU coredump blob",
+      "slice": "debug_stack",
+      "value": "low",
+      "effort": "large",
+      "callable_today": true,
+      "what_it_enables": "Offline GPU+CPU core for post-mortem wave/register state via another dbgapi instance. Still wave-centric state, not MQD SH shadows."
+    },
+    {
+      "lever": "Dispatch info kernel_descriptor / code_entry addresses (AQL-centric)",
+      "slice": "debug_stack",
+      "value": "low",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Verify what CP was told for AQL dispatches (non-zero code entry). For Redline retained PM4, dispatches are not AQL kernel packets \u2014 association may be absent or not reflect SET_SH_REG elided state."
+    },
+    {
+      "lever": "amd_comgr_hotswap_rewrite (load-time ISA rewrite)",
+      "slice": "codeobject",
+      "value": "low",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Ship one HSACO and patch at load for a different stepping/family when comgr supports that pair\u2014without recompiling."
+    },
+    {
+      "lever": "libhiprtc runtime compile \u2192 HSACO bytes (optional radiowave/JIT path)",
+      "slice": "codeobject",
+      "value": "medium",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "In-process HIP\u2192code-object without shelling hipcc; bitcode link for multi-TU recipes; pair with redline-rocr's existing HSA load + unwrap_clang_offload_bundle."
+    },
+    {
+      "lever": "librocjitsu C API: code decode/disasm/translate + functional GPU VM",
+      "slice": "codeobject",
+      "value": "medium",
+      "effort": "large",
+      "callable_today": true,
+      "what_it_enables": "Offline functional simulation of AMDGPU code objects (incl. KD translation across arches) and instruction-level decode without llvm-objdump\u2014potential software CI oracle for PM4/kernel correctness when no GPU or for arch portability experiments."
+    },
+    {
+      "lever": "amd_comgr compile-action env knobs (cache/VFS/save-temps/driver-append)",
+      "slice": "codeobject",
+      "value": "low",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Faster repeated comgr compiles, dump intermediates, inject -mllvm flags without code changes when using comgr/hiprtc."
+    },
+    {
+      "lever": "Legacy amd_hsa_kernel_code.h / amd_hsa_elf.h as layout reference (not a new runtime dep)",
+      "slice": "codeobject",
+      "value": "low",
+      "effort": "small",
+      "callable_today": false,
+      "what_it_enables": "Cross-check field offsets if KD evolves; note-type constants for richer ELF note walks if not using comgr metadata API."
+    },
+    {
+      "lever": "hipGraphInstantiateWithFlags / hipGraphInstantiateWithParams",
+      "slice": "hip_runtime",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Alternate instantiate entry points (flags / params struct with upload stream). On current ROCm, WithFlags is documented as behaving like plain Instantiate."
+    },
+    {
+      "lever": "hipDeviceGetAttribute (dispatch-relevant attrs)",
+      "slice": "hip_runtime",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Query CU/WGP counts, physical CU count, cooperative-launch support, and stream wait-value support without linking ROCm \u2014 dlopen the same libamdhip64 already opened by the interposer."
+    },
+    {
+      "lever": "hipExtStreamCreateWithCUMask / hipExtStreamGetCUMask",
+      "slice": "hip_runtime",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Create HIP streams restricted to a CU bitmask and query that mask \u2014 HIP-level analogue of hsa_amd_queue_cu_set_mask."
+    },
+    {
+      "lever": "hipStreamWaitValue32/64 + hipStreamWriteValue32/64 + hipGraphAddBatchMemOpNode",
+      "slice": "hip_runtime",
+      "value": "medium",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Device-side memory fences/producer-consumer sync without host events; graph-native batch of wait/write ops (max 256 ops)."
+    },
+    {
+      "lever": "hipFuncGetAttribute / hipFuncGetAttributes",
+      "slice": "hip_runtime",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Query per-function register, shared, and local memory footprints from the HIP runtime for a hipFunction_t."
+    },
+    {
+      "lever": "hipModuleLaunchCooperativeKernel / hipLaunchCooperativeKernel + hipKernelNodeAttributeCooperative",
+      "slice": "hip_runtime",
+      "value": "medium",
+      "effort": "medium",
+      "callable_today": true,
+      "what_it_enables": "Grid-wide cooperative launches and marking graph kernel nodes as cooperative so the runtime guarantees concurrent residency."
+    },
+    {
+      "lever": "hipGraphDebugDotPrint",
+      "slice": "hip_runtime",
+      "value": "low",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Dump a hipGraph_t to Graphviz DOT including kernel params and handles \u2014 shipped observability for graph topology."
+    },
+    {
+      "lever": "HSA_ENABLE_DEBUG",
+      "slice": "env_knobs",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Enables ROCr debug/trap-handler mode so wavefronts retain dispatch/workgroup identity for amd-dbgapi even when the debugger was not attached at launch. Slightly changes wave launch path."
+    },
+    {
+      "lever": "HSA_ENABLE_VM_FAULT_MESSAGE + HSA_ENABLE_QUEUE_FAULT_MESSAGE",
+      "slice": "env_knobs",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Turns on ROCr logging for VM faults and queue async error inactivation\u2014surfaces faulting address and queue handle when CP raises memory exceptions."
+    },
+    {
+      "lever": "HSA_MAX_QUEUES + HSA_COUNTED_QUEUE_SIZE",
+      "slice": "env_knobs",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "HSA_MAX_QUEUES caps how many HSA queues ROCr will create process-wide. HSA_COUNTED_QUEUE_SIZE sets the ring size used when acquiring counted (shared HW) queues."
+    },
+    {
+      "lever": "AMD_DIRECT_DISPATCH",
+      "slice": "env_knobs",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "HIP CLR switch for 'direct dispatch' mode (reported in HIP version banner). Selects how HIP maps software queues onto HSA HW queues and whether launches take the direct AQL path vs more mediated scheduling."
+    },
+    {
+      "lever": "DEBUG_CLR_DOORBELL_SKIP",
+      "slice": "env_knobs",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "CLR debug knob that skips or alters doorbell ringing on the HIP/ROCclr queue path (name + adjacency to AQL queue size / block-sync knobs)."
+    },
+    {
+      "lever": "ROC_AQL_QUEUE_SIZE",
+      "slice": "env_knobs",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Sets the HSA AQL ring size HIP uses when creating underlying hardware queues for streams/graphs."
+    },
+    {
+      "lever": "DEBUG_HIP_FORCE_GRAPH_QUEUES + DEBUG_HIP_GRAPH_BATCH_SIZE + DEBUG_HIP_GRAPH_SEGMENT_SCHEDULING",
+      "slice": "env_knobs",
+      "value": "medium",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Forces/tunes hipGraph's internal queue assignment, batching, and segment scheduling\u2014how graph launches map onto HW queues and how large a batch CLR submits before host sync."
+    },
+    {
+      "lever": "HIP_FORCE_DEV_KERNARG + ROC_SKIP_KERNEL_ARG_COPY + ROC_USE_FGS_KERNARG + HSA_KERNARG_POOL_SIZE",
+      "slice": "env_knobs",
+      "value": "low",
+      "effort": "small",
+      "callable_today": true,
+      "what_it_enables": "Forces device-side kernargs, skips host\u2192device kernarg copies, uses fine-grained system kernarg pools, and sizes HIP's HSA kernarg pool."
+    }
+  ],
+  "caveats": [
+    "One verifier (exists:HSA_ALLOCATE_QUEUE_DEV_MEM) did not return; that lever carries a single-lens verdict only.",
+    "The 39 medium and 15 low findings from the mining pass were NOT adversarially verified. They are recorded under unverified_findings and must not be treated as confirmed.",
+    "Scouts were read-only and did not dispatch GPU work; no lever was empirically benchmarked."
+  ]
+}

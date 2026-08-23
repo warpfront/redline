@@ -412,6 +412,271 @@ errors. Python converts those failures to exceptions. Do not suppress a
 certification or compilation error and continue with a partially constructed
 retained object.
 
+### Retained PM4 IB size ceiling
+
+One retained PM4 IB holds at most **1,048,575 dwords** (20-bit PM4
+`INDIRECT_BUFFER` size field). Finalize fails closed with
+`RL_ERR_COMPILE` and a stderr diagnostic when a recording exceeds that
+ceiling; split long graphs across multiple IBs rather than packing more
+dispatches into one buffer.
+
+Measured density on a **gfx1201** card with a single-kernel counter shape
+(`crates/redline-capi/examples/gpu_smoke.c`, N atomic-increment dispatches
+in one retained IB):
+
+| `REDLINE_PM4_FULL_STATE` | Measured dwords/dispatch | Implied ceiling | Largest observed PASS | Observed FAIL |
+| --- | --- | --- | --- | --- |
+| `0` (default, SH-elided) | 18.0 | ~58,200 dispatches | 52,000 | 60,000 (1,080,028 dwords) |
+| `1` (full state per dispatch) | 47.0 | ~22,300 dispatches | 20,000 | 26,000 (1,221,998 dwords) |
+
+Densities are exact: the diagnostic reports the recorded dword count, so
+60,000 elided dispatches measured 1,080,028 dwords and 26,000 full-state
+dispatches measured 1,221,998. Full state costs **2.61x** the stream, so it
+cuts the dispatches that fit in one IB by roughly the same factor. These
+numbers are shape-dependent — a kernel with more kernarg words or a different
+dependency pattern shifts them — so treat the implied ceiling as guidance and
+the fail-closed diagnostic as the authority. Long decode graphs must be split
+across IBs.
+
+## Device-anchored GPU selection
+
+ROCr/KFD enumerate GPUs in discovery order. `rocm-smi` sorts by PCI bus. The
+same physical card therefore has different indices in different tools, and an
+ordinal copied from the wrong tool can open the wrong device.
+
+Measured on **hipx** (four agents):
+
+| Physical device | BDF | ROCr index | rocm-smi | Anchor |
+| --- | --- | --- | --- | --- |
+| gfx1100 | `0000:66:00.0` | 0 | | `uuid:GPU-43390a851e296ee5` |
+| gfx1151 Strix Halo APU | `0000:bf:00.0` | **1** | **GPU[3]** | `bdf:0000:bf:00.0` (no UUID) |
+| gfx1010 | `0000:6e:00.0` | 2 | | `bdf:0000:6e:00.0` (no UUID) |
+| gfx1030 | `0000:99:00.0` | 3 | | `uuid:GPU-c7ff6b154d0128bc` |
+
+On hipx, `rocm-smi GPU[3]` is ROCr index 1 — the integrated APU. A device reset
+on that APU takes the whole host down. Two of the four GPUs report no UUID and
+must be BDF-anchored. On **hiptrx**, four identical `gfx1201` boards sit at
+`0000:03/c3/e3/13:00.0`; any `name:gfx1201` selector is ambiguous.
+
+### Anchor rule
+
+Pin with **UUID when the device reports one, else PCI address (BDF). Never an
+index.** BDF is the join key across ROCr, HIP, sysfs, rocm-smi, and `amdgpu`
+fault lines in dmesg — which is what lets a dmesg VM-fault line be attributed
+to a specific benchmark row.
+
+### Selector grammar
+
+| Form | Example | Stability / refusal |
+| --- | --- | --- |
+| `uuid:` | `uuid:GPU-43390a851e296ee5` | Stable when the device reports a real UUID (not `GPU-XX`) |
+| `bdf:` | `bdf:0000:66:00.0` or short `bdf:66:00.0` (domain 0) | Stable PCI address; preferred when UUID is absent |
+| `slot:` | `slot:3` | Host PCI slot label; refused when the host has no slot labels |
+| `name:` | `name:gfx1100` | Product/ISA name; refused when more than one agent matches |
+| `index:` | `index:1` | Volatile ROCr discovery ordinal under the current visibility filter |
+| `@alias` | `@dev0` | Expands through the [host manifest](#host-manifest); refused if undefined |
+
+Unprefixed input is a hard error. Prefer `uuid:` / `bdf:` / `@alias` in engine
+config; keep `index:` for throwaway local smoke only.
+
+### C API
+
+```c
+RlGpu *gpu = rl_gpu_open("uuid:GPU-43390a851e296ee5");
+if (!gpu) {
+    /* stderr already has one redline: … diagnostic */
+    return 1;
+}
+
+char desc[256];
+rl_gpu_describe(gpu, desc, sizeof(desc));
+/* e.g. "gfx1100 0000:66:00.0 [uuid:GPU-43390a851e296ee5] card0 …" */
+
+/* … load / build / replay … */
+
+rl_gpu_free(gpu);
+```
+
+`rl_gpu_new(ordinal)` still works but is volatile-by-index: the ordinal is
+discovery order under the current `ROCR_VISIBLE_DEVICES` filter and is not
+stable across tools or reboots. Both entry points enforce the host deny-list.
+
+### Host manifest
+
+Aliases and the deny-list live in a TOML manifest. Format and real host entries:
+[`docs/devices.toml.example`](devices.toml.example). Minimal shape:
+
+```toml
+[host.hipx]
+dev0 = "uuid:GPU-43390a851e296ee5"
+deny = ["bdf:0000:bf:00.0"]  # Strix Halo APU: device reset takes the host down
+```
+
+Discovery order (later overrides earlier for the same alias / deny list):
+
+1. `/etc/redline/devices.toml`
+2. `$XDG_CONFIG_HOME/redline/devices.toml` (else `~/.config/redline/devices.toml`)
+3. `.redline/devices.toml` walking up from cwd
+
+The active section is `[host.<hostname>]`, overridable with `REDLINE_HOST`.
+`deny` is evaluated on the **resolved device**, so no selector form
+(`uuid:` / `bdf:` / `slot:` / `name:` / `index:` / `@alias`) can bypass it. The
+trailing `#` comment on a deny entry is quoted back in the error.
+
+### Why danger is not auto-detected
+
+Both candidate sysfs signals were measured on hipx; both fail:
+
+- the APU's KFD node reports `cpu_cores_count=0` exactly like the discrete cards;
+- every node reports `heap_type=1` because the APU's 96 GiB unified memory
+  presents as public framebuffer.
+
+There is therefore no integrated / is-dangerous bit in device identity. The
+deny-list is the only guard, and it is human-written.
+
+### Listing devices
+
+Read-only inventory (no queues, no dispatch — safe on a busy machine):
+
+```bash
+cargo run -p redline-rocr --example device_list
+```
+
+Worked example from **hipx**:
+
+```text
+host hipx: 4 GPU agent(s)
+  [0] gfx1100 0000:66:00.0 [uuid:GPU-43390a851e296ee5] card0 kfd_node=1 rocr#0(volatile)
+  [1] gfx1151 0000:bf:00.0 [bdf:0000:bf:00.0] card1 kfd_node=2 rocr#1(volatile)
+  [2] gfx1010 0000:6e:00.0 [bdf:0000:6e:00.0] slot=1 card2 kfd_node=3 rocr#2(volatile)
+  [3] gfx1030 0000:99:00.0 [uuid:GPU-c7ff6b154d0128bc] slot=3 card3 kfd_node=4 rocr#3(volatile)
+```
+
+Copy the bracketed anchor (`uuid:…` or `bdf:…`) into engine config or the host
+manifest. Do not copy the leading `[N]` ordinal.
+
+
+## ROCm/ROCm#6529 contention A/B
+
+**Honest scope.** The harness in
+[`scripts/6529-contention-ab.sh`](../scripts/6529-contention-ab.sh) is a
+**probability-shifting stress tool**, not a deterministic reproducer. A clean
+matrix **cannot prove absence** of the gfx1100 address-zero SQC fault. Use it
+only to raise or lower confidence in the mid-IB CWSR/MCBP × SH-register
+elision hypothesis described in
+`docs/investigations/2026-07-31-rocm-6529-address-zero-sqc-fault.md`.
+
+### What the script does
+
+On a pinned ROCr device it sweeps:
+
+- `REDLINE_PM4_FULL_STATE={0,1}` (stateful SH elision vs full state per
+  dispatch), and
+- a second independent HIP process
+  ([`bench/contention_load.hip`](../bench/contention_load.hip)) on or off,
+
+for `R` repetitions of `hipfire-6409-bench` (default filter:
+`serial_latency`). Each cell records exit status, stderr, and any new
+`amdgpu` / `VM_L2_PROTECTION_FAULT` / `SQC` / `MES` dmesg lines. Results land
+under `examples/hipfire-6409/results/<arch>/6529-contention-ab-<UTC>/`.
+
+`ROCR_VISIBLE_DEVICES` is required. `HIP_VISIBLE_DEVICES` is a CLR filter and
+does not affect HSA enumeration, so an unpinned two-card host may bind the
+wrong GPU.
+
+The script refuses non-gfx11 agents unless `--force` is passed (local harness
+smoke only). It never runs `modprobe` and never reboots.
+
+### Bench flags (cited)
+
+Binary: `hipfire-6409-bench`
+([`examples/hipfire-6409/Cargo.toml`](../examples/hipfire-6409/Cargo.toml)
+package name). Parsed in
+[`examples/hipfire-6409/src/main.rs`](../examples/hipfire-6409/src/main.rs):
+
+| Flag / env | Line(s) |
+| --- | --- |
+| `--out` | 1021 |
+| `--warmups` | 1022 |
+| `--samples` | 1023 |
+| `--filter` | 1024 (substring match on row key; 210–213) |
+| `--max-rows` | 1025–1030 (truncates after filter; 216–217) |
+| `--backends` | 1094–1096 (subsets must include redline **and** vulkan; 1283–1284) |
+| `--matrix` | 1098–1102 |
+| `HIPFIRE_BENCH_ARCH` | 1007–1008 |
+
+There is **no** start-row / end-row / row-index-range flag. Subset a matrix
+with `--filter` and/or `--max-rows` only, or pass extra args after `--`.
+
+### Manual module-parameter A/Bs
+
+These require a reboot or `amdgpu` module reload. The script only **records**
+the live values of `/sys/module/amdgpu/parameters/{cwsr_enable,mcbp}`.
+
+1. **CWSR off vs on** (primary preemption gate):
+
+   ```text
+   # kernel cmdline (persistent):
+   amdgpu.cwsr_enable=0
+
+   # or modprobe.d:
+   # /etc/modprobe.d/amdgpu-cwsr.conf
+   options amdgpu cwsr_enable=0
+   ```
+
+   Then reboot (or unload all DRM clients and `modprobe -r amdgpu &&
+   modprobe amdgpu`). Re-run the contention script. Repeat with
+   `cwsr_enable=1`.
+
+   **Side effects:** `cwsr_enable=0` disables the GPU debugger (ROCgdb /
+   wave-level debug) and can change scheduling for other compute workloads on
+   the node. Treat it as a lab-only toggle.
+
+2. **MCBP — a control, not a probe.** `amdgpu.mcbp=-1` (the default, and the
+   value on the faulting host) leaves `adev->gfx.mcbp` false on any
+   non-SR-IOV system: `amdgpu_device_set_mcbp` only forces the flag on for
+   `mcbp=1` or an SR-IOV VF (`amdgpu_device.c:3632-3643`). Setting `mcbp=0`
+   therefore changes nothing on a bare-metal host. MCBP also governs the
+   **graphics ring** mux and `IB_FLAG_PREEMPT`, not the KFD compute HQD/MES
+   path that retained PM4 IBs execute on.
+
+   ```text
+   # kernel cmdline — expected to be a no-op on bare metal; run it only to
+   # confirm the null result, not as a hypothesis test:
+   amdgpu.cwsr_enable=1 amdgpu.mcbp=0
+   ```
+
+   The informative second arm is **contention**, not MCBP: MES quantum
+   switching (10 ms process / 1 ms gang quanta, programmed on every
+   `add_queue_mes`) can preempt a long retained IB with no eviction event at
+   all, which is why the script sweeps contention on/off.
+
+Interpretation sketch (still probabilistic): faults that track
+`cwsr_enable=1` under contention, and drop with `REDLINE_PM4_FULL_STATE=1`,
+support the SH-elision x mid-IB preemption story. Absence of faults does not
+clear the bug.
+
+### Example
+
+```bash
+export PATH=/opt/rocm/core/bin:/opt/rocm/core/lib/llvm/bin:$PATH
+export ROCM_PATH=/opt/rocm/core HIP_PATH=/opt/rocm/core
+
+cd examples/hipfire-6409
+HIPFIRE_BENCH_ARCH=gfx1100 cargo build --release --bin hipfire-6409-bench \
+  --target-dir target/gfx1100
+
+cd ../..
+ROCR_VISIBLE_DEVICES=0 scripts/6529-contention-ab.sh \
+  --bench examples/hipfire-6409/target/gfx1100/release/hipfire-6409-bench \
+  --arch gfx1100 \
+  --reps 5 \
+  --filter serial_latency \
+  --max-rows 32 \
+  --warmups 1 --samples 3
+```
+
+
 ## Distribution and publishing
 
 ### Available now
