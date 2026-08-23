@@ -233,67 +233,82 @@ with straightforward 4 KiB VMM use.
 
 ## 3. COMMENT on `ROCm/ROCm#6603` — two HIP-level mechanisms ruled out
 
-**Target:** `ROCm/ROCm#6603` (open, 8 comments, no AMD engagement as of 2026-08-16).
+**Target:** `ROCm/ROCm#6603`. Rechecked 2026-08-23: OPEN, **9 comments**, opening
+post **rewritten by the reporter on 2026-08-20**, still **zero AMD engagement**.
+Note the umbrella repo has been renamed to `ROCm/legacy-rocm-build`; issue URLs
+still resolve.
+
+**Draft revised 2026-08-23.** An earlier revision of this comment argued from the
+allocation-failure/retry path, because the original report tied corruption to the
+first `num_alloc_retries`. **The reporter has since withdrawn that claim**: the
+rewritten OP records failure at cycle 113–114 with `num_alloc_retries` still
+**0**. Posting the old framing would have argued against a retracted claim. The
+other withdrawn claims are `expandable_segments` alone being sufficient, a
+75–80% rate, and 20 MiB of damage.
 
 ### Body
 
-Thanks to @doplxyz for the minimal canary reproducer and @Only8Bits for the
-gfx1100 confirmation — the fact that it needs **both** `max_split_size_mb` and
-`expandable_segments:True`, and that ROCm 7.2 is clean while 7.14 is not, is the
-most useful pair of constraints in the thread.
+Thanks to @doplxyz for the rewritten writeup and the evidence repo, and to
+@Only8Bits for the gfx1100 confirmation. The normalized matrix — same base image
+and script, torch **2.12.0** held constant, 0/10 corrupt on ROCm 7.2 versus
+10/10 on 7.14 — is the strongest constraint in the thread, because it isolates
+the delta to ROCm userspace rather than the framework.
 
-I tried to reproduce the silent zeros at the HIP level, with PyTorch removed
-from the loop entirely, and could not. Two candidate mechanisms are now ruled
-out, which I think is worth recording so nobody re-derives them.
+I tried to reproduce the silent zeros at the HIP level with PyTorch removed
+entirely, and could not. Two candidate mechanisms are ruled out, which is worth
+recording so nobody re-derives them.
 
-**1. Plain expandable-segment churn does not corrupt a live mapping.**
+**1. Expandable-segment churn alone does not corrupt a live mapping.**
 
 A pure-HIP model of an expandable segment: one reserved VA range, handles mapped
-into it, a canary written **once** into an early chunk and never rewritten, then
-repeated cycles of growth, strided unmap/release of other handles, and remapping
-different handles at the same offsets (VA reuse). The canary is read back every
-cycle. On gfx1201 / ROCm 7.14.0:
+into it, a 2 MiB canary written **once** into an early chunk and never rewritten,
+then repeated cycles of growth, strided unmap/release of *other* handles, and
+remapping different handles at the same offsets (VA reuse). The canary is read
+back every cycle. On gfx1201 / ROCm 7.14.0:
 
-| Arm | Working set | Cycles | Retries | Canary |
-| --- | --- | --- | --- | --- |
-| A (default `ulimit -n`) | 1.98 GiB (FD-capped) | 120 | 120 | intact |
-| B (`ulimit -n 65536`) | 19.07 GiB | 120 | 0 | intact |
-| C (`ulimit -n 262144`) | 30.83 GiB (96.9% of VRAM) | 150 | 0 | intact |
+| Arm | Working set | Cycles | Canary |
+| --- | --- | --- | --- |
+| A | 1.98 GiB | 120 | intact |
+| B | 19.07 GiB | 120 | intact |
+| C | 30.83 GiB (96.9% of VRAM) | 150 | intact |
 
-Arm A is the interesting one, because it forces the allocation-failure/retry
-path on every cycle — which is where the report says corruption begins — and the
-canary still survived 120 consecutive retries.
+Arm C is the closest to the reported conditions — near-full VRAM, well past the
+cycle count at which the canary dies upstream — and it stayed bit-exact. So
+map/unmap/VA-reuse churn by itself is not sufficient.
 
 **2. A rejected `hipMemSetAccess` has no side effect on live data.**
 
-Because `max_split_size_mb` is required to trigger this, sub-granularity ranges
-seemed like a promising lead: `hipMemSetAccess` rejects any range whose offset or
-length is not a multiple of the mapped handles' granularity (see table in the
-`rocm-systems#9360` discussion). If a rejected call were partially applied, it
-could revoke access on a region that had been written correctly, which would
-read back as zeros rather than faulting — exactly the reported symptom.
+Because `max_split_size_mb:128` specifically is required to trigger this,
+sub-granularity ranges looked like a promising lead: `hipMemSetAccess` rejects
+any range whose offset or length is not a multiple of the mapped handles'
+granularity. If a rejected call were *partially applied*, it could revoke access
+on a correctly written region, which would read back as zeros rather than
+faulting — exactly the reported symptom, including zeros starting at offset 0.
 
 It does not. I wrote a pattern across four mapped handles, verified it, then
-issued five different rejected `hipMemSetAccess` calls (unaligned offset,
-straddling, short length, half length, 4 KiB slice) and re-verified after each.
-Every rejected call returned `invalid argument` and left the data bit-exact, and
-a subsequent valid whole-range call still succeeded. The call behaves atomically.
+issued five different rejected calls (unaligned offset, straddling, short length,
+half length, 4 KiB slice) and re-verified after each. Every one returned
+`invalid argument` and left the data bit-exact, and a following valid whole-range
+call still succeeded. The call is atomic.
 
-**Where that leaves it.** The mechanism does not appear to be VMM map/unmap
-churn or failed access-setting at the HIP level, which shifts suspicion toward
-the caching allocator's own expandable-segment bookkeeping — consistent with the
-observation that the allocator trace shows no unmap of the live canary range.
+**Where that leaves it.** Neither VMM churn nor failed access-setting explains it
+at the HIP level, which is consistent with the reporter's own finding that the
+allocator trace shows no unmap of the live canary range.
 
-One note on a possibly-relevant confound: HIP VMM handle count is limited by the
-process file-descriptor limit (~2 GiB of VMM at the default `ulimit -n 1024`;
-see the separate `rocm-systems` issue). If the allocator's `num_alloc_retries`
-are being driven by descriptor exhaustion rather than VRAM pressure, the retry
-path may be entered far earlier than expected, and raising `ulimit -n` is worth
-testing as a variable in the reproducer.
+### An offer that might narrow the version window
 
-I have gfx1100/gfx1151/gfx1010/gfx1030/gfx1201 on ROCm 7.14 and can run further
-arms, including a 7.2-vs-7.14 bisect using TheRock nightly wheels in a venv, if
-that would help isolate the version boundary.
+The 7.2-good / 7.14-bad boundary is wide. A tighter bisect is available but not
+the way it might appear: TheRock's multi-arch indexes **do not publish any
+7.2-series build** — the oldest retained artifact is `7.13.0a20260425`, and the
+stable channel carries only `7.13.0`, `7.14.0` and `7.14.0.post1`. So 7.2 has to
+come from classic OS packages, but **7.13.0 versus 7.14.0 can be A/B'd today**
+from `repo.amd.com` wheels in two venvs, without disturbing a system ROCm.
+
+If the canary is clean on 7.13.0 and dies on 7.14.0, the regression is confined
+to that one release window; if it already dies on 7.13.0, the window moves
+earlier and 7.2-vs-7.13 becomes the question. Either outcome is a real
+narrowing, and I have not seen it done in the thread. I have gfx1201 (two
+boards) and gfx1100/gfx1151/gfx1010/gfx1030 available on 7.14 and can run it.
 
 ---
 
