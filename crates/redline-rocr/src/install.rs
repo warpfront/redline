@@ -1118,9 +1118,8 @@ pub fn toolchain_warnings(toolchain: &RocmToolchain) -> Vec<String> {
             comp_version
         ),
         "  mixing runtime and compiler from different roots can fail if versions diverge; set REDLINE_ROCM_STRICT=1 to require a single coherent root, or set REDLINE_HIPCC to pin the compiler explicitly".to_string(),
-        format!(
-            "  see AMD install selector for your GPU/OS/version: https://rocm.docs.amd.com/en/latest/install/rocm.html"
-        ),
+        "  see AMD install selector for your GPU/OS/version: https://rocm.docs.amd.com/en/latest/install/rocm.html"
+            .to_string(),
     ]
 }
 
