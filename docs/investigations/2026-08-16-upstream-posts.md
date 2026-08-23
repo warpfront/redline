@@ -3,18 +3,22 @@
 
 # Ready-to-post upstream drafts — updated 2026-08-23
 
-Three drafts, each backed only by measurements taken on this fleet. Nothing here
-is inference or extrapolation; every number below was produced by a probe in
-this document. Post order is by value-per-effort: (1) is new and unreported,
-(2) prevents a fleet-wide regression, (3) narrows an unengaged corruption bug.
+Five drafts, each supported by measurements taken on this fleet. Numeric
+observations below come from those fleet measurements; where a mechanism is
+interpreted from the observations, the interpretation is identified as such and
+scoped to the probes' conditions. Post order is by value-per-effort: (1) is new
+and unreported, (2) prevents a fleet-wide regression, (3) narrows an unengaged
+corruption bug.
 
-Measurement environment for all three:
+Measurement environment for all probes in this document:
 
 | Host | GPUs | ROCm | Kernel |
 | --- | --- | --- | --- |
 | local | 1x gfx1201 (RX 9070 XT) | 7.14.0 (`/opt/rocm/core-7.14`) | 7.0.0-28 |
 | hiptrx | 4x gfx1201 (Radeon AI PRO R9700, 32 GiB) | 7.14.0 | 7.0.0-28 |
 | hipx | gfx1100 (RX 7900 XTX), gfx1151 (Strix Halo), gfx1010 (RX 5700 XT), gfx1030 (RX 6950 XT) | 7.14.0 | 7.0.0-29 |
+
+DRM 3.64.0 on all hosts. Soft `RLIMIT_NOFILE` 1024 / hard 524288 unless otherwise noted.
 
 ---
 
@@ -26,88 +30,157 @@ Measurement environment for all three:
 
 ### Body
 
-`hipMemCreate` consumes **one dmabuf file descriptor per allocation handle**, so
-the total amount of memory reachable through the HIP virtual-memory-management
-API is bounded by `RLIMIT_NOFILE` rather than by available VRAM. With the
-common default of `ulimit -n 1024`, a process can map roughly 2 GiB of VMM on a
-32 GiB card.
+With 2 MiB physical handles and the stock 1024 soft `RLIMIT_NOFILE`, available
+descriptor slots cap the process before VRAM does. In general the bound is the
+smaller of physical memory and (available descriptor slots x physical
+allocation-handle size): whichever is exhausted first determines how many handles
+can be successfully created.
 
-**The failure is reported as `hipErrorOutOfMemory` while ~30 GiB of VRAM is
-still free**, which is what makes this hard to diagnose: every signal points at
-the GPU being full when the exhausted resource is actually descriptors.
+**The failure is reported as `hipErrorOutOfMemory` while gigabytes of VRAM remain
+free**, which is what makes this hard to diagnose: every signal points at the
+GPU being full when the exhausted resource is actually descriptors.
 
-Measured across four architectures under ROCm 7.14.0, recommended granularity
-2 MiB on all of them, with virtual address space pre-reserved so VA is never the
-limit. The ceiling is **identical on every card while VRAM varies six-fold**,
-which is what identifies the descriptor budget rather than memory as the
-constraint:
+Measured across four architectures under ROCm 7.14.0, recommended allocation
+granularity 2 MiB on all of them, with virtual address space pre-reserved so VA
+is never the limit. All numbers below are from a corrected probe that
+distinguishes descriptor exhaustion from VRAM exhaustion by direct observation.
+For descriptor-bound rows the evidence is that `opendir("/proc/self/fd")` itself
+fails with `EMFILE` at the same point `hipMemCreate` returns
+`hipErrorOutOfMemory` — the process has no descriptor slots left. Memory-bound
+rows instead show free VRAM near zero with hundreds of FD slots still available.
+This direct `EMFILE` observation is the strongest single fact in the report.
 
-| Arch | GPU | VRAM free | Handles at `ulimit -n 1024` | Reachable | % of VRAM | First failure |
-| --- | --- | --- | --- | --- | --- | --- |
-| gfx1030 | RX 6950 XT | 15.96 GiB | 1015 | 1.98 GiB | 12.4% | `out of memory` |
-| gfx1100 | RX 7900 XTX | 23.95 GiB | 1015 | 1.98 GiB | 8.3% | `out of memory` |
-| gfx1151 | Strix Halo (APU) | **95.84 GiB** | 1015 | 1.98 GiB | **2.1%** | `out of memory` |
-| gfx1201 | Radeon AI PRO R9700 | 31.79 GiB | 1015 | 1.98 GiB | 6.2% | `out of memory` |
+Chunk-size sweep at the stock soft limit (1024), per architecture.
+`successfully created physical-handle bytes` is `handles x chunk size`; the
+probe loops on `hipMemCreate` only and does not reserve, map, set access, or
+touch memory, so this is strictly handle-creation capacity, not mapped-or-touched
+bytes.
 
-Raising the soft limit lifts it to the whole card on every arch tested:
+**gfx1030 — RX 6950 XT, 15.96 GiB free:**
 
-| Arch | `ulimit -n` raised | Handles | Reachable | Outcome |
+| Chunk | Handles | Successfully created physical-handle bytes | Attribution | Supporting observation |
 | --- | --- | --- | --- | --- |
-| gfx1030 | 65536 | 8170 | 15.96 GiB | VA exhausted, no allocation failure |
-| gfx1100 | 65536 | 12261 | 23.95 GiB | VA exhausted, no allocation failure |
-| gfx1201 | 262144 | 15786 | 30.83 GiB (96.9%) | VA exhausted, no allocation failure |
+| 2 MiB | 1015 | 1.98 GiB | descriptor-bound | `opendir("/proc/self/fd")` fails `EMFILE` at stop; 14310 MiB VRAM still free |
+| 8 MiB | 1015 | 7.93 GiB (4.0x) | descriptor-bound | `EMFILE`; 8220 MiB VRAM still free |
+| 32 MiB | 510 | 15.94 GiB | memory-bound | FD headroom 504 slots; 20 MiB VRAM free at stop |
+| 128 MiB | 127 | 15.88 GiB | memory-bound | FD headroom 887 |
+| 512 MiB | 31 | 15.50 GiB | memory-bound | FD headroom 983 |
 
-The gfx1151 APU is the sharpest illustration: **1.98 GiB of 95.84 GiB, or 2.1% of
-available memory**, reachable through VMM at the stock descriptor limit. Its
-raised-limit arm was deliberately not run because that host is shared.
+**gfx1100 — RX 7900 XTX, 23.95 GiB free:**
+
+| Chunk | Handles | Successfully created physical-handle bytes | Attribution | Supporting observation |
+| --- | --- | --- | --- | --- |
+| 2 MiB | 1015 | 1.98 GiB | descriptor-bound | `EMFILE`; 22492 MiB VRAM still free |
+| 8 MiB | 1015 | 7.93 GiB (4.0x) | descriptor-bound | `EMFILE`; 16402 MiB VRAM still free |
+| 32 MiB | 766 | 23.94 GiB | memory-bound | FD headroom 248; 10 MiB free |
+| 128 MiB | 191 | 23.88 GiB | memory-bound | FD headroom 823 |
+| 512 MiB | 47 | 23.50 GiB | memory-bound | FD headroom 967 |
+
+**gfx1151 — Radeon 8060S / Strix Halo (APU), 95.84 GiB free:**
+
+32 MiB and above were capped by a deliberate 10 GiB safety budget on this shared
+APU and are reported as `budget-cap (not a device limit)`, not as a device
+limit. Only the rows below the cap are device-relevant:
+
+| Chunk | Handles | Successfully created physical-handle bytes | Attribution | Supporting observation |
+| --- | --- | --- | --- | --- |
+| 2 MiB | 1015 | 1.98 GiB (2.1% of 95.84 GiB) | descriptor-bound | `EMFILE`; 96114 MiB VRAM still free |
+| 8 MiB | 1015 | 7.93 GiB (4.0x) | descriptor-bound | `EMFILE`; 90024 MiB VRAM still free |
+| 32 MiB | — | — | budget-cap (not a device limit) | capped by 10 GiB safety budget |
+| 128 MiB | — | — | budget-cap (not a device limit) | capped by 10 GiB safety budget |
+| 512 MiB | — | — | budget-cap (not a device limit) | capped by 10 GiB safety budget |
+
+**gfx1201 — Radeon AI PRO R9700, 31.79 GiB free:**
+
+| Chunk | Handles | Successfully created physical-handle bytes | Attribution | Supporting observation |
+| --- | --- | --- | --- | --- |
+| 2 MiB | 1015 | 1.98 GiB | descriptor-bound | `EMFILE`; 30520 MiB VRAM still free |
+| 8 MiB | 1015 | 7.93 GiB (4.0x) | descriptor-bound | `EMFILE`; 24430 MiB VRAM still free |
+| 32 MiB | 1015 | 31.72 GiB | coincident (both exhausted) | FDs exhausted **and** only 70 MiB VRAM free — cause cannot be separated at this point and is not claimed as either |
+| 128 MiB | 254 | 31.75 GiB | memory-bound | FD headroom 760 |
+| 512 MiB | 63 | 31.50 GiB | memory-bound | FD headroom 951 |
+
+Reading: at the 2 MiB granularity the runtime itself recommends, all four
+architectures stop at 1015 handles / 1.98 GiB with descriptors provably exhausted
+(`EMFILE`) and 8–94 GiB of VRAM unused, across a ~6x VRAM spread. 8 MiB scales
+exactly 4.0x (7.93 GiB), confirming the cost is one descriptor per handle
+regardless of handle size. The crossover to memory-bound tracks VRAM, and on
+gfx1201 the two limits land almost exactly together at 32 MiB — the 32 MiB row
+is therefore reported as coincident (both exhausted) without attributing a cause.
+
+For rows that now carry memory-bound evidence (FD headroom in the hundreds,
+VRAM near zero), the crossover from descriptor-bound to memory-bound was
+observed by the corrected probe, which attempts past the precomputed cap. No
+crossover is claimed for the gfx1151 rows above the safety budget, because the
+loop stopped at the budget, not at a device limit.
+
+### Raised-limit arm, corrected
+
+The earlier raised-limit figures in this document came from a buggy reporting
+path: the probe broke at an unreported `hipMemMap`/`hipMemSetAccess` stage and
+printed a stale success count. Those numbers have been removed and are not
+restated here.
+
+Corrected run, gfx1201, with an in-process `setrlimit(soft=hard)`:
+
+- `RLIMIT_NOFILE` before: soft=1024 hard=524288; after: soft=524288 hard=524288
+  (unprivileged, verified by readback)
+- Chunk 2 MiB, reservation sized to initial free memory: **16275 handles =
+  31.79 GiB**, stopping stage `completed-requested-count`
+- VRAM free at stop: **0.00 GiB**, FD headroom **508003**
+- Note printed by the probe: completing the requested count proves only that the
+  preselected span (sized to initial free memory) was filled — it is not an
+  address-space limit
+
+Interpretation, scoped: raising the soft limit removed the 1015-handle ceiling
+and the run then consumed all free VRAM with descriptors to spare. This raises
+the descriptor-limited capacity far beyond any current device's memory, while
+VRAM, VA, mapping and other runtime limits still apply — it does not remove
+those other ceilings.
 
 ### The mechanism, measured rather than inferred
 
-Descriptor accounting rules out reading anything into the ceiling merely landing
-near 1024. On all four architectures, identically:
+Descriptor accounting shows one net dmabuf descriptor per successful handle, in
+these runs, rather than a formally proven per-call bijection. The
+`/proc/self/fd` snapshot is not synchronized against runtime background threads,
+so the supporting evidence is the exact delta reproduced on four systems:
 
-- 64 x `hipMemCreate` raises the `/proc/self/fd` count by **exactly 64**
-- every new descriptor has `readlink` target **`/dmabuf:`**
-- `hipMemRelease` returns all 64
+- 64 x `hipMemCreate` raises the `/proc/self/fd` count by **exactly 64**;
+  every new descriptor has `readlink` target **`/dmabuf:`**
+- `hipMemRelease` returns all 64 (delta −64)
 - a 64-allocation **`hipMalloc` control changes the count by zero**
 
-So it is one dmabuf descriptor per handle, held for the handle's lifetime,
-released correctly, and specific to the VMM path.
+This was reproduced identically on gfx1030, gfx1100, gfx1151 and gfx1201. It is
+one dmabuf descriptor per handle held for the handle's lifetime, released
+correctly, and specific to the VMM path in these runs.
 
-### Reachable bytes are `descriptors x chunk`, on every architecture
+### Successfully created physical-handle bytes scale with handle size until VRAM binds
 
 The same probe at the **stock** `ulimit -n 1024`, varying the per-handle chunk
-size. The handle count is **identically 1015 at every chunk size on every card**
-until VRAM becomes the binding constraint instead, which is what shows the
-descriptor budget is the limit and that a handle costs one descriptor regardless
-of its size:
+size. The handle count is identically 1015 at 2 MiB and 8 MiB on every card
+until VRAM becomes the binding constraint instead. The corrected probe attempts
+past any precomputed cap and reports the actual stopping condition, so for rows
+above that now carry memory-bound evidence the crossover was observed; for the
+gfx1151 rows truncated by the 10 GiB safety budget, no device crossover is
+claimed.
 
-| Arch | VRAM free | 2 MiB | 8 MiB | 32 MiB | 128 MiB |
-| --- | --- | --- | --- | --- | --- |
-| gfx1030 | 15.96 GiB | 1015 / 1.98 GiB | 1015 / 7.93 GiB | 510 / 15.94 GiB (VRAM) | 127 / 15.88 GiB (VRAM) |
-| gfx1100 | 23.95 GiB | 1015 / 1.98 GiB | 1015 / 7.93 GiB | 766 / 23.94 GiB (VRAM) | 191 / 23.88 GiB (VRAM) |
-| gfx1151 | 95.84 GiB | 1015 / 1.98 GiB | 1015 / 7.93 GiB | capped* | capped* |
-| gfx1201 | 31.79 GiB | 1015 / 1.98 GiB | 1015 / 7.93 GiB | 1015 / 31.72 GiB | 254 / 31.75 GiB (VRAM) |
-
-\* gfx1151 runs were capped at an 8 GiB budget because that host is shared; both
-uncapped points below the cap are descriptor-bound and match the other cards
-exactly.
-
-Note gfx1201 is still descriptor-bound at 32 MiB (1015 x 32 MiB = 31.72 GiB just
-fits under its 31.79 GiB free), whereas the 16 GiB and 24 GiB cards cross over to
-VRAM-bound at that size. The crossover moves with VRAM; the 1015 does not.
+See the per-architecture tables above. Note gfx1201 at 32 MiB is the coincident
+case: 1015 x 32 MiB = 31.72 GiB just fits under its 31.79 GiB free, with FDs
+exhausted and only 70 MiB free simultaneously — cause is not assigned.
 
 ### Two mitigations, both verified
 
 1. **Larger physical chunks. No privileges required.** Because a handle costs one
-   descriptor irrespective of size, reachable bytes scale directly with chunk
-   size. 32 MiB chunks reach a whole 32 GiB card at the stock descriptor limit.
+   descriptor irrespective of size, successfully created physical-handle bytes
+   scale directly with chunk size until VRAM becomes the binding constraint.
+   With 32 MiB handles the 15.96 GiB and 23.95 GiB cards cross over to
+   memory-bound and consume nearly all free VRAM at the stock descriptor limit.
    This is the mitigation that works inside a container that caps `RLIMIT_NOFILE`.
 2. **Raise `RLIMIT_NOFILE`.** Soft 1024 against hard 524288 on these hosts, and
-   soft may be raised to hard unprivileged. Verified to reach the whole card:
-   gfx1030 8170 handles / 15.96 GiB, gfx1100 12261 / 23.95 GiB, gfx1201 15786 /
-   30.83 GiB, each ending with address space exhausted rather than an allocation
-   failure.
+   soft may be raised to hard unprivileged. Verified on gfx1201 to remove the
+   1015-handle ceiling: 16275 handles / 31.79 GiB with 0.00 GiB free and
+   508003 FD slots still available, stopping at `completed-requested-count`
+   (filling the preselected span, not an address-space limit).
 
 Neither is documented, and the failure that sends you looking for them reports
 `hipErrorOutOfMemory`.
@@ -119,9 +192,11 @@ they exhaust the device, and the error they see blames the wrong resource. It is
 a plausible explanation for why llama.cpp ships `GGML_HIP_NO_VMM` and falls back
 to a non-freeing legacy pool, and for long-context out-of-memory reports on
 cards with plenty of VRAM free. Because the practical VMM budget is
-`(descriptor limit x granularity)`, it also interacts with any change that
-raises granularity: at 2 MiB and a 1024 FD limit the ceiling is ~2 GiB, and
-forcing a larger granularity would not move it.
+`(available descriptor slots x physical allocation-handle size)`, it also
+interacts with any change that raises granularity: at 2 MiB and a 1024 FD limit
+the ceiling is ~2 GiB, and raising the reported `MINIMUM` from 4 KiB to the
+already-recommended 2 MiB would not help callers who already allocate 2 MiB
+handles.
 
 ### Our own exposure (hipfire, current build)
 
@@ -161,10 +236,11 @@ if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur < rl.rlim_max) {
 }
 ```
 
-524288 handles x 2 MiB is ~1 TiB of VMM addressability, so this removes the
-ceiling entirely rather than moving it. It should be logged (old and new soft
-limit) so a constrained container that cannot raise it is diagnosable rather
-than silently capped.
+524288 handles x 2 MiB is ~1 TiB of VMM addressability, so this raises the
+descriptor-limited capacity far beyond any current device's memory, while VRAM,
+VA, mapping and other runtime limits still apply. It should be logged (old and
+new soft limit) so a constrained container that cannot raise it is diagnosable
+rather than silently capped.
 
 ### Open question before contacting llama.cpp
 
@@ -186,14 +262,17 @@ request):
 hipMemGetAllocationGranularity(&gran, &prop, Recommended);   // 2 MiB on RDNA
 hipMemAddressReserve(&base, gran * N, gran, nullptr, 0);
 for (i = 0; i < N; ++i) {
-    if (hipMemCreate(&h, gran, &prop, 0) != hipSuccess) break;  // stops at ~1015
+    if (hipMemCreate(&h, gran, &prop, 0) != hipSuccess) break;  // stops at ~1015 at stock limit
     hipMemMap((char*)base + i * gran, gran, 0, h, 0);
     hipMemSetAccess((char*)base + i * gran, gran, &desc, 1);
 }
 printf("mapped %zu handles = %.2f GiB\n", i, i * gran / 1073741824.0);
 ```
 
-Run it once as-is and once under `ulimit -n 65536`.
+The corrected probe also checks `opendir("/proc/self/fd")` with `EMFILE` at the
+stopping point and reports FD headroom and VRAM free, so descriptor-bound and
+memory-bound stops can be distinguished. Run it once as-is and once after
+raising the soft limit to the hard limit in-process.
 
 ### Questions
 
@@ -279,10 +358,13 @@ handle granularity actually used, not a fixed device requirement.
 Forcing `RECOMMENDED` semantics onto the `MINIMUM` query raises the floor for
 every device. Callers doing fine-grained mapping lose capability that works
 today, and each handle costs 2 MiB of physical memory minimum — which interacts
-badly with the descriptor ceiling described in the issue above, since the
-practical VMM budget is (FD limit x granularity). If the goal is to steer
-callers toward 2 MiB, `hipMemAllocationGranularityRecommended` already reports
-exactly that, and callers who want the larger value can ask for it.
+with the descriptor ceiling described in the issue above, since the practical
+VMM budget is (available descriptor slots x physical allocation-handle size). If
+the goal is to steer callers toward 2 MiB,
+`hipMemAllocationGranularityRecommended` already reports exactly that, and
+callers who want the larger value can ask for it. Raising the reported
+`MINIMUM` from 4 KiB to the already-recommended 2 MiB would not help callers
+who already allocate 2 MiB handles.
 
 If there is a specific gfx1201 failure behind this change, I have five gfx1201
 GPUs across two hosts and am happy to reproduce it — but I could not provoke it
@@ -290,7 +372,7 @@ with straightforward 4 KiB VMM use.
 
 ---
 
-## 3. COMMENT on `ROCm/ROCm#6603` — two HIP-level mechanisms ruled out
+## 3. COMMENT on `ROCm/ROCm#6603` — two narrow pure-HIP probes did not reproduce corruption under the listed conditions
 
 **Target:** `ROCm/ROCm#6603`. Rechecked 2026-08-23: OPEN, **9 comments**, opening
 post **rewritten by the reporter on 2026-08-20**, still **zero AMD engagement**.
@@ -314,16 +396,20 @@ and script, torch **2.12.0** held constant, 0/10 corrupt on ROCm 7.2 versus
 the delta to ROCm userspace rather than the framework.
 
 I tried to reproduce the silent zeros at the HIP level with PyTorch removed
-entirely, and could not. Two candidate mechanisms are ruled out, which is worth
-recording so nobody re-derives them.
+entirely, and did not reproduce corruption under the listed conditions. Two
+narrow pure-HIP probes did not reproduce corruption, which is worth recording so
+nobody re-derives them — but this explicitly does not rule out the mechanism
+under PyTorch's exact allocator behaviour, which may exercise different ordering,
+concurrency, or sub-range patterns than the probes below.
 
-**1. Expandable-segment churn alone does not corrupt a live mapping.**
+**1. Expandable-segment churn alone, as modeled here, did not reproduce corruption.**
 
 A pure-HIP model of an expandable segment: one reserved VA range, handles mapped
 into it, a 2 MiB canary written **once** into an early chunk and never rewritten,
 then repeated cycles of growth, strided unmap/release of *other* handles, and
 remapping different handles at the same offsets (VA reuse). The canary is read
-back every cycle. On gfx1201 / ROCm 7.14.0:
+back every cycle. Churn is driven by `bench/vmm/vmm_expandable_canary.cpp`
+(now committed in this repo). On gfx1201 / ROCm 7.14.0:
 
 | Arm | Working set | Cycles | Canary |
 | --- | --- | --- | --- |
@@ -333,26 +419,32 @@ back every cycle. On gfx1201 / ROCm 7.14.0:
 
 Arm C is the closest to the reported conditions — near-full VRAM, well past the
 cycle count at which the canary dies upstream — and it stayed bit-exact. So
-map/unmap/VA-reuse churn by itself is not sufficient.
+map/unmap/VA-reuse churn as modeled here, without PyTorch's allocator, is not
+sufficient to reproduce the corruption. This does not rule out the mechanism
+under PyTorch's exact allocation pattern.
 
-**2. A rejected `hipMemSetAccess` has no side effect on live data.**
+**2. A rejected `hipMemSetAccess` showed no data side effect under the tested ranges.**
 
 Because `max_split_size_mb:128` specifically is required to trigger this,
 sub-granularity ranges looked like a promising lead: `hipMemSetAccess` rejects
 any range whose offset or length is not a multiple of the mapped handles'
 granularity. If a rejected call were *partially applied*, it could revoke access
 on a correctly written region, which would read back as zeros rather than
-faulting — exactly the reported symptom, including zeros starting at offset 0.
+faulting — matching the reported symptom, including zeros starting at offset 0.
 
-It does not. I wrote a pattern across four mapped handles, verified it, then
-issued five different rejected calls (unaligned offset, straddling, short length,
-half length, 4 KiB slice) and re-verified after each. Every one returned
-`invalid argument` and left the data bit-exact, and a following valid whole-range
-call still succeeded. The call is atomic.
+Under the five tested rejected ranges, no data side effect was observed and a
+later valid call succeeded: I wrote a pattern across four mapped handles,
+verified it, then issued five different rejected calls (unaligned offset,
+straddling, short length, half length, 4 KiB slice) and re-verified after each.
+Every one returned `invalid argument` and left the data bit-exact, and a
+following valid whole-range call still succeeded. This is the observation for
+these five rejected ranges only, not a proof that the call is atomic in general.
 
-**Where that leaves it.** Neither VMM churn nor failed access-setting explains it
-at the HIP level, which is consistent with the reporter's own finding that the
-allocator trace shows no unmap of the live canary range.
+**Where that leaves it.** Neither VMM churn as modeled here nor failed
+access-setting for the five tested ranges reproduced corruption at the HIP
+level, which is consistent with the reporter's own finding that the allocator
+trace shows no unmap of the live canary range. Both are clean results under
+specific conditions, not exclusions of the underlying mechanism.
 
 ### An offer that might narrow the version window
 
@@ -369,57 +461,99 @@ earlier and 7.2-vs-7.13 becomes the question. Either outcome is a real
 narrowing, and I have not seen it done in the thread. I have gfx1201 (two
 boards) and gfx1100/gfx1151/gfx1010/gfx1030 available on 7.14 and can run it.
 
-## 4. COMMENT on `rocm-systems#10021` / PR `#10022` — reproduced on gfx1201, so the path is architecture-independent
+## 4. COMMENT on `rocm-systems#10021` / PR `#10022` — reproduced on gfx1201
 
 **Target:** issue `ROCm/rocm-systems#10021`, and/or its fix PR `#10022`. PR state
 2026-08-23: OPEN, `REVIEW_REQUIRED`, merge `BLOCKED`, policy checks green, not a
 draft. `@chrispaquot` asked an inline question on 2026-08-14 which the author
 answered the same day; nothing has moved since. Posting confirmation from a
-second architecture is the cheapest thing that might unstick it.
+second architecture may help unstick it.
 
 ### Body
 
 Confirming this on **gfx1201** (Radeon AI PRO R9700), stock ROCm **7.14.0**, so
-the defect is not specific to the gfx1100 in the original report. That matches
-the code: neither the unchecked `getGraphKernArg()` result in the graph-capture
-branch of `submitKernelInternal` nor `GraphKernelArgManager::AllocKernArg`
-returning `nullptr` on a failed pool grow carries any architecture predicate.
+the defect also reproduces on gfx1201 — the original report was on gfx1100.
+That is consistent with the code: neither the unchecked `getGraphKernArg()`
+result in the graph-capture branch of `submitKernelInternal` nor
+`GraphKernelArgManager::AllocKernArg` returning `nullptr` on a failed pool grow
+carries any architecture predicate. This shows the defect also reproduces on
+gfx1201; it does not establish that the path is independent of architecture in
+general.
+
+A prior version of this probe was invalid: the exhaustion loop calls `hipMalloc`
+until it fails, leaving a sticky `hipErrorOutOfMemory`, which the first
+`hipGetLastError()` in the update loop misreported as an in-capture launch
+failure. The current probe clears that sticky error and fail-fasts on every
+HIP/hipGraph call with its enum printed, and adds a `--update-only` arm with no
+launches between updates.
 
 Reproducer is a single self-contained HIP file, no framework: capture a graph of
 512 kernel nodes, instantiate and launch it once, exhaust device memory with
 descending `hipMalloc` sizes, then drive `hipGraphExecUpdate` repeatedly so the
-exec has to re-capture kernargs with nothing available.
+exec has to re-capture kernargs with nothing available. Every call before the
+crash is verified successful with its enum printed.
+
+Arm 1, launches between updates (verbatim):
 
 ```
 === AMD Radeon AI PRO R9700 (gfx1201) ===
-free 31.79 GiB / total 31.86 GiB | graph nodes 512 | update rounds 6
+free 31.79 GiB / total 31.86 GiB | graph nodes 512 | update rounds 8
 
 baseline: graph of 512 nodes captured, instantiated, launched OK
 exhausted: held 31.65 GiB in 36 blocks, 0.0 MiB reported free
 
-round 1: hipGraphExecUpdate under exhaustion ... ok (result=0)
-round 2: hipGraphExecUpdate under exhaustion ... ok (result=0)
-round 3: hipGraphExecUpdate under exhaustion ... ok (result=0)
-round 4: hipGraphExecUpdate under exhaustion ... Segmentation fault (core dumped)
+round 1: hipGraphExecUpdate under exhaustion ... ok (result=0, bad_node=(nil))
+         launch no error / sync no error (result=0, bad_node=(nil))
+round 2: hipGraphExecUpdate under exhaustion ... ok (result=0, bad_node=(nil))
+         launch no error / sync no error (result=0, bad_node=(nil))
+round 3: hipGraphExecUpdate under exhaustion ... ok (result=0, bad_node=(nil))
+         launch no error / sync no error (result=0, bad_node=(nil))
+round 4: hipGraphExecUpdate under exhaustion ...
+Segmentation fault (core dumped)
 ```
 
-Deterministic: 3 of 3 runs died on round 4, exit 139. The first three updates
-succeed because the existing kernarg pool still has room; the crash comes when a
-later update has to grow it.
+Every call before the crash is checked and reported: the reproducer aborts on any
+non-success from begin-capture, the in-capture launch, end-capture, the update,
+the post-update launch, the sync, or graph destroy. Nothing is accumulated and
+ignored.
 
-`rocgdb` backtrace, showing the fault is entirely inside the runtime:
+Deterministic: 3/3 with launches between updates, and 3/3 with `--update-only`
+(no launches at all between updates) — 6/6 total, always round 4, exit 139.
+The `--update-only` arm matters: with no launches between updates, a
+poisoned-stream explanation is excluded.
+
+The first three `hipGraphExecUpdate` calls returned success (`result=0`,
+`bad_node=(nil)`) and the fourth crashed, which is consistent with kernarg-pool
+growth but does not identify the exact grow attempt that faulted.
+
+Arm 2, `--update-only` under `rocgdb`, showing the fault is entirely inside the
+runtime (verbatim):
 
 ```
+round 1: hipGraphExecUpdate under exhaustion ... ok (result=0, bad_node=(nil))
+round 2: hipGraphExecUpdate under exhaustion ... ok (result=0, bad_node=(nil))
+round 3: hipGraphExecUpdate under exhaustion ... ok (result=0, bad_node=(nil))
+round 4: hipGraphExecUpdate under exhaustion ...
+
+Thread 1 "geo" received signal SIGSEGV, Segmentation fault.
+0x00007ffff6ab9f78 in ?? () from /opt/rocm/core/lib/libamdhip64.so.7
 #0  0x00007ffff6ab9f78 in ?? () from /opt/rocm/core/lib/libamdhip64.so.7
 #1  0x00007ffff6abafa8 in ?? () from /opt/rocm/core/lib/libamdhip64.so.7
 #2  0x00007ffff664bfb3 in ?? () from /opt/rocm/core/lib/libamdhip64.so.7
 #3  0x00007ffff6646a85 in ?? () from /opt/rocm/core/lib/libamdhip64.so.7
 #4  0x00007ffff66bb6e0 in ?? () from /opt/rocm/core/lib/libamdhip64.so.7
 #5  0x00007ffff695fdff in hipGraphExecUpdate () from /opt/rocm/core/lib/libamdhip64.so.7
-#6  0x0000555555559cfa in main ()
+#6  0x0000555555559e99 in main ()
+
+rdi            0x0                 0
+rsi            0x555555860130      93824995426608
 ```
 
-Six frames below `hipGraphExecUpdate`, no application frame in between.
+The faulting frame is five stack levels below `hipGraphExecUpdate` (#0 vs #5),
+with no application frame in between. `rdi` is `0x0` at the faulting
+instruction, which is consistent with the null-kernarg path #10022 addresses —
+`getGraphKernArg()` returning null and the result being used without a check —
+though with a stripped release build I cannot name the exact callee.
 
 ### Why it is worth fixing rather than treating as an out-of-memory edge case
 
@@ -459,45 +593,64 @@ connect it at the time because nobody looked at the kernel log until later, and
 I should have told you sooner.
 
 I have not reproduced it deliberately since, and I have no recipe. What I do have
-is two negative results that remove two of the three plausible mechanism
-families, and one source answer to your question 4.
+is two clean stress results under specific conditions, and one source answer to
+your question 4.
 
-**1. Routine mid-IB preemption is not it.** Retained-PM4 IBs of 24000 dispatches
-against 16 competing GPU processes, with SH-register elision on and off. That
-genuinely oversubscribed the device — VRAM 28 MB to 3.89 GB, replay slowing from
-~18 to ~550 us/token — so each IB spanned ~13 s against MES's 10 ms process
-quantum, on the order of 1300 quantum switches inside a single indirect buffer
-and several thousand across the run. **8/8 arms passed with exact results and
-zero new fault lines.** The kernel-source facts that motivated this are still
-facts: `v11_compute_mqd` carries `compute_pgm_lo/hi` and
-`compute_user_data_0..15`, `init_mqd` memsets and never writes them, `update_mqd`
-never writes them, `hqd_load_v11` MMIO-loads only `cp_mqd_base_addr_lo` through
-`CP_HQD_PQ_WPTR_HI`, and the CWSR trap handler saves wave state only. But the
-inference I drew from them is empirically false for the common path: CP/MES
-evidently preserves or correctly re-establishes that state.
+**1. Routine mid-IB preemption did not reproduce it under these conditions.**
+Retained-PM4 IBs of 24000 dispatches against 16 competing GPU processes, with
+SH-register elision on and off. That genuinely oversubscribed the device — VRAM
+28 MB to 3.89 GB, replay slowing from ~18 to ~550 us/token — so each IB spanned
+~13 s against MES's 10 ms process quantum, on the order of 1300 quantum switches
+inside a single indirect buffer and several thousand across the run. **8/8 arms
+passed with exact results and zero new fault lines.** The kernel-source facts
+that motivated this are still facts: `v11_compute_mqd` carries
+`compute_pgm_lo/hi` and `compute_user_data_0..15`, `init_mqd` memsets and never
+writes them, `update_mqd` never writes them, `hqd_load_v11` MMIO-loads only
+`cp_mqd_base_addr_lo` through `CP_HQD_PQ_WPTR_HI`, and the CWSR trap handler
+saves wave state only. But the inference I drew from them is empirically false
+for the common path under these conditions: CP/MES evidently preserves or
+correctly re-establishes that state here.
 
-**2. Queue / signal / allocation retirement and reuse, in pure HIP, is not
-sufficient either.** This is your leading hypothesis, so I built the smallest
+**2. HIP stream/event/allocation churn did not reproduce the fault under the
+tested workload.** This is your leading hypothesis, so I built the smallest
 thing that tests it with **no Redline and no retained PM4 in the process at
 all** — the point being to find out whether this needs a retained-PM4 submitter
-or not. Each cycle creates streams, allocates device buffers, dispatches a real
-kernel that *reads* device memory (the fault client is SQC data, so a shader data
-fetch has to be in the loop), records and waits events, then destroys the queue
-first, then the signal it referenced, then the memory the packets pointed at, so
-the next cycle reuses those rings, doorbells, signal slots and addresses.
+or not. Each cycle creates HIP streams, allocates device buffers, dispatches a
+real kernel that *reads* device memory (the fault client is SQC data, so a
+shader data fetch has to be in the loop), records and waits events, then
+destroys the stream first, then the signal it referenced, then the memory the
+packets pointed at, so the next cycle reuses those signal slots and device
+addresses. Critically, `hipStreamCreateWithFlags` /
+`hipStreamDestroy` are **not** hardware-queue create/destroy — ROCm 7.14 CLR
+pools ordinary hardware queues, verified in source on `release/therock-7.14`:
+
+- draws queues from `queuePool_`: `projects/clr/rocclr/device/rocm/rocdevice.cpp:3069-3153`
+- reuses them once the configured limit is reached: `rocdevice.cpp:3223-3232`
+- inserts newly created queues into the pool: `rocdevice.cpp:3395-3411`
+- ordinary release only decrements a refcount; only CU-masked/cooperative queues are destroyed there: `rocdevice.cpp:3440-3468`
+- pooled queues are destroyed at device/process teardown: `rocdevice.cpp:224-234`
+- stream teardown calls `releaseQueue`, not `hsa_queue_destroy`: `projects/clr/rocclr/device/rocm/rocvirtual.cpp:2008-2074`
+- `GPU_MAX_HW_QUEUES` defaults to 4: `projects/clr/rocclr/utils/flags.hpp:140`
+So the run was 272,000 HIP stream create/destroy calls over at most 4 long-lived
+hardware queues per process — not repeated hardware-queue creation and destruction
+— and it does not test repeated KFD/ROCr queue retirement. What it does genuinely
+exercise is repeated retirement and reuse of device allocations and completion
+signals around live dispatches.
 
 On the same card model as your second one, ROCm 7.14.0:
 
-| Arm | Processes | Cycles | Dispatches | Queue create/destroy | Failures | Kernel faults |
+| Arm | Processes | Cycles | Dispatches | HIP stream create/destroy calls | Failures | Kernel faults |
 | --- | --- | --- | --- | --- | --- | --- |
 | single | 1 | 20000 | 80000 | 80000 | 0 | 0 |
 | concurrent | 6 | 8000 each | 192000 | 192000 | 0 | 0 |
 
-272000 dispatches and 272000 queue create/destroy pairs across 6 PIDs, clean.
-That does not disprove your hypothesis — it says the *general runtime* reuse path
-is not enough on its own, which pushes the remaining suspicion back toward the
-retained-IB path specifically, or toward a rarer condition than plain recreate
-churn.
+272,000 dispatches and 272,000 HIP stream create/destroy calls across a
+one-process arm and a separate six-process arm (not "across 6 PIDs" for the
+whole run), zero API failures, zero new kernel fault lines. This establishes a
+clean result for this runtime-managed HIP workload only; it does not test
+repeated KFD/ROCr queue retirement. Testing hardware-queue retirement directly
+requires a ROCr-level arm that calls `hsa_queue_create` / `hsa_queue_destroy`
+per cycle — a natural next probe from here.
 
 **3. Your question 4, from source.** Successful `hsa_queue_destroy` does **not**
 guarantee hardware can no longer reference completion signals, kernargs or
@@ -530,7 +683,7 @@ named error:
   could dispatch from a zero program address, and refuses `DISPATCH_DIRECT`
   without a nonzero program address earlier in the stream. Wired into `finalize_ib`
   and `build_multi_ib`, so an integrator now gets `RL_ERR_COMPILE` with a reason
-  instead of a fault. This is why I can say construction is ruled out rather than
+  instead of a fault. This is why I can say construction is validated rather than
   merely audited: both encoders already rejected `code_entry == 0` and null
   kernarg before any stream mutation, and the validator now enforces it on the
   finished stream too.
