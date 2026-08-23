@@ -3,6 +3,21 @@
 
 # Ready-to-post upstream drafts — updated 2026-08-23
 
+> **Posting status, 2026-08-23.** Two of these are now posted upstream:
+>
+> - #10021 confirmation → https://github.com/ROCm/rocm-systems/issues/10021#issuecomment-5388455118
+> - #9360 review → https://github.com/ROCm/rocm-systems/pull/9360#issuecomment-5388455446
+>
+> The #9360 comment differs from the draft below it: the draft argued against the
+> patch from the `hipMemSetAccess` rule, but the PR's actual stated motivation is
+> *kernel* faults at 4 KiB boundaries. That claim was tested directly with
+> `bench/vmm/vmm_4k_kernel_access.cpp` (512 handles, 511 boundaries, three access
+> shapes including straddling 8-byte stores, four architectures, zero faults) and
+> could not be reproduced. The posted comment leads with that, and adds the
+> hypothesis that the real blocker is descriptor exhaustion at minimum
+> granularity, which caps a 4 KiB-handle pool at roughly 4 MiB.
+
+
 Five drafts, each supported by measurements taken on this fleet. Numeric
 observations below come from those fleet measurements; where a mechanism is
 interpreted from the observations, the interpretation is identified as such and
