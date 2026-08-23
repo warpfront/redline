@@ -176,9 +176,7 @@ impl FromStr for RocmVersion {
 
 fn parse_leading_u32(input: &mut &str) -> Option<u32> {
     let s = *input;
-    let end = s
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(s.len());
+    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
     if end == 0 {
         return None;
     }
@@ -416,7 +414,11 @@ fn parent_looks_like_rocm_root(parent: &Path) -> bool {
     if parent.join(".info").join("version").is_file() {
         return true;
     }
-    if parent.join("include").is_dir() || parent.join("lib").is_dir() || parent.join("lib64").is_dir() || parent.join("bin").is_dir() {
+    if parent.join("include").is_dir()
+        || parent.join("lib").is_dir()
+        || parent.join("lib64").is_dir()
+        || parent.join("bin").is_dir()
+    {
         return true;
     }
     if parent.join("core").is_dir() {
@@ -429,12 +431,13 @@ fn parent_looks_like_rocm_root(parent: &Path) -> bool {
 }
 
 fn normalize_hip_path(p: &Path) -> PathBuf {
-    if p.file_name().map(|f| f == OsStr::new("hip")).unwrap_or(false) {
-        if let Some(parent) = p.parent() {
-            if parent_looks_like_rocm_root(parent) {
-                return parent.to_path_buf();
-            }
-        }
+    if p.file_name()
+        .map(|f| f == OsStr::new("hip"))
+        .unwrap_or(false)
+        && let Some(parent) = p.parent()
+        && parent_looks_like_rocm_root(parent)
+    {
+        return parent.to_path_buf();
     }
     p.to_path_buf()
 }
@@ -524,10 +527,10 @@ fn roots_from_path_tools() -> Vec<PathBuf> {
             let Some(candidate) = first_tool_in_dir(&dir, tool, cfg!(windows)) else {
                 continue;
             };
-            if let Some(root) = root_from_tool_path(&candidate) {
-                if !out.contains(&root) {
-                    out.push(root);
-                }
+            if let Some(root) = root_from_tool_path(&candidate)
+                && !out.contains(&root)
+            {
+                out.push(root);
             }
         }
     }
@@ -541,10 +544,10 @@ fn roots_from_path_tools_with_dirs(dirs: &[PathBuf]) -> Vec<PathBuf> {
             let Some(candidate) = first_tool_in_dir(dir, tool, cfg!(windows)) else {
                 continue;
             };
-            if let Some(root) = root_from_tool_path(&candidate) {
-                if !out.contains(&root) {
-                    out.push(root);
-                }
+            if let Some(root) = root_from_tool_path(&candidate)
+                && !out.contains(&root)
+            {
+                out.push(root);
             }
         }
     }
@@ -624,9 +627,11 @@ fn ambiguous_family(root: &Path) -> Vec<PathBuf> {
         return Vec::new();
     }
     let candidates = distinct_complete_roots(versioned_siblings(root, "core-"));
-    (candidates.len() > 1)
-        .then_some(candidates)
-        .unwrap_or_default()
+    if candidates.len() > 1 {
+        candidates
+    } else {
+        Default::default()
+    }
 }
 
 /// Complete side-by-side installations that require an explicit choice.
@@ -765,59 +770,60 @@ impl EnvSnapshot {
 fn discover_all_with_env(env: &EnvSnapshot) -> Vec<RocmInstall> {
     // Prefer pure helper that does not read global env, but we still need roots()
     // behavior. Build candidate list mirroring `roots()` but using injected env.
-    let candidates: Vec<PathBuf> = if env.redline.is_some() || env.rocm.is_some() || env.hip.is_some() {
-        // authoritative configured root path
-        let configured = env
-            .redline
-            .as_deref()
-            .or(env.rocm.as_deref())
-            .or(env.hip.as_deref())
-            .unwrap();
-        root_family(configured)
-    } else {
-        // no configured env — build from filesystem scan similar to `roots()`
-        let mut out: Vec<PathBuf> = Vec::new();
-        let mut push = |p: PathBuf| {
-            if !out.contains(&p) {
-                out.push(p);
-            }
-        };
-        #[cfg(not(windows))]
-        {
-            for c in root_family(Path::new("/opt/rocm")) {
-                push(c);
-            }
-            for c in versioned_siblings(Path::new("/opt"), "rocm-") {
-                push(c);
-            }
-        }
-        let dirs = path_dirs_from_env(env.path_dirs.as_deref());
-        let path_roots = if env.path_dirs.is_some() {
-            roots_from_path_tools_with_dirs(&dirs)
+    let candidates: Vec<PathBuf> =
+        if env.redline.is_some() || env.rocm.is_some() || env.hip.is_some() {
+            // authoritative configured root path
+            let configured = env
+                .redline
+                .as_deref()
+                .or(env.rocm.as_deref())
+                .or(env.hip.as_deref())
+                .unwrap();
+            root_family(configured)
         } else {
-            roots_from_path_tools()
+            // no configured env — build from filesystem scan similar to `roots()`
+            let mut out: Vec<PathBuf> = Vec::new();
+            let mut push = |p: PathBuf| {
+                if !out.contains(&p) {
+                    out.push(p);
+                }
+            };
+            #[cfg(not(windows))]
+            {
+                for c in root_family(Path::new("/opt/rocm")) {
+                    push(c);
+                }
+                for c in versioned_siblings(Path::new("/opt"), "rocm-") {
+                    push(c);
+                }
+            }
+            let dirs = path_dirs_from_env(env.path_dirs.as_deref());
+            let path_roots = if env.path_dirs.is_some() {
+                roots_from_path_tools_with_dirs(&dirs)
+            } else {
+                roots_from_path_tools()
+            };
+            for c in path_roots {
+                push(c);
+            }
+            #[cfg(not(windows))]
+            for c in [PathBuf::from("/usr"), PathBuf::from("/usr/local")] {
+                if has_package_rocm_evidence(&c) {
+                    push(c);
+                }
+            }
+            #[cfg(windows)]
+            if let Some(pf) = std::env::var_os("ProgramFiles") {
+                let base = PathBuf::from(pf).join("AMD").join("ROCm");
+                for c in root_family(&base) {
+                    push(c);
+                }
+                for c in versioned_siblings(&base, "") {
+                    push(c);
+                }
+            }
+            out
         };
-        for c in path_roots {
-            push(c);
-        }
-        #[cfg(not(windows))]
-        for c in [PathBuf::from("/usr"), PathBuf::from("/usr/local")] {
-            if has_package_rocm_evidence(&c) {
-                push(c);
-            }
-        }
-        #[cfg(windows)]
-        if let Some(pf) = std::env::var_os("ProgramFiles") {
-            let base = PathBuf::from(pf).join("AMD").join("ROCm");
-            for c in root_family(&base) {
-                push(c);
-            }
-            for c in versioned_siblings(&base, "") {
-                push(c);
-            }
-        }
-        out
-    };
 
     let mut installs: Vec<RocmInstall> = Vec::new();
     let mut seen: Vec<PathBuf> = Vec::new();
@@ -856,9 +862,9 @@ pub(crate) fn discover_all_with_snapshot(
     hip: Option<&Path>,
 ) -> Vec<RocmInstall> {
     let env = EnvSnapshot {
-        redline: redline.map(|p| normalize_hip_path(p)),
-        rocm: rocm.map(|p| normalize_hip_path(p)),
-        hip: hip.map(|p| normalize_hip_path(p)),
+        redline: redline.map(normalize_hip_path),
+        rocm: rocm.map(normalize_hip_path),
+        hip: hip.map(normalize_hip_path),
         hipcc: None,
         strict: false,
         path_dirs: None,
@@ -880,24 +886,26 @@ fn resolve_with_env(env: &EnvSnapshot) -> Option<RocmInstall> {
     if !ambiguous_roots_with_env(env).is_empty() {
         return None;
     }
-    // Check configured roots in priority order, preferring coherent members of their family.
-    for opt in [&env.redline, &env.rocm, &env.hip] {
-        if let Some(cfg) = opt {
-            for cand in root_family(cfg) {
-                if is_coherent_sdk_root(&cand) {
-                    let id = canonical_identity(&cand);
-                    // de-duplicate within family (already handled by distinct) — return first coherent
-                    let _ = id;
-                    let ver = version_from_root(&cand);
-                    return Some(RocmInstall {
-                        root: cand,
-                        version: ver,
-                    });
-                }
+    // Only the highest-priority configured root is honoured, and it is
+    // authoritative: falling through from a bad REDLINE_ROCM_ROOT to an
+    // unrelated ROCM_PATH would make an override look accepted while loading a
+    // different install.
+    if let Some(cfg) = [&env.redline, &env.rocm, &env.hip]
+        .into_iter()
+        .flatten()
+        .next()
+    {
+        for cand in root_family(cfg) {
+            if is_coherent_sdk_root(&cand) {
+                let ver = version_from_root(&cand);
+                return Some(RocmInstall {
+                    root: cand,
+                    version: ver,
+                });
             }
-            // Configured but no coherent member — do not fall through to unrelated installs.
-            return None;
         }
+        // Configured but no coherent member — do not fall through.
+        return None;
     }
     discover_all_with_env(env).into_iter().next()
 }
@@ -919,7 +927,8 @@ fn ambiguous_roots_with_env(env: &EnvSnapshot) -> Vec<PathBuf> {
         }
         if !is_coherent_sdk_root(Path::new("/opt/rocm"))
             && !is_coherent_sdk_root(Path::new("/opt/rocm/core"))
-            && distinct_complete_roots(versioned_siblings(Path::new("/opt/rocm"), "core-")).is_empty()
+            && distinct_complete_roots(versioned_siblings(Path::new("/opt/rocm"), "core-"))
+                .is_empty()
         {
             let side = distinct_complete_roots(versioned_siblings(Path::new("/opt"), "rocm-"));
             if side.len() > 1 {
@@ -931,11 +940,15 @@ fn ambiguous_roots_with_env(env: &EnvSnapshot) -> Vec<PathBuf> {
 }
 
 #[cfg(test)]
-pub(crate) fn resolve_with_snapshot(redline: Option<&Path>, rocm: Option<&Path>, hip: Option<&Path>) -> Option<RocmInstall> {
+pub(crate) fn resolve_with_snapshot(
+    redline: Option<&Path>,
+    rocm: Option<&Path>,
+    hip: Option<&Path>,
+) -> Option<RocmInstall> {
     let env = EnvSnapshot {
-        redline: redline.map(|p| normalize_hip_path(p)),
-        rocm: rocm.map(|p| normalize_hip_path(p)),
-        hip: hip.map(|p| normalize_hip_path(p)),
+        redline: redline.map(normalize_hip_path),
+        rocm: rocm.map(normalize_hip_path),
+        hip: hip.map(normalize_hip_path),
         hipcc: None,
         strict: false,
         path_dirs: None,
@@ -1129,7 +1142,10 @@ pub enum ToolchainError {
         compiler_root: PathBuf,
     },
     #[error("Could not resolve ROCm device compiler {compiler} derived root (tried {tried})", tried = .tried.join(", "))]
-    CompilerRootUnknown { compiler: PathBuf, tried: Vec<String> },
+    CompilerRootUnknown {
+        compiler: PathBuf,
+        tried: Vec<String>,
+    },
 }
 
 /// Whether `path` is executable. On Unix checks the execute bits; on Windows
@@ -1180,7 +1196,9 @@ fn find_compiler_in_root(root: &Path) -> Option<(PathBuf, PathBuf)> {
     None
 }
 
-fn find_compiler_on_path(env_path: Option<&[PathBuf]>) -> Option<(PathBuf, PathBuf, CompilerSource)> {
+fn find_compiler_on_path(
+    env_path: Option<&[PathBuf]>,
+) -> Option<(PathBuf, PathBuf, CompilerSource)> {
     let dirs = path_dirs_from_env(env_path);
     for name in DEVICE_COMPILERS {
         let found = if env_path.is_some() {
@@ -1189,7 +1207,12 @@ fn find_compiler_on_path(env_path: Option<&[PathBuf]>) -> Option<(PathBuf, PathB
             path_tool(name)
         };
         if let Some(p) = found {
-            let r = root_from_compiler(&p).unwrap_or_else(|| p.parent().and_then(|b| b.parent()).map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("/")));
+            let r = root_from_compiler(&p).unwrap_or_else(|| {
+                p.parent()
+                    .and_then(|b| b.parent())
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("/"))
+            });
             return Some((p, r, CompilerSource::Path));
         }
     }
@@ -1200,48 +1223,49 @@ fn find_compiler_in_other_roots(
     selected_root: &Path,
     env: &EnvSnapshot,
 ) -> Option<(PathBuf, PathBuf)> {
-    let candidates: Vec<PathBuf> = if env.redline.is_some() || env.rocm.is_some() || env.hip.is_some() {
-        // Authoritative mode: other roots are not considered for runtime, but for
-        // cross-root compiler we still look at other discovered installs. In
-        // authoritative mode `discover_all` is empty, so we fall back to scanning
-        // PATH + filesystem directly.
-        let mut out = Vec::new();
-        // PATH-derived roots
-        let dirs = path_dirs_from_env(env.path_dirs.as_deref());
-        let path_roots = if env.path_dirs.is_some() {
-            roots_from_path_tools_with_dirs(&dirs)
+    let candidates: Vec<PathBuf> =
+        if env.redline.is_some() || env.rocm.is_some() || env.hip.is_some() {
+            // Authoritative mode: other roots are not considered for runtime, but for
+            // cross-root compiler we still look at other discovered installs. In
+            // authoritative mode `discover_all` is empty, so we fall back to scanning
+            // PATH + filesystem directly.
+            let mut out = Vec::new();
+            // PATH-derived roots
+            let dirs = path_dirs_from_env(env.path_dirs.as_deref());
+            let path_roots = if env.path_dirs.is_some() {
+                roots_from_path_tools_with_dirs(&dirs)
+            } else {
+                roots_from_path_tools()
+            };
+            for r in path_roots {
+                if !paths_same_root(&r, selected_root) && !out.contains(&r) {
+                    out.push(r);
+                }
+            }
+            // Also consider generic filesystem roots (like /opt/rocm siblings) when not authoritative?
+            // In authoritative mode we still respect that the compiler may live in another
+            // side-by-side install not on PATH, so scan versioned siblings.
+            #[cfg(not(windows))]
+            {
+                for c in versioned_siblings(Path::new("/opt"), "rocm-") {
+                    if !paths_same_root(&c, selected_root) && !out.contains(&c) {
+                        out.push(c);
+                    }
+                }
+                for c in root_family(Path::new("/opt/rocm")) {
+                    if !paths_same_root(&c, selected_root) && !out.contains(&c) {
+                        out.push(c);
+                    }
+                }
+            }
+            out
         } else {
-            roots_from_path_tools()
+            discover_all_with_env(env)
+                .into_iter()
+                .map(|i| i.root)
+                .filter(|r| !paths_same_root(r, selected_root))
+                .collect()
         };
-        for r in path_roots {
-            if !paths_same_root(&r, selected_root) && !out.contains(&r) {
-                out.push(r);
-            }
-        }
-        // Also consider generic filesystem roots (like /opt/rocm siblings) when not authoritative?
-        // In authoritative mode we still respect that the compiler may live in another
-        // side-by-side install not on PATH, so scan versioned siblings.
-        #[cfg(not(windows))]
-        {
-            for c in versioned_siblings(Path::new("/opt"), "rocm-") {
-                if !paths_same_root(&c, selected_root) && !out.contains(&c) {
-                    out.push(c);
-                }
-            }
-            for c in root_family(Path::new("/opt/rocm")) {
-                if !paths_same_root(&c, selected_root) && !out.contains(&c) {
-                    out.push(c);
-                }
-            }
-        }
-        out
-    } else {
-        discover_all_with_env(env)
-            .into_iter()
-            .map(|i| i.root)
-            .filter(|r| !paths_same_root(r, selected_root))
-            .collect()
-    };
     for root in candidates {
         if let Some((p, r)) = find_compiler_in_root(&root) {
             return Some((p, r));
@@ -1258,24 +1282,26 @@ fn resolve_runtime_root_with_env(env: &EnvSnapshot) -> Option<PathBuf> {
     if !ambiguous_roots_with_env(env).is_empty() {
         return None;
     }
-    // Priority: configured families first, then discovered.
-    for opt in [&env.redline, &env.rocm, &env.hip] {
-        if let Some(cfg) = opt {
-            // First try coherent SDK
-            for cand in root_family(cfg) {
-                if is_coherent_sdk_root(&cand) {
-                    return Some(cand);
-                }
+    // Highest-priority configured root only, and authoritative (see resolve_with_env).
+    if let Some(cfg) = [&env.redline, &env.rocm, &env.hip]
+        .into_iter()
+        .flatten()
+        .next()
+    {
+        // Prefer a fully coherent SDK.
+        for cand in root_family(cfg) {
+            if is_coherent_sdk_root(&cand) {
+                return Some(cand);
             }
-            // Then try runtime-coherent (libs-only) for cross-root case
-            for cand in root_family(cfg) {
-                if is_runtime_coherent_root(&cand) {
-                    return Some(cand);
-                }
-            }
-            // Configured but no usable member — authoritative, do not fall through.
-            return None;
         }
+        // Then accept runtime-coherent (libs present, compiler elsewhere).
+        for cand in root_family(cfg) {
+            if is_runtime_coherent_root(&cand) {
+                return Some(cand);
+            }
+        }
+        // Configured but no usable member — authoritative, do not fall through.
+        return None;
     }
     // No configured root: try coherent SDK via discover_all
     if let Some(inst) = discover_all_with_env(env).into_iter().next() {
@@ -1284,11 +1310,19 @@ fn resolve_runtime_root_with_env(env: &EnvSnapshot) -> Option<PathBuf> {
     // No coherent SDK: try runtime-coherent among filesystem candidates
     let candidates: Vec<PathBuf> = {
         let mut out = Vec::new();
-        let mut push = |p: PathBuf| if !out.contains(&p) { out.push(p); };
+        let mut push = |p: PathBuf| {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        };
         #[cfg(not(windows))]
         {
-            for c in root_family(Path::new("/opt/rocm")) { push(c); }
-            for c in versioned_siblings(Path::new("/opt"), "rocm-") { push(c); }
+            for c in root_family(Path::new("/opt/rocm")) {
+                push(c);
+            }
+            for c in versioned_siblings(Path::new("/opt"), "rocm-") {
+                push(c);
+            }
         }
         let dirs = path_dirs_from_env(env.path_dirs.as_deref());
         let path_roots = if env.path_dirs.is_some() {
@@ -1296,10 +1330,14 @@ fn resolve_runtime_root_with_env(env: &EnvSnapshot) -> Option<PathBuf> {
         } else {
             roots_from_path_tools()
         };
-        for c in path_roots { push(c); }
+        for c in path_roots {
+            push(c);
+        }
         #[cfg(not(windows))]
         for c in [PathBuf::from("/usr"), PathBuf::from("/usr/local")] {
-            if has_package_rocm_evidence(&c) { push(c); }
+            if has_package_rocm_evidence(&c) {
+                push(c);
+            }
         }
         out
     };
@@ -1383,11 +1421,10 @@ fn resolve_toolchain_with_env(env: &EnvSnapshot) -> Result<RocmToolchain, Toolch
     // Runtime-coherent but no compiler — try cross-root.
     // We know at this point `runtime_root` is runtime-coherent (since resolve_runtime_root returned it)
     // and has no compiler. Try PATH, then other roots.
-    let cross = find_compiler_on_path(env.path_dirs.as_deref())
-        .map(|(c, r, src)| (c, r, src))
-        .or_else(|| {
-            find_compiler_in_other_roots(&runtime_root, env).map(|(c, r)| (c, r, CompilerSource::OtherRoot))
-        });
+    let cross = find_compiler_on_path(env.path_dirs.as_deref()).or_else(|| {
+        find_compiler_in_other_roots(&runtime_root, env)
+            .map(|(c, r)| (c, r, CompilerSource::OtherRoot))
+    });
 
     if let Some((compiler, compiler_root, source)) = cross {
         if env.strict {
@@ -1430,30 +1467,14 @@ pub(crate) fn resolve_toolchain_with_snapshot(
     path_dirs: Option<&[PathBuf]>,
 ) -> Result<RocmToolchain, ToolchainError> {
     let env = EnvSnapshot {
-        redline: redline.map(|p| normalize_hip_path(p)),
-        rocm: rocm.map(|p| normalize_hip_path(p)),
-        hip: hip.map(|p| normalize_hip_path(p)),
+        redline: redline.map(normalize_hip_path),
+        rocm: rocm.map(normalize_hip_path),
+        hip: hip.map(normalize_hip_path),
         hipcc: hipcc.map(|p| p.to_path_buf()),
         strict,
         path_dirs: path_dirs.map(|s| s.to_vec()),
     };
     resolve_toolchain_with_env(&env)
-}
-
-/// Convenience: resolve the toolchain and return its warning lines, if any.
-/// Pure helper for tests uses injected env.
-#[cfg(test)]
-pub(crate) fn resolve_toolchain_warnings_with_snapshot(
-    redline: Option<&Path>,
-    rocm: Option<&Path>,
-    hip: Option<&Path>,
-    hipcc: Option<&Path>,
-    strict: bool,
-    path_dirs: Option<&[PathBuf]>,
-) -> Result<(RocmToolchain, Vec<String>), ToolchainError> {
-    let tc = resolve_toolchain_with_snapshot(redline, rocm, hip, hipcc, strict, path_dirs)?;
-    let w = tc.warnings();
-    Ok((tc, w))
 }
 
 // ---------------------------------------------------------------------------
@@ -1569,9 +1590,9 @@ pub(crate) fn library_candidates_with_snapshot(
     hip: Option<&Path>,
 ) -> Vec<String> {
     let env = EnvSnapshot {
-        redline: redline.map(|p| normalize_hip_path(p)),
-        rocm: rocm.map(|p| normalize_hip_path(p)),
-        hip: hip.map(|p| normalize_hip_path(p)),
+        redline: redline.map(normalize_hip_path),
+        rocm: rocm.map(normalize_hip_path),
+        hip: hip.map(normalize_hip_path),
         hipcc: None,
         strict: false,
         path_dirs: None,
@@ -1595,7 +1616,10 @@ pub enum InstallError {
         required: RocmVersion,
     },
     #[error("ROCm unknown version at {root} is too old (need >= {required})", root = .root.display())]
-    UnknownVersion { root: PathBuf, required: RocmVersion },
+    UnknownVersion {
+        root: PathBuf,
+        required: RocmVersion,
+    },
 }
 
 /// Require at least `min`, naming what was found on failure.
@@ -1929,7 +1953,7 @@ mod tests {
         // Use EnvSnapshot that does not involve real filesystem /opt/rocm:
         // Inject each as configured individually is not useful. Instead test
         // version ordering directly via RocmInstall sorting logic.
-        let mut installs = vec![
+        let mut installs = [
             RocmInstall {
                 root: r1.clone(),
                 version: version_from_root(&r1),
@@ -1993,11 +2017,18 @@ mod tests {
         let hip = root.join("hip");
         fs::create_dir_all(&hip).unwrap();
         // Use toolchain snapshot with rocm = hip path; it should normalize to root and resolve.
-        let tc = resolve_toolchain_with_snapshot(Some(&hip), None, None, None, false, None).or_else(|_| resolve_toolchain_with_snapshot(None, Some(&hip), None, None, false, None)).or_else(|_| resolve_toolchain_with_snapshot(None, None, Some(&hip), None, false, None));
+        let _tc = resolve_toolchain_with_snapshot(Some(&hip), None, None, None, false, None)
+            .or_else(|_| resolve_toolchain_with_snapshot(None, Some(&hip), None, None, false, None))
+            .or_else(|_| {
+                resolve_toolchain_with_snapshot(None, None, Some(&hip), None, false, None)
+            });
         // At least one of the three env positions should have normalized and returned a toolchain with root == original root
         // Test directly the helper:
         let norm = normalize_hip_path(&hip);
-        assert_eq!(norm, root, "hip suffix should strip when parent is coherent");
+        assert_eq!(
+            norm, root,
+            "hip suffix should strip when parent is coherent"
+        );
         // Now test that ROCM_PATH and REDLINE_ROCM_ROOT also strip
         let norm2 = normalize_hip_path(&hip);
         assert_eq!(norm2, root);
@@ -2079,8 +2110,19 @@ mod tests {
         make_coherent_root(&root, Some("7.14.0"));
         let override_dir = tmp.join("override_bin");
         let override_hipcc = make_fake_hipcc(&override_dir, None);
-        let tc = resolve_toolchain_with_snapshot(Some(&root), None, None, Some(&override_hipcc), false, None).unwrap();
-        assert_eq!(tc.compiler, std::fs::canonicalize(&override_hipcc).unwrap_or(override_hipcc.clone()));
+        let tc = resolve_toolchain_with_snapshot(
+            Some(&root),
+            None,
+            None,
+            Some(&override_hipcc),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            tc.compiler,
+            std::fs::canonicalize(&override_hipcc).unwrap_or(override_hipcc.clone())
+        );
         assert_eq!(tc.compiler_source, CompilerSource::Override);
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -2091,7 +2133,9 @@ mod tests {
         let root = tmp.join("rocm-7.14");
         make_coherent_root(&root, Some("7.14.0"));
         let bogus = tmp.join("nonexistent").join("hipcc");
-        let err = resolve_toolchain_with_snapshot(Some(&root), None, None, Some(&bogus), false, None).unwrap_err();
+        let err =
+            resolve_toolchain_with_snapshot(Some(&root), None, None, Some(&bogus), false, None)
+                .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("REDLINE_HIPCC"), "{msg}");
         assert!(msg.contains(&bogus.display().to_string()), "{msg}");
@@ -2116,19 +2160,42 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(comp_root.join("bin/hipcc"), &link).unwrap();
         let path_dirs = vec![path_dir.clone()];
-        let tc = resolve_toolchain_with_snapshot(Some(&libs_root), None, None, None, false, Some(&path_dirs)).unwrap();
+        let tc = resolve_toolchain_with_snapshot(
+            Some(&libs_root),
+            None,
+            None,
+            None,
+            false,
+            Some(&path_dirs),
+        )
+        .unwrap();
         assert_eq!(tc.root, libs_root);
         assert_eq!(tc.compiler_source, CompilerSource::Path);
         // warnings should name both roots and versions
         let warnings = tc.warnings();
         assert!(!warnings.is_empty(), "cross-root should warn");
         let joined = warnings.join("\n");
-        assert!(joined.contains(&libs_root.display().to_string()), "{joined}");
-        assert!(joined.contains(&tc.compiler.display().to_string()), "{joined}");
-        assert!(joined.contains(&tc.compiler_root.display().to_string()), "{joined}");
+        assert!(
+            joined.contains(&libs_root.display().to_string()),
+            "{joined}"
+        );
+        assert!(
+            joined.contains(&tc.compiler.display().to_string()),
+            "{joined}"
+        );
+        assert!(
+            joined.contains(&tc.compiler_root.display().to_string()),
+            "{joined}"
+        );
         // both versions when readable
-        assert!(joined.contains("7.14.0") || joined.contains("unknown"), "{joined}");
-        assert!(joined.contains("7.14.1") || joined.contains("unknown"), "{joined}");
+        assert!(
+            joined.contains("7.14.0") || joined.contains("unknown"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("7.14.1") || joined.contains("unknown"),
+            "{joined}"
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -2144,9 +2211,20 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(comp_root.join("bin/hipcc"), path_dir.join("hipcc")).unwrap();
         let path_dirs = vec![path_dir];
-        let err = resolve_toolchain_with_snapshot(Some(&libs_root), None, None, None, true, Some(&path_dirs)).unwrap_err();
+        let err = resolve_toolchain_with_snapshot(
+            Some(&libs_root),
+            None,
+            None,
+            None,
+            true,
+            Some(&path_dirs),
+        )
+        .unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("STRICT") || msg.contains("strict") || msg.contains("forbids"), "{msg}");
+        assert!(
+            msg.contains("STRICT") || msg.contains("strict") || msg.contains("forbids"),
+            "{msg}"
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -2180,9 +2258,20 @@ mod tests {
         // To exercise OtherRoot path, we can leave redline=None and have both libs_only and other_root in scan? Simpler: just ensure toolchain resolves without PATH when other root exists via filesystem scan.
         // For this test we use the non-authoritative path: place both roots under /tmp and rely on path_dirs containing other_root's bin.
         let path_dirs = vec![other_root.join("bin")];
-        let tc = resolve_toolchain_with_snapshot(Some(&libs_root), None, None, None, false, Some(&path_dirs)).unwrap();
+        let tc = resolve_toolchain_with_snapshot(
+            Some(&libs_root),
+            None,
+            None,
+            None,
+            false,
+            Some(&path_dirs),
+        )
+        .unwrap();
         // This will be Path source, not OtherRoot, because path_dirs contains it. That's okay.
-        assert!(tc.compiler_source == CompilerSource::Path || tc.compiler_source == CompilerSource::OtherRoot);
+        assert!(
+            tc.compiler_source == CompilerSource::Path
+                || tc.compiler_source == CompilerSource::OtherRoot
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 }

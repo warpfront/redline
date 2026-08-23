@@ -316,7 +316,6 @@ fn device_matches_deny(
     device_matches_query(device, query, manifest)
 }
 
-
 /// Hostname used to pick the `[host.*]` section: `REDLINE_HOST`, else kernel hostname.
 pub fn active_hostname() -> String {
     if let Ok(override_host) = env::var("REDLINE_HOST") {
@@ -806,7 +805,7 @@ fn parse_selector_array(
     // next to each item inside the brackets.
     if let Some(note) = after_bracket_note {
         match entries.as_mut_slice() {
-            [( _selector, _query, existing_note )] if existing_note.is_none() => {
+            [(_selector, _query, existing_note)] if existing_note.is_none() => {
                 *existing_note = Some(note)
             }
             _ => {
@@ -1194,9 +1193,7 @@ deny = ["bdf:0000:01:00.0"]  # always denied
         let m = parse_devices_toml(text).unwrap().for_host("h");
         let d = device(None, "0000:01:00.0", "gfx1101", 0, None);
         assert!(m.check_with_risk(&d, RiskClass::Normal).is_err());
-        assert!(m
-            .check_with_risk(&d, RiskClass::ResetProvoking)
-            .is_err());
+        assert!(m.check_with_risk(&d, RiskClass::ResetProvoking).is_err());
         // fragile empty, deny still fires
         let err = m
             .check_with_risk(&d, RiskClass::ResetProvoking)
@@ -1214,8 +1211,7 @@ fragile = ["bdf:0000:02:00.0"]
 "#;
         let m = parse_devices_toml(text).unwrap().for_host("h");
         let ok = device(None, "0000:03:00.0", "gfx1201", 2, None);
-        m.check_with_risk(&ok, RiskClass::Normal)
-            .expect("allowed");
+        m.check_with_risk(&ok, RiskClass::Normal).expect("allowed");
         m.check_with_risk(&ok, RiskClass::ResetProvoking)
             .expect("allowed");
     }
@@ -1231,7 +1227,8 @@ fragile = ["@myapu"]  # via alias
         let m = parse_devices_toml(text).unwrap().for_host("h");
         let apu = device(None, "0000:bf:00.0", "gfx1151", 5, None);
         // Normal still allows (fragile via alias)
-        m.check_with_risk(&apu, RiskClass::Normal).expect("normal allows");
+        m.check_with_risk(&apu, RiskClass::Normal)
+            .expect("normal allows");
         // ResetProvoking must expand alias and refuse
         let err = m
             .check_with_risk(&apu, RiskClass::ResetProvoking)

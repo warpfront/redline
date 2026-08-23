@@ -99,12 +99,10 @@ pub(crate) fn validate_dispatch_stream(dwords: &[u32]) -> Result<(), StreamValid
                     }
                 }
             }
-            PACKET3_DISPATCH_DIRECT => {
-                if pgm_lo == 0 && pgm_hi == 0 {
-                    return Err(StreamValidationError::DispatchWithoutProgramAddress {
-                        dword_index: cursor,
-                    });
-                }
+            PACKET3_DISPATCH_DIRECT if pgm_lo == 0 && pgm_hi == 0 => {
+                return Err(StreamValidationError::DispatchWithoutProgramAddress {
+                    dword_index: cursor,
+                });
             }
             _ => {}
         }

@@ -1203,13 +1203,17 @@ mod tests {
         let candidate = RecipeCatalog::builtin_hipfire_6409()
             .select("gfx1151", workload, SelectionMode::Candidates)
             .unwrap();
-        assert!(candidate
-            .candidate_recipes
-            .contains(&"hipfire.cross_lane.wave32_xor_exchange".to_owned()));
-        assert!(candidate
-            .plan
-            .lowerings
-            .contains(&SourceLowering::Wave32XorExchange));
+        assert!(
+            candidate
+                .candidate_recipes
+                .contains(&"hipfire.cross_lane.wave32_xor_exchange".to_owned())
+        );
+        assert!(
+            candidate
+                .plan
+                .lowerings
+                .contains(&SourceLowering::Wave32XorExchange)
+        );
     }
 
     #[test]

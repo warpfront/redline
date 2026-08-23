@@ -120,10 +120,7 @@ const HIP_LIBRARY_ENV: &str = "REDLINE_HIP_LIBRARY";
 /// a missing library or symbol yields an empty map, never an error that would
 /// make Redline hard-depend on HIP.
 pub fn hip_pci_ordinal_map() -> HashMap<PciBusId, i32> {
-    match load_hip_pci_ordinal_map() {
-        Ok(map) => map,
-        Err(_) => HashMap::new(),
-    }
+    load_hip_pci_ordinal_map().unwrap_or_default()
 }
 
 /// Fill [`DeviceIdentity::hip_ordinal`] by joining on PCI address.
@@ -397,7 +394,8 @@ fn open_hip_library() -> Result<Library, HipBackendError> {
             detail: error.to_string(),
         });
     }
-    let candidates = redline_rocr::install::library_candidates("libamdhip64.so", &["libamdhip64.so.7"]);
+    let candidates =
+        redline_rocr::install::library_candidates("libamdhip64.so", &["libamdhip64.so.7"]);
     let mut failures = Vec::new();
     for candidate in &candidates {
         // SAFETY: loading the installed HIP runtime is the purpose of this

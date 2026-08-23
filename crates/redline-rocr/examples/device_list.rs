@@ -66,7 +66,9 @@ fn main() {
                     selector = Some(arg.clone());
                     i += 1;
                 } else {
-                    eprintln!("redline: device_list --resolve: unexpected argument {arg:?}; try --help");
+                    eprintln!(
+                        "redline: device_list --resolve: unexpected argument {arg:?}; try --help"
+                    );
                     process::exit(1);
                 }
             }
