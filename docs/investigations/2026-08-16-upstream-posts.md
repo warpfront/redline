@@ -26,7 +26,7 @@ Measurement environment for all three:
 
 ### Body
 
-`hipMemCreate` appears to consume one file descriptor per allocation handle, so
+`hipMemCreate` consumes **one dmabuf file descriptor per allocation handle**, so
 the total amount of memory reachable through the HIP virtual-memory-management
 API is bounded by `RLIMIT_NOFILE` rather than by available VRAM. With the
 common default of `ulimit -n 1024`, a process can map roughly 2 GiB of VMM on a
@@ -36,22 +36,43 @@ common default of `ulimit -n 1024`, a process can map roughly 2 GiB of VMM on a
 still free**, which is what makes this hard to diagnose: every signal points at
 the GPU being full when the exhausted resource is actually descriptors.
 
-Measured on a Radeon AI PRO R9700 (gfx1201, 32 GiB) under ROCm 7.14.0, with
-`hipMemGetAllocationGranularity(..., Recommended)` reporting 2 MiB. VA is
-pre-reserved for everything that could fit, so address space is never the limit:
+Measured across four architectures under ROCm 7.14.0, recommended granularity
+2 MiB on all of them, with virtual address space pre-reserved so VA is never the
+limit. The ceiling is **identical on every card while VRAM varies six-fold**,
+which is what identifies the descriptor budget rather than memory as the
+constraint:
 
-| `ulimit -n` | Handles mapped | Mapped bytes | First failure | VRAM free at failure |
+| Arch | GPU | VRAM free | Handles at `ulimit -n 1024` | Reachable | % of VRAM | First failure |
+| --- | --- | --- | --- | --- | --- | --- |
+| gfx1030 | RX 6950 XT | 15.96 GiB | 1015 | 1.98 GiB | 12.4% | `out of memory` |
+| gfx1100 | RX 7900 XTX | 23.95 GiB | 1015 | 1.98 GiB | 8.3% | `out of memory` |
+| gfx1151 | Strix Halo (APU) | **95.84 GiB** | 1015 | 1.98 GiB | **2.1%** | `out of memory` |
+| gfx1201 | Radeon AI PRO R9700 | 31.79 GiB | 1015 | 1.98 GiB | 6.2% | `out of memory` |
+
+Raising the soft limit lifts it to the whole card on every arch tested:
+
+| Arch | `ulimit -n` raised | Handles | Reachable | Outcome |
 | --- | --- | --- | --- | --- |
-| 1024 (default) | 1015 | **1.98 GiB** | `out of memory` | **29.80 GiB** |
-| 65536 | 9765 | 19.07 GiB | — | — |
-| 262144 | 15786 | **30.83 GiB (96.9%)** | — | — |
+| gfx1030 | 65536 | 8170 | 15.96 GiB | VA exhausted, no allocation failure |
+| gfx1100 | 65536 | 12261 | 23.95 GiB | VA exhausted, no allocation failure |
+| gfx1201 | 262144 | 15786 | 30.83 GiB (96.9%) | VA exhausted, no allocation failure |
 
-The ceiling tracks the FD limit almost exactly — 1015 handles against a 1024
-descriptor budget, the remainder being the runtime's own descriptors — and
-disappears entirely when the limit is raised. In the raised-limit runs the probe
-goes on to consume the whole card (0.00 GiB free, address space exhausted rather
-than allocation failing), confirming VRAM was never the binding constraint in
-the first row.
+The gfx1151 APU is the sharpest illustration: **1.98 GiB of 95.84 GiB, or 2.1% of
+available memory**, reachable through VMM at the stock descriptor limit. Its
+raised-limit arm was deliberately not run because that host is shared.
+
+### The mechanism, measured rather than inferred
+
+Descriptor accounting rules out reading anything into the ceiling merely landing
+near 1024. On all four architectures, identically:
+
+- 64 x `hipMemCreate` raises the `/proc/self/fd` count by **exactly 64**
+- every new descriptor has `readlink` target **`/dmabuf:`**
+- `hipMemRelease` returns all 64
+- a 64-allocation **`hipMalloc` control changes the count by zero**
+
+So it is one dmabuf descriptor per handle, held for the handle's lifetime,
+released correctly, and specific to the VMM path.
 
 ### Why this matters
 
