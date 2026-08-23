@@ -74,6 +74,44 @@ near 1024. On all four architectures, identically:
 So it is one dmabuf descriptor per handle, held for the handle's lifetime,
 released correctly, and specific to the VMM path.
 
+### Reachable bytes are `descriptors x chunk`, on every architecture
+
+The same probe at the **stock** `ulimit -n 1024`, varying the per-handle chunk
+size. The handle count is **identically 1015 at every chunk size on every card**
+until VRAM becomes the binding constraint instead, which is what shows the
+descriptor budget is the limit and that a handle costs one descriptor regardless
+of its size:
+
+| Arch | VRAM free | 2 MiB | 8 MiB | 32 MiB | 128 MiB |
+| --- | --- | --- | --- | --- | --- |
+| gfx1030 | 15.96 GiB | 1015 / 1.98 GiB | 1015 / 7.93 GiB | 510 / 15.94 GiB (VRAM) | 127 / 15.88 GiB (VRAM) |
+| gfx1100 | 23.95 GiB | 1015 / 1.98 GiB | 1015 / 7.93 GiB | 766 / 23.94 GiB (VRAM) | 191 / 23.88 GiB (VRAM) |
+| gfx1151 | 95.84 GiB | 1015 / 1.98 GiB | 1015 / 7.93 GiB | capped* | capped* |
+| gfx1201 | 31.79 GiB | 1015 / 1.98 GiB | 1015 / 7.93 GiB | 1015 / 31.72 GiB | 254 / 31.75 GiB (VRAM) |
+
+\* gfx1151 runs were capped at an 8 GiB budget because that host is shared; both
+uncapped points below the cap are descriptor-bound and match the other cards
+exactly.
+
+Note gfx1201 is still descriptor-bound at 32 MiB (1015 x 32 MiB = 31.72 GiB just
+fits under its 31.79 GiB free), whereas the 16 GiB and 24 GiB cards cross over to
+VRAM-bound at that size. The crossover moves with VRAM; the 1015 does not.
+
+### Two mitigations, both verified
+
+1. **Larger physical chunks. No privileges required.** Because a handle costs one
+   descriptor irrespective of size, reachable bytes scale directly with chunk
+   size. 32 MiB chunks reach a whole 32 GiB card at the stock descriptor limit.
+   This is the mitigation that works inside a container that caps `RLIMIT_NOFILE`.
+2. **Raise `RLIMIT_NOFILE`.** Soft 1024 against hard 524288 on these hosts, and
+   soft may be raised to hard unprivileged. Verified to reach the whole card:
+   gfx1030 8170 handles / 15.96 GiB, gfx1100 12261 / 23.95 GiB, gfx1201 15786 /
+   30.83 GiB, each ending with address space exhausted rather than an allocation
+   failure.
+
+Neither is documented, and the failure that sends you looking for them reports
+`hipErrorOutOfMemory`.
+
 ### Why this matters
 
 Consumers that build large allocations out of VMM handles hit this well before
