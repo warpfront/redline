@@ -310,6 +310,71 @@ earlier and 7.2-vs-7.13 becomes the question. Either outcome is a real
 narrowing, and I have not seen it done in the thread. I have gfx1201 (two
 boards) and gfx1100/gfx1151/gfx1010/gfx1030 available on 7.14 and can run it.
 
+## 4. COMMENT on `rocm-systems#10021` / PR `#10022` — reproduced on gfx1201, so the path is architecture-independent
+
+**Target:** issue `ROCm/rocm-systems#10021`, and/or its fix PR `#10022`. PR state
+2026-08-23: OPEN, `REVIEW_REQUIRED`, merge `BLOCKED`, policy checks green, not a
+draft. `@chrispaquot` asked an inline question on 2026-08-14 which the author
+answered the same day; nothing has moved since. Posting confirmation from a
+second architecture is the cheapest thing that might unstick it.
+
+### Body
+
+Confirming this on **gfx1201** (Radeon AI PRO R9700), stock ROCm **7.14.0**, so
+the defect is not specific to the gfx1100 in the original report. That matches
+the code: neither the unchecked `getGraphKernArg()` result in the graph-capture
+branch of `submitKernelInternal` nor `GraphKernelArgManager::AllocKernArg`
+returning `nullptr` on a failed pool grow carries any architecture predicate.
+
+Reproducer is a single self-contained HIP file, no framework: capture a graph of
+512 kernel nodes, instantiate and launch it once, exhaust device memory with
+descending `hipMalloc` sizes, then drive `hipGraphExecUpdate` repeatedly so the
+exec has to re-capture kernargs with nothing available.
+
+```
+=== AMD Radeon AI PRO R9700 (gfx1201) ===
+free 31.79 GiB / total 31.86 GiB | graph nodes 512 | update rounds 6
+
+baseline: graph of 512 nodes captured, instantiated, launched OK
+exhausted: held 31.65 GiB in 36 blocks, 0.0 MiB reported free
+
+round 1: hipGraphExecUpdate under exhaustion ... ok (result=0)
+round 2: hipGraphExecUpdate under exhaustion ... ok (result=0)
+round 3: hipGraphExecUpdate under exhaustion ... ok (result=0)
+round 4: hipGraphExecUpdate under exhaustion ... Segmentation fault (core dumped)
+```
+
+Deterministic: 3 of 3 runs died on round 4, exit 139. The first three updates
+succeed because the existing kernarg pool still has room; the crash comes when a
+later update has to grow it.
+
+`rocgdb` backtrace, showing the fault is entirely inside the runtime:
+
+```
+#0  0x00007ffff6ab9f78 in ?? () from /opt/rocm/core/lib/libamdhip64.so.7
+#1  0x00007ffff6abafa8 in ?? () from /opt/rocm/core/lib/libamdhip64.so.7
+#2  0x00007ffff664bfb3 in ?? () from /opt/rocm/core/lib/libamdhip64.so.7
+#3  0x00007ffff6646a85 in ?? () from /opt/rocm/core/lib/libamdhip64.so.7
+#4  0x00007ffff66bb6e0 in ?? () from /opt/rocm/core/lib/libamdhip64.so.7
+#5  0x00007ffff695fdff in hipGraphExecUpdate () from /opt/rocm/core/lib/libamdhip64.so.7
+#6  0x0000555555559cfa in main ()
+```
+
+Six frames below `hipGraphExecUpdate`, no application frame in between.
+
+### Why it is worth fixing rather than treating as an out-of-memory edge case
+
+`hipGraphExecUpdate` is on the decode path of real inference stacks — llama.cpp
+builds with `GGML_HIP_GRAPHS` on by default and calls the CUDA equivalent per
+step — and running near the VRAM ceiling is the normal operating point for
+long-context serving, not an unusual one. The observable difference between the
+current behaviour and the fix is a returned error versus a process crash inside
+the runtime, which an application cannot defend against.
+
+Reproducer source: `bench/vmm/graph_execupdate_oom.cpp` in
+https://github.com/warpfront/redline (exit 0 means the runtime handled
+exhaustion, 3 means it reported an error, 139 means it reproduced).
+
 ---
 
 ## Still blocked, not drafted here
