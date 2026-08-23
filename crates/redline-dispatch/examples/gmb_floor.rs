@@ -229,14 +229,16 @@ fn measure(
     let mut observed = vec![0_u8; out.len()];
     // SAFETY: replay completion proves the GPU is no longer using `out`.
     unsafe { out.copy_to_host(&mut observed)? };
-    let correct = observed
-        .chunks_exact(4)
-        .all(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) == expected);
+    let (chunks, _) = observed.as_chunks::<4>();
+    let correct = chunks
+        .iter()
+        .all(|bytes| u32::from_le_bytes(*bytes) == expected);
     if !correct && std::env::var_os("GMB_DEBUG_MISMATCH").is_some() {
-        let values: Vec<f32> = observed
-            .chunks_exact(4)
+        let (chunks, _) = observed.as_chunks::<4>();
+        let values: Vec<f32> = chunks
+            .iter()
             .take(16)
-            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+            .map(|bytes| f32::from_le_bytes(*bytes))
             .collect();
         eprintln!(
             "serial mismatch grid={} count={count}: {values:?}",
@@ -255,9 +257,10 @@ fn measure(
     }
     let final_expected = (((1 + warmup + reps) * count) as f32).to_bits();
     unsafe { out.copy_to_host(&mut observed)? };
-    let final_correct = observed
-        .chunks_exact(4)
-        .all(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) == final_expected);
+    let (chunks, _) = observed.as_chunks::<4>();
+    let final_correct = chunks
+        .iter()
+        .all(|bytes| u32::from_le_bytes(*bytes) == final_expected);
     Ok((median(ts) / count as f64, correct && final_correct))
 }
 // Mirrors the gmb_floor microbench ABI (device resources + launch params + reps).
@@ -286,14 +289,16 @@ fn measure_profiled_pm4(
     let expected = (count as f32).to_bits();
     let mut observed = vec![0_u8; out.len()];
     unsafe { out.copy_to_host(&mut observed)? };
-    let correct = observed
-        .chunks_exact(4)
-        .all(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) == expected);
+    let (chunks, _) = observed.as_chunks::<4>();
+    let correct = chunks
+        .iter()
+        .all(|bytes| u32::from_le_bytes(*bytes) == expected);
     if !correct && std::env::var_os("GMB_DEBUG_MISMATCH").is_some() {
-        let values: Vec<f32> = observed
-            .chunks_exact(4)
+        let (chunks, _) = observed.as_chunks::<4>();
+        let values: Vec<f32> = chunks
+            .iter()
             .take(16)
-            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+            .map(|bytes| f32::from_le_bytes(*bytes))
             .collect();
         eprintln!(
             "profiled mismatch grid={} count={count}: {values:?}",
@@ -350,14 +355,16 @@ fn measure_profiled_pm4_independent(
     let _ = unsafe { ib.replay_and_wait_profiled()? };
     let mut observed = vec![0_u8; out.len()];
     unsafe { out.copy_to_host(&mut observed)? };
-    let correct = observed
-        .chunks_exact(4)
-        .all(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) == 1.0_f32.to_bits());
+    let (chunks, _) = observed.as_chunks::<4>();
+    let correct = chunks
+        .iter()
+        .all(|bytes| u32::from_le_bytes(*bytes) == 1.0_f32.to_bits());
     if !correct && std::env::var_os("GMB_DEBUG_MISMATCH").is_some() {
-        let values: Vec<f32> = observed
-            .chunks_exact(4)
+        let (chunks, _) = observed.as_chunks::<4>();
+        let values: Vec<f32> = chunks
+            .iter()
             .take(16)
-            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+            .map(|bytes| f32::from_le_bytes(*bytes))
             .collect();
         eprintln!(
             "independent mismatch grid={} count={count}: {values:?}",
@@ -428,9 +435,10 @@ fn measure_gpuspan(
     let mut observed = vec![0_u8; out.len()];
     // SAFETY: replay completion proves the GPU is no longer using `out`.
     unsafe { out.copy_to_host(&mut observed)? };
-    let correct = observed
-        .chunks_exact(4)
-        .all(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) == expected);
+    let (chunks, _) = observed.as_chunks::<4>();
+    let correct = chunks
+        .iter()
+        .all(|bytes| u32::from_le_bytes(*bytes) == expected);
 
     for _ in 0..warmup {
         let _ = unsafe { graph.replay_and_wait()? };
@@ -495,9 +503,8 @@ fn measure_serial(
     let expected = (count as f32).to_bits();
     let mut observed = vec![0_u8; out.len()];
     unsafe { out.copy_to_host(&mut observed)? };
-    let correct = observed
-        .chunks_exact(4)
-        .all(|b| u32::from_le_bytes(b.try_into().unwrap()) == expected);
+    let (chunks, _) = observed.as_chunks::<4>();
+    let correct = chunks.iter().all(|b| u32::from_le_bytes(*b) == expected);
 
     for _ in 0..warmup {
         unsafe { ib.replay_and_wait()? };
@@ -559,9 +566,8 @@ fn measure_aql_host(
     let expected = (count as f32).to_bits();
     let mut observed = vec![0_u8; out.len()];
     unsafe { out.copy_to_host(&mut observed)? };
-    let correct = observed
-        .chunks_exact(4)
-        .all(|b| u32::from_le_bytes(b.try_into().unwrap()) == expected);
+    let (chunks, _) = observed.as_chunks::<4>();
+    let correct = chunks.iter().all(|b| u32::from_le_bytes(*b) == expected);
 
     for _ in 0..warmup {
         let _ = unsafe { graph.replay_and_wait()? };

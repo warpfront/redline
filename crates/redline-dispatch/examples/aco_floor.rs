@@ -151,9 +151,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // SAFETY: replay completion excludes concurrent GPU access.
         unsafe { output.copy_to_host(&mut observed)? };
         let expected = (count as f32).to_bits();
-        let correct = observed
-            .chunks_exact(4)
-            .all(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) == expected);
+        let (chunks, _) = observed.as_chunks::<4>();
+        let correct = chunks
+            .iter()
+            .all(|bytes| u32::from_le_bytes(*bytes) == expected);
         if !correct {
             return Err(format!("raw image failed full-grid correctness at count {count}").into());
         }
@@ -173,9 +174,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // SAFETY: the last replay completed before this copy.
         unsafe { output.copy_to_host(&mut final_observed)? };
         let final_expected = ((count * (1 + warmups + reps)) as f32).to_bits();
-        let final_correct = final_observed
-            .chunks_exact(4)
-            .all(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) == final_expected);
+        let (chunks, _) = final_observed.as_chunks::<4>();
+        let final_correct = chunks
+            .iter()
+            .all(|bytes| u32::from_le_bytes(*bytes) == final_expected);
         if !final_correct {
             return Err(
                 format!("raw image failed measured-burst correctness at count {count}").into(),
