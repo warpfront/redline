@@ -12,16 +12,26 @@
 // This program deliberately contains **no Redline and no retained PM4**. It is
 // pure HIP. That is the point: the single highest-value unknown on #6529 is
 // whether the fault can occur with no retained-PM4 replay in the process at all.
-// If it faults here, ownership sits with ROCr/CLR/KFD rather than with a
-// retained-PM4 submitter. If it stays clean, that narrows the search back toward
-// the retained-IB path.
 //
-// Each cycle: create a stream (a hardware queue underneath), allocate device
-// memory, create events, dispatch a real kernel that READS device memory (the
-// observed fault client is SQC (data), so a shader data fetch has to be in the
-// loop), wait, then destroy the stream, destroy the events and free the memory
-// so the next cycle reuses those addresses, doorbells and signal slots. Every
-// status is checked and reported loudly.
+// IMPORTANT SCOPE LIMIT, established by review of the ROCm 7.14 sources:
+// this does NOT exercise repeated hardware-queue retirement. CLR pools ordinary
+// queues -- it draws them from `queuePool_`, reuses them once the configured
+// limit is reached, and on release of an ordinary queue only drops a refcount;
+// pooled queues are torn down at device/process teardown, and stream teardown
+// calls `releaseQueue` rather than `hsa_queue_destroy`. So N stream
+// create/destroy calls are N *stream* operations over at most
+// GPU_MAX_HW_QUEUES (default 4) long-lived hardware queues, not N hardware-queue
+// create/destroy pairs. Testing hardware-queue retirement needs a direct ROCr
+// arm calling hsa_queue_create/hsa_queue_destroy per cycle.
+//
+// What this DOES exercise, genuinely, is repeated retirement and reuse of
+// device allocations and completion signals (events) around a live dispatch.
+//
+// Each cycle: create HIP streams, allocate device memory, create events,
+// dispatch a real kernel that READS device memory (the observed fault client is
+// SQC (data), so a shader data fetch has to be in the loop), wait, then destroy
+// the streams and events and free the memory so the next cycle reuses those
+// addresses and signal slots. Every status is checked and reported loudly.
 //
 // SAFETY: refuses to run on anything except gfx1100 unless --force is passed.
 // A device reset triggered here takes that GPU's VRAM with it, so it must never
@@ -100,8 +110,10 @@ int main(int argc, char** argv) {
     unsigned long long cycle = 0;
     unsigned long long dispatches = 0;
     for (cycle = 1; cycle <= cycles; ++cycle) {
-        // Fresh queues, signals and allocations every cycle, then released, so the
-        // next cycle reuses the same rings, doorbells, signal slots and addresses.
+        // Fresh streams, events and allocations every cycle, then released, so the
+        // next cycle reuses the same signal slots and device addresses. The
+        // underlying hardware queues are pooled by CLR and are NOT recreated here
+        // (see the scope limit in the header).
         std::vector<hipStream_t> streams(per_cycle, nullptr);
         std::vector<hipEvent_t> evs(per_cycle, nullptr);
         std::vector<int*> in(per_cycle, nullptr), out(per_cycle, nullptr);
