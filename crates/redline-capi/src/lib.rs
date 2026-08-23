@@ -30,6 +30,7 @@ pub const RL_ERR_CERTIFICATION: i32 = -7;
 
 /// Real-GPU retained-PM4 replay (engine supplies its own kernels + kernargs).
 pub mod gpu;
+mod validate;
 
 use gpu::{RlGpu, RlModule};
 
@@ -458,8 +459,12 @@ pub unsafe extern "C" fn rl_graphexec_launch(gpu: *const RlGpu, e: *const RlGrap
             dyn_group: meta.dyn_group,
         })
     });
-    let Ok(mut replay) = replay else {
-        return RL_ERR_COMPILE;
+    let mut replay = match replay {
+        Ok(replay) => replay,
+        Err(error) => {
+            eprintln!("redline: PM4 graph launch IB creation failed: {error}");
+            return RL_ERR_COMPILE;
+        }
     };
     // SAFETY: replay retains kernarg allocations and code objects; the C caller
     // upholds the lifetime of pointees embedded in the packed bytes.

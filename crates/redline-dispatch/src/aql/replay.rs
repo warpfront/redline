@@ -81,7 +81,7 @@ impl SingleQueuePm4Ib {
         commands: &Gfx12Pm4CommandBuffer,
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx12")?;
+        ensure_device_family(device, Pm4EncoderMap::Gfx12)?;
         let bytes = commands.as_bytes();
         Self::create_encoded(
             device,
@@ -111,7 +111,7 @@ impl SingleQueuePm4Ib {
         commands: &Gfx10Pm4CommandBuffer,
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx10")?;
+        ensure_device_family(device, Pm4EncoderMap::Legacy)?;
         let bytes = commands.as_bytes();
         Self::create_encoded(
             device,
@@ -139,7 +139,7 @@ impl SingleQueuePm4Ib {
         commands: &Gfx10Pm4CommandBuffer,
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx11")?;
+        ensure_device_family(device, Pm4EncoderMap::Legacy)?;
         let bytes = commands.as_bytes();
         Self::create_encoded(
             device,
@@ -158,7 +158,7 @@ impl SingleQueuePm4Ib {
         pool: &KernargPool,
         commands: &Gfx10Pm4CommandBuffer,
     ) -> Result<Self, ReplayError> {
-        Self::create_profiled_legacy(device, pool, commands, "gfx10", None)
+        Self::create_profiled_legacy(device, pool, commands, None)
     }
 
     pub fn create_profiled_gfx10_with_partition(
@@ -167,7 +167,7 @@ impl SingleQueuePm4Ib {
         commands: &Gfx10Pm4CommandBuffer,
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        Self::create_profiled_legacy(device, pool, commands, "gfx10", partition_policy)
+        Self::create_profiled_legacy(device, pool, commands, partition_policy)
     }
 
     /// Create a profiled retained GFX11 IB using the shared legacy map.
@@ -176,7 +176,7 @@ impl SingleQueuePm4Ib {
         pool: &KernargPool,
         commands: &Gfx10Pm4CommandBuffer,
     ) -> Result<Self, ReplayError> {
-        Self::create_profiled_legacy(device, pool, commands, "gfx11", None)
+        Self::create_profiled_legacy(device, pool, commands, None)
     }
 
     pub fn create_profiled_gfx11_with_partition(
@@ -185,7 +185,7 @@ impl SingleQueuePm4Ib {
         commands: &Gfx10Pm4CommandBuffer,
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        Self::create_profiled_legacy(device, pool, commands, "gfx11", partition_policy)
+        Self::create_profiled_legacy(device, pool, commands, partition_policy)
     }
 
     /// Create a retained IB whose one vendor-AQL completion signal carries
@@ -204,7 +204,7 @@ impl SingleQueuePm4Ib {
         commands: &Gfx12Pm4CommandBuffer,
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx12")?;
+        ensure_device_family(device, Pm4EncoderMap::Gfx12)?;
         if commands.is_empty() {
             return Err(ReplayError::EmptyGraph);
         }
@@ -229,10 +229,9 @@ impl SingleQueuePm4Ib {
         device: &GpuDevice,
         pool: &KernargPool,
         commands: &Gfx10Pm4CommandBuffer,
-        family: &'static str,
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, family)?;
+        ensure_device_family(device, Pm4EncoderMap::Legacy)?;
         if commands.is_empty() {
             return Err(ReplayError::EmptyGraph);
         }
@@ -375,16 +374,49 @@ impl SingleQueuePm4Ib {
     }
 }
 
-fn ensure_device_family(device: &GpuDevice, required: &'static str) -> Result<(), ReplayError> {
-    let actual = device.name();
-    if actual.starts_with(required) {
+/// PM4 encoder register-map family paired with a device at IB construction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Pm4EncoderMap {
+    /// GFX10 and GFX11 share the legacy compute register map.
+    Legacy,
+    Gfx12,
+}
+
+impl Pm4EncoderMap {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Legacy => "gfx10/gfx11",
+            Self::Gfx12 => "gfx12",
+        }
+    }
+}
+
+/// Refuse an encoder/device family mismatch before any IB allocation.
+///
+/// Legacy (gfx10-family) command buffers accept gfx10 or gfx11 devices; gfx12
+/// encoders accept gfx12 only. The pure string form is unit-tested without a GPU.
+fn ensure_pm4_encoder_matches_device(
+    device_name: &str,
+    encoder: Pm4EncoderMap,
+) -> Result<(), ReplayError> {
+    let compatible = match encoder {
+        Pm4EncoderMap::Legacy => {
+            device_name.starts_with("gfx10") || device_name.starts_with("gfx11")
+        }
+        Pm4EncoderMap::Gfx12 => device_name.starts_with("gfx12"),
+    };
+    if compatible {
         Ok(())
     } else {
         Err(ReplayError::ArchitectureMismatch {
-            required,
-            actual: actual.to_owned(),
+            required: encoder.label(),
+            actual: device_name.to_owned(),
         })
     }
+}
+
+fn ensure_device_family(device: &GpuDevice, encoder: Pm4EncoderMap) -> Result<(), ReplayError> {
+    ensure_pm4_encoder_matches_device(device.name(), encoder)
 }
 
 fn retained_queue_size(
@@ -450,7 +482,7 @@ impl MultiQueuePm4Ib {
         commands: &[Gfx12Pm4CommandBuffer],
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx12")?;
+        ensure_device_family(device, Pm4EncoderMap::Gfx12)?;
         Self::create_unprofiled_encoded(device, pool, commands, partition_policy, |commands| {
             (commands.as_bytes(), commands.len_dwords())
         })
@@ -471,7 +503,7 @@ impl MultiQueuePm4Ib {
         commands: &[Gfx10Pm4CommandBuffer],
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx10")?;
+        ensure_device_family(device, Pm4EncoderMap::Legacy)?;
         Self::create_unprofiled_encoded(device, pool, commands, partition_policy, |commands| {
             (commands.as_bytes(), commands.len_dwords())
         })
@@ -492,7 +524,7 @@ impl MultiQueuePm4Ib {
         commands: &[Gfx10Pm4CommandBuffer],
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx11")?;
+        ensure_device_family(device, Pm4EncoderMap::Legacy)?;
         Self::create_unprofiled_encoded(device, pool, commands, partition_policy, |commands| {
             (commands.as_bytes(), commands.len_dwords())
         })
@@ -513,7 +545,7 @@ impl MultiQueuePm4Ib {
         commands: &[Gfx12Pm4CommandBuffer],
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx12")?;
+        ensure_device_family(device, Pm4EncoderMap::Gfx12)?;
         if commands.iter().any(Gfx12Pm4CommandBuffer::is_empty) {
             return Err(ReplayError::EmptyGraph);
         }
@@ -544,7 +576,7 @@ impl MultiQueuePm4Ib {
         commands: &[Gfx10Pm4CommandBuffer],
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx10")?;
+        ensure_device_family(device, Pm4EncoderMap::Legacy)?;
         if commands.iter().any(Gfx10Pm4CommandBuffer::is_empty) {
             return Err(ReplayError::EmptyGraph);
         }
@@ -576,7 +608,7 @@ impl MultiQueuePm4Ib {
         commands: &[Gfx10Pm4CommandBuffer],
         partition_policy: Option<&PartitionPolicy>,
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx11")?;
+        ensure_device_family(device, Pm4EncoderMap::Legacy)?;
         if commands.iter().any(Gfx10Pm4CommandBuffer::is_empty) {
             return Err(ReplayError::EmptyGraph);
         }
@@ -788,7 +820,7 @@ impl PhasedMultiQueuePm4Ib {
         pool: &KernargPool,
         phases: &[Vec<Gfx12Pm4CommandBuffer>],
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx12")?;
+        ensure_device_family(device, Pm4EncoderMap::Gfx12)?;
         Self::create_encoded(device, pool, phases, |commands| {
             (commands.as_bytes(), commands.len_dwords())
         })
@@ -799,7 +831,7 @@ impl PhasedMultiQueuePm4Ib {
         pool: &KernargPool,
         phases: &[Vec<Gfx10Pm4CommandBuffer>],
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx10")?;
+        ensure_device_family(device, Pm4EncoderMap::Legacy)?;
         Self::create_encoded(device, pool, phases, |commands| {
             (commands.as_bytes(), commands.len_dwords())
         })
@@ -810,7 +842,7 @@ impl PhasedMultiQueuePm4Ib {
         pool: &KernargPool,
         phases: &[Vec<Gfx10Pm4CommandBuffer>],
     ) -> Result<Self, ReplayError> {
-        ensure_device_family(device, "gfx11")?;
+        ensure_device_family(device, Pm4EncoderMap::Legacy)?;
         Self::create_encoded(device, pool, phases, |commands| {
             (commands.as_bytes(), commands.len_dwords())
         })
@@ -3133,7 +3165,7 @@ impl fmt::Display for ReplayError {
             }
             Self::ArchitectureMismatch { required, actual } => write!(
                 f,
-                "PM4 command stream requires {required}, selected device reports {actual}"
+                "PM4 {required} encoder cannot target device {actual} (gfx10/gfx11 share the legacy compute register map; gfx12 does not)"
             ),
             Self::InvalidBatchShape(detail) => write!(f, "invalid AQL batch shape: {detail}"),
             Self::BatchShapeOverflow => {
@@ -3347,5 +3379,50 @@ mod tests {
         apply_quiescence_transition(&mut in_flight, &mut usable, QuiescenceTransition::Cancelled);
         assert!(!in_flight);
         assert!(!usable);
+    }
+
+    #[test]
+    fn pm4_encoder_guard_accepts_matching_legacy_and_gfx12_devices() {
+        assert!(ensure_pm4_encoder_matches_device("gfx1010", Pm4EncoderMap::Legacy).is_ok());
+        assert!(ensure_pm4_encoder_matches_device("gfx1100", Pm4EncoderMap::Legacy).is_ok());
+        assert!(ensure_pm4_encoder_matches_device("gfx1201", Pm4EncoderMap::Gfx12).is_ok());
+    }
+
+    #[test]
+    fn pm4_encoder_guard_rejects_cross_family_devices() {
+        let legacy_on_gfx12 =
+            ensure_pm4_encoder_matches_device("gfx1201", Pm4EncoderMap::Legacy).unwrap_err();
+        let gfx12_on_legacy =
+            ensure_pm4_encoder_matches_device("gfx1100", Pm4EncoderMap::Gfx12).unwrap_err();
+        let legacy_msg = legacy_on_gfx12.to_string();
+        let gfx12_msg = gfx12_on_legacy.to_string();
+        assert!(
+            matches!(
+                legacy_on_gfx12,
+                ReplayError::ArchitectureMismatch {
+                    required: "gfx10/gfx11",
+                    ..
+                }
+            ),
+            "{legacy_msg}"
+        );
+        assert!(
+            matches!(
+                gfx12_on_legacy,
+                ReplayError::ArchitectureMismatch {
+                    required: "gfx12",
+                    ..
+                }
+            ),
+            "{gfx12_msg}"
+        );
+        assert!(legacy_msg.contains("gfx10/gfx11"), "{legacy_msg}");
+        assert!(legacy_msg.contains("gfx1201"), "{legacy_msg}");
+        assert!(gfx12_msg.contains("gfx12"), "{gfx12_msg}");
+        assert!(gfx12_msg.contains("gfx1100"), "{gfx12_msg}");
+        assert_eq!(
+            gfx12_msg,
+            "PM4 gfx12 encoder cannot target device gfx1100 (gfx10/gfx11 share the legacy compute register map; gfx12 does not)"
+        );
     }
 }

@@ -1,0 +1,58 @@
+# Redline host device manifest
+# ============================
+# Copy to one of:
+#   /etc/redline/devices.toml
+#   $XDG_CONFIG_HOME/redline/devices.toml   (else ~/.config/redline/devices.toml)
+#   .redline/devices.toml                   (walks up from cwd; repo-local wins)
+#
+# Later files override earlier ones for the same alias / deny / fragile list.
+# The active section is [host.<hostname>], overridable with REDLINE_HOST.
+#
+# Anchors
+# -------
+# Pin each GPU with the strongest stable handle it actually has:
+#   uuid:GPU-…   when the device reports a real UUID (not GPU-XX)
+#   bdf:0000:…   otherwise — PCI address is the join key across ROCr/HIP/sysfs
+# Never pin by index: ROCr discovery order ≠ rocm-smi PCI order, and an ordinal
+# copied from the wrong tool can select the wrong GPU.
+#
+# Aliases become @name selectors (e.g. @dev0) in CLI flags, env vars, and code.
+#
+# Deny and fragile — the only guards
+# ----------------------------------
+# Danger cannot be auto-detected. On a host that carries a Strix Halo APU next
+# to discrete boards, both plausible sysfs signals fail: the APU's KFD node
+# reports cpu_cores_count=0 exactly like the discrete cards, and every node
+# reports heap_type=1 because the APU's unified memory presents as public
+# framebuffer. There is therefore no integrated/is_dangerous bit in
+# DeviceIdentity — only this file, written by a human who knows which BDF is
+# dangerous when a reset is provoked.
+#
+# Two tiers are available:
+#   `deny`    — never selectable, for any operation. Use for devices that must
+#               never be touched (hard reservation, display GPU, broken board).
+#   `fragile` — selectable for normal work, but refused when the caller
+#               declares a reset-risk operation (RiskClass::ResetProvoking).
+#               The Strix Halo APU is the canonical example: inference and
+#               normal dispatch are fine (96 GB unified carveout, first-class
+#               architecture), but a device reset on that APU takes the whole
+#               host down. Only harnesses that deliberately provoke resets need
+#               to avoid it.
+#
+# `deny` and `fragile` are reserved keys (never aliases). Each entry is a
+# selector string. The trailing # comment is captured and quoted in the error
+# when something tries to select that device — write the reason you would want
+# to read at 3am. Both tiers are evaluated on the *resolved device*, so
+# uuid:/bdf:/slot:/name:/index:/@alias cannot bypass them.
+
+[host.hipx]
+dev0    = "uuid:GPU-43390a851e296ee5"   # gfx1100, the ROCm#6529 card
+navi10  = "bdf:0000:6e:00.0"            # no UUID; BDF-anchored, slot 1
+rx6800  = "uuid:GPU-c7ff6b154d0128bc"
+fragile = ["bdf:0000:bf:00.0"]          # Strix Halo APU — a device reset takes the whole host down (96 GB unified inference target; only reset-risk harnesses must avoid)
+
+[host.hiptrx]
+dev0 = "uuid:GPU-9eb7aeda51c88ffd"
+dev1 = "uuid:GPU-05f92432f2312a0e"
+dev2 = "uuid:GPU-085289909a86cc63"
+dev3 = "uuid:GPU-e475645fe0200397"

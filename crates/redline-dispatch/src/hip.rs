@@ -55,6 +55,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use libloading::Library;
+use redline_rocr::{DeviceIdentity, PciBusId};
 
 use crate::batch_mem::BatchMemPlan;
 use crate::ffi_batch_mem::{self, BatchMemSymbols, HIP_MEM_BATCH_FLAGS_NONE, HipMemLocation};
@@ -74,6 +75,8 @@ type HipStream = *mut c_void;
 type HipEvent = *mut c_void;
 
 type HipInit = unsafe extern "C" fn(c_uint) -> HipErrorCode;
+type HipDeviceGetPCIBusId = unsafe extern "C" fn(*mut c_char, c_int, c_int) -> HipErrorCode;
+
 type HipGetDeviceCount = unsafe extern "C" fn(*mut c_int) -> HipErrorCode;
 type HipSetDevice = unsafe extern "C" fn(c_int) -> HipErrorCode;
 type HipGetErrorString = unsafe extern "C" fn(HipErrorCode) -> *const c_char;
@@ -102,6 +105,84 @@ type HipModuleLaunchKernel = unsafe extern "C" fn(
 const HIP_SUCCESS: HipErrorCode = 0;
 const HIP_STREAM_NON_BLOCKING: c_uint = 0x01;
 const HIP_EVENT_DISABLE_TIMING: c_uint = 0x02;
+/// Optional environment override for the HIP shared library path.
+///
+/// Used by tests (and operators) to force a missing/alternate HIP install
+/// without changing the default search list. When unset, the usual candidates
+/// are tried.
+const HIP_LIBRARY_ENV: &str = "REDLINE_HIP_LIBRARY";
+
+/// Map each HIP device ordinal to its PCI bus id.
+///
+/// `HIP_VISIBLE_DEVICES` and `ROCR_VISIBLE_DEVICES` filter independently, so
+/// HIP ordinal N and ROCr index N routinely differ on multi-GPU hosts. The PCI
+/// address is the only sound join key across the two runtimes. HIP is optional:
+/// a missing library or symbol yields an empty map, never an error that would
+/// make Redline hard-depend on HIP.
+pub fn hip_pci_ordinal_map() -> HashMap<PciBusId, i32> {
+    match load_hip_pci_ordinal_map() {
+        Ok(map) => map,
+        Err(_) => HashMap::new(),
+    }
+}
+
+/// Fill [`DeviceIdentity::hip_ordinal`] by joining on PCI address.
+///
+/// Devices whose BDF is not visible to the current HIP filter keep
+/// `hip_ordinal: None`. When HIP cannot be loaded the slice is left unchanged.
+pub fn join_hip_ordinals(devices: &mut [DeviceIdentity]) {
+    let map = hip_pci_ordinal_map();
+    if map.is_empty() {
+        return;
+    }
+    for device in devices {
+        if let Some(&ordinal) = map.get(&device.bdf) {
+            device.hip_ordinal = Some(ordinal);
+        }
+    }
+}
+
+fn load_hip_pci_ordinal_map() -> Result<HashMap<PciBusId, i32>, HipBackendError> {
+    let library = open_hip_library()?;
+    // SAFETY: symbol names and signatures match hip_runtime_api.h; the library
+    // handle stays live for the duration of this function.
+    let init = unsafe { load_symbol::<HipInit>(&library, b"hipInit\0")? };
+    let get_device_count =
+        unsafe { load_symbol::<HipGetDeviceCount>(&library, b"hipGetDeviceCount\0")? };
+    // Optional for older HIP installs: missing symbol => empty join.
+    let get_pci_bus_id =
+        match unsafe { library.get::<HipDeviceGetPCIBusId>(b"hipDeviceGetPCIBusId\0") } {
+            Ok(symbol) => *symbol,
+            Err(_) => return Ok(HashMap::new()),
+        };
+
+    // SAFETY: HIP accepts zero init flags; count is a writable int.
+    unsafe {
+        if init(0) != HIP_SUCCESS {
+            return Ok(HashMap::new());
+        }
+        let mut count = 0;
+        if get_device_count(&mut count) != HIP_SUCCESS || count < 0 {
+            return Ok(HashMap::new());
+        }
+        let mut map = HashMap::with_capacity(count as usize);
+        for ordinal in 0..count {
+            let mut buf = [0_i8; 32];
+            let status = get_pci_bus_id(buf.as_mut_ptr(), buf.len() as c_int, ordinal);
+            if status != HIP_SUCCESS {
+                continue;
+            }
+            // SAFETY: HIP writes a NUL-terminated PCI bus id on success.
+            let raw = CStr::from_ptr(buf.as_ptr());
+            let text = raw.to_string_lossy();
+            // Normalize via parse so rocm-smi uppercase and HIP lowercase match.
+            if let Ok(bdf) = text.parse::<PciBusId>() {
+                map.insert(bdf, ordinal);
+            }
+        }
+        Ok(map)
+    }
+}
 
 static NEXT_HIP_BACKEND_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -309,14 +390,16 @@ impl HipFns {
 }
 
 fn open_hip_library() -> Result<Library, HipBackendError> {
-    const CANDIDATES: &[&str] = &[
-        "libamdhip64.so",
-        "libamdhip64.so.7",
-        "/opt/rocm/core/lib/libamdhip64.so",
-        "/opt/rocm/lib/libamdhip64.so",
-    ];
+    if let Some(path) = env::var_os(HIP_LIBRARY_ENV) {
+        // SAFETY: operator-supplied path to the HIP runtime; caller retains it.
+        return unsafe { Library::new(&path) }.map_err(|error| HipBackendError::LibraryLoad {
+            candidates: path.to_string_lossy().into_owned(),
+            detail: error.to_string(),
+        });
+    }
+    let candidates = redline_rocr::install::library_candidates("libamdhip64.so", &["libamdhip64.so.7"]);
     let mut failures = Vec::new();
-    for candidate in CANDIDATES {
+    for candidate in &candidates {
         // SAFETY: loading the installed HIP runtime is the purpose of this
         // backend. HipFns retains the successful library handle.
         match unsafe { Library::new(candidate) } {
@@ -325,7 +408,7 @@ fn open_hip_library() -> Result<Library, HipBackendError> {
         }
     }
     Err(HipBackendError::LibraryLoad {
-        candidates: CANDIDATES.join(", "),
+        candidates: candidates.join(", "),
         detail: failures.join("; "),
     })
 }
@@ -2628,5 +2711,48 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn hip_join_degrades_when_library_missing() {
+        // Force the loader at a path that cannot exist. The join must stay
+        // soft: empty map, no panic, identities left with hip_ordinal = None.
+        let previous = env::var_os(HIP_LIBRARY_ENV);
+        // SAFETY: test-only env mutation; restored below.
+        unsafe {
+            env::set_var(HIP_LIBRARY_ENV, "/nonexistent/redline-no-hip.so");
+        }
+        let map = hip_pci_ordinal_map();
+        assert!(map.is_empty(), "missing HIP must yield empty ordinal map");
+
+        let mut devices = vec![DeviceIdentity {
+            uuid: Some("GPU-test".into()),
+            bdf: "0000:3d:00.0".parse().unwrap(),
+            agent_name: "gfx1201".into(),
+            product_name: "test".into(),
+            kfd_node: 1,
+            rocr_index: 0,
+            hip_ordinal: None,
+            pci_slot: None,
+            drm_card: None,
+        }];
+        join_hip_ordinals(&mut devices);
+        assert_eq!(devices[0].hip_ordinal, None);
+
+        // SAFETY: restore prior test environment.
+        unsafe {
+            match previous {
+                Some(value) => env::set_var(HIP_LIBRARY_ENV, value),
+                None => env::remove_var(HIP_LIBRARY_ENV),
+            }
+        }
+    }
+
+    #[test]
+    fn pci_bus_id_parse_normalizes_hex_case() {
+        // HIP prints lowercase; rocm-smi uppercase. Join compares parsed IDs.
+        let lower: PciBusId = "0000:3d:00.0".parse().unwrap();
+        let upper: PciBusId = "0000:3D:00.0".parse().unwrap();
+        assert_eq!(lower, upper);
     }
 }

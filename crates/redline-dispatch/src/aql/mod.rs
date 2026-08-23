@@ -19,14 +19,16 @@ pub use queue_policy::{
     cu_mask_for_partition,
 };
 pub use redline_rocr::abi;
+pub use redline_rocr::selector;
 pub use redline_rocr::{
-    AqlQueue, BARRIER_DEPENDENCY_CAPACITY, CompletionSignal, DeviceBuffer, DevicePool, Executable,
-    FenceScope, Gfx10KernelImage, Gfx10Pm4BuildError, Gfx10Pm4CommandBuffer, Gfx11Pm4CommandBuffer,
-    Gfx12DispatchMode, Gfx12KernelImage, Gfx12Pm4CommandBuffer, Gfx12RmwAcquirePolicy, GpuDevice,
-    GpuSelector, HeaderPolicy, KernargBuffer, KernargPool, Kernel, KernelMetadata,
-    KernelPm4Metadata, LaunchGeometry, LoadError, MissingSymbol, PacketError, PciBusId,
-    PciBusIdParseError, Pm4BuildError, QueueDepthReport, QueueDepthSample, QueueDepthStats,
-    QueueSet, Runtime, RuntimeError, Symbols, load_symbols,
+    AqlQueue, BARRIER_DEPENDENCY_CAPACITY, CompletionSignal, DeviceBuffer, DeviceIdentity,
+    DevicePool, DeviceQuery, Executable, FenceScope, Gfx10KernelImage, Gfx10Pm4BuildError,
+    Gfx10Pm4CommandBuffer, Gfx11Pm4CommandBuffer, Gfx12DispatchMode, Gfx12KernelImage,
+    Gfx12Pm4CommandBuffer, Gfx12RmwAcquirePolicy, GpuDevice, GpuSelector, HeaderPolicy,
+    KernargBuffer, KernargPool, Kernel, KernelMetadata, KernelPm4Metadata, LaunchGeometry,
+    LoadError, MissingSymbol, PacketError, PciBusId, PciBusIdParseError, Pm4BuildError,
+    QueueDepthReport, QueueDepthSample, QueueDepthStats, QueueSet, Runtime, RuntimeError, Symbols,
+    load_symbols, parse_device_query, resolve_device_query,
 };
 pub use replay::{
     BatchFencePolicy, GpuBatchTiming, GpuMultiQueueTiming, MultiQueuePm4Ib, PhasedMultiQueuePm4Ib,
