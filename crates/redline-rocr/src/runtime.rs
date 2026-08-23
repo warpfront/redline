@@ -208,7 +208,6 @@ impl Runtime {
             ))
     }
 
-
     /// HSA system-clock frequency used by ROCr dispatch profiling timestamps.
     pub fn timestamp_frequency_hz(&self) -> Result<u64, RuntimeError> {
         let mut frequency = 0_u64;

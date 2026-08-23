@@ -355,7 +355,8 @@ fn open_libamdhip64() -> usize {
         // absolute attempts use GLOBAL so a first load succeeds, while bare
         // NOLOAD already covered the already-loaded interposer case. Build
         // NUL-terminated CStrings locally because dlopen takes *const c_char.
-        for cand in redline_rocr::install::library_candidates("libamdhip64.so", &["libamdhip64.so.7"])
+        for cand in
+            redline_rocr::install::library_candidates("libamdhip64.so", &["libamdhip64.so.7"])
         {
             if !cand.contains('/') {
                 continue;
