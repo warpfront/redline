@@ -336,22 +336,46 @@ worth pinning down, because the current patch treats it as universal.
 
 ### What the real rule appears to be
 
-`hipMemSetAccess` succeeds if and only if **both** the offset and the length are
-multiples of the granularity of the mapped handles. This is uniform across all
-five architectures:
+`hipMemSetAccess` succeeds if and only if the range covers a whole number of
+**complete mapped handles** — it must begin on a handle boundary and end on a
+handle boundary. The constraint is alignment *relative to where handles were
+mapped*, not absolute alignment of the address, and it tracks the handle size
+actually used rather than any fixed device requirement.
+
+Against a contiguous run of 2 MiB handles mapped from the reservation base, so
+that handle boundaries coincide with 2 MiB offsets:
 
 | Sub-range against 2 MiB handles | Result |
 | --- | --- |
 | offset 0, len 2 MiB (one handle exactly) | OK |
 | offset 2 MiB, len 4 MiB (two handles exactly) | OK |
 | offset 0, len 8 MiB (all handles) | OK |
-| offset 1 MiB, len 2 MiB (straddles, unaligned) | `invalid argument` |
+| offset 1 MiB, len 2 MiB (straddles two handles) | `invalid argument` |
 | offset 1 MiB, len 1 MiB (inside one handle) | `invalid argument` |
-| offset 0, len 1 MiB (aligned start, short) | `invalid argument` |
+| offset 0, len 1 MiB (starts on a boundary, ends inside) | `invalid argument` |
 | offset 4 KiB, len 4 KiB (4 KiB slice of a 2 MiB handle) | `invalid argument` |
 
-With 4 KiB handles, 4 KiB sub-ranges are accepted. So the constraint tracks the
-handle granularity actually used, not a fixed device requirement.
+It is worth being precise that this is a boundary rule and not an
+absolute-alignment rule, because the two are easy to conflate and only the
+second would justify raising the reported minimum. Mapping a single 2 MiB handle
+at a merely page-aligned offset — base + 4 KiB, which is *not* 2 MiB aligned —
+and then setting access over exactly that handle is accepted:
+
+```
+---- handle size 2M ----
+offset     off/min        hipMemMap        SetAccess(len=hs) SetAccess(len=min)
+0          0 x min        ok               ok               invalid-value
+4K         1 x min        ok               ok               invalid-value
+8K         2 x min        ok               ok               invalid-value
+64K        16 x min       ok               ok               invalid-value
+1M         256 x min      ok               ok               invalid-value
+2M         512 x min      ok               ok               invalid-value
+```
+
+Every offset in that sweep is accepted at full-handle length, and every one is
+rejected at a 4 KiB sub-length. With 4 KiB handles the same sweep accepts 4 KiB
+lengths at every offset. So what the runtime enforces is whole-handle coverage;
+the reported *minimum* granularity is not what is being checked.
 
 ### Consequence for this PR
 
