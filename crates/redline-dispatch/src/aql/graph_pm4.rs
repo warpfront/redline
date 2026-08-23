@@ -142,12 +142,20 @@ enum Pm4Family {
 }
 
 impl Pm4Family {
+    /// Map an HSA agent name to a PM4 encoder family.
+    ///
+    /// The gfx12 arm deliberately matches `gfx120` and not `gfx12`. gfx125x is a
+    /// datacenter part sharing the numeric family but not validated here, and a
+    /// prefix test would silently emit RDNA4-derived PM4 at it. Refusing an
+    /// architecture costs a clear error; misencoding one costs a fault.
     fn from_name(name: &str) -> Option<Self> {
-        if name.starts_with("gfx10") {
+        // Agent names can carry target features, e.g. `gfx1010:xnack-`.
+        let base = name.split(':').next().unwrap_or(name);
+        if base.starts_with("gfx10") {
             Some(Self::Gfx10)
-        } else if name.starts_with("gfx11") {
+        } else if base.starts_with("gfx11") {
             Some(Self::Gfx11)
-        } else if name.starts_with("gfx12") {
+        } else if base.starts_with("gfx120") {
             Some(Self::Gfx12)
         } else {
             None
@@ -281,5 +289,30 @@ mod tests {
         assert_eq!(Pm4Family::from_name("gfx1100"), Some(Pm4Family::Gfx11));
         assert_eq!(Pm4Family::from_name("gfx1201"), Some(Pm4Family::Gfx12));
         assert_eq!(Pm4Family::from_name("gfx900"), None);
+    }
+
+    #[test]
+    fn datacenter_and_unvalidated_architectures_are_refused() {
+        // gfx125x shares the gfx12 numeric family but is a different product
+        // line whose compute register map is unvalidated here. A `gfx12` prefix
+        // test would have accepted it and emitted RDNA4-derived PM4.
+        assert_eq!(Pm4Family::from_name("gfx1250"), None);
+        assert_eq!(Pm4Family::from_name("gfx1251"), None);
+        // CDNA is gfx9 and has a different compute register map entirely.
+        assert_eq!(Pm4Family::from_name("gfx942"), None);
+        assert_eq!(Pm4Family::from_name("gfx950"), None);
+    }
+
+    #[test]
+    fn target_features_do_not_defeat_the_match() {
+        assert_eq!(
+            Pm4Family::from_name("gfx1010:xnack-"),
+            Some(Pm4Family::Gfx10)
+        );
+        assert_eq!(
+            Pm4Family::from_name("gfx1201:xnack-"),
+            Some(Pm4Family::Gfx12)
+        );
+        assert_eq!(Pm4Family::from_name("gfx1250:xnack+"), None);
     }
 }
