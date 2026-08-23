@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "kind": "redline_6529_preemption_probe",
+  "date": "2026-08-01T06:58:27Z",
+  "host": "hipx",
+  "base_commit": "unknown",
+  "hypothesis": "mid-IB compute preemption (CWSR/MES) loses SH state that stateful elision depends on, making a later DISPATCH_DIRECT fetch its kernel descriptor from address 0",
+  "device": {
+    "selector": "@dev0",
+    "pci": "0000:66:00.0",
+    "rocr_index_unfiltered": 0,
+    "describe": "gfx1100 0000:66:00.0 [uuid:GPU-43390a851e296ee5] card0 kfd_node=1 rocr#0(volatile)"
+  },
+  "controls": {
+    "cwsr_enable": "1",
+    "mcbp": "-1",
+    "kernel_log_source": "journalctl",
+    "faults_observable": true
+  },
+  "shape": {
+    "tokens_per_ib": 12000,
+    "dispatches_per_ib": 24000,
+    "reps_per_arm": 4,
+    "contender_processes": 16
+  },
+  "neighbour_vram_used_bytes": {
+    "before": "27987968 11747328 17326080 154955776 ",
+    "after": "1505800192 12275712 17854464 155484160 ",
+    "note": "per-GPU VRAM in rocm-smi index order; devices other than the pinned one must be unchanged apart from their own workloads"
+  },
+  "arms": [
+    {
+      "full_state": 0,
+      "pass": 4,
+      "fail": 0,
+      "new_kernel_fault_lines": 0,
+      "us_per_token": [553.93, 522.06, 515.99, 537.30]
+    },
+    {
+      "full_state": 1,
+      "pass": 4,
+      "fail": 0,
+      "new_kernel_fault_lines": 0,
+      "us_per_token": [579.34, 552.02, 554.87, 620.33]
+    }
+  ],
+  "total_new_kernel_fault_lines": 0,
+  "interpretation": "A zero fault count bounds how often the tested mechanism fires under this load; it does not prove the mechanism cannot fire on rarer preemption paths (eviction via TTM/USERPTR/SVM, suspend/resume, debugger attach), none of which this probe exercises. A null fault count means no kernel log was readable and the run says nothing about faults at all."
+}

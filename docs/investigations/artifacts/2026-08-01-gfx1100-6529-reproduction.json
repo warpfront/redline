@@ -1,0 +1,57 @@
+{
+  "captured": "2026-08-01",
+  "host": "hipx",
+  "device": {
+    "bdf": "0000:66:00.0",
+    "card": "AMD Radeon RX 7900 XTX",
+    "arch": "gfx1100",
+    "note": "same card model as lhl's second faulting card in ROCm/ROCm#6529"
+  },
+  "source": "journalctl -k (kernel.dmesg_restrict=1 makes unprivileged dmesg return an empty stream)",
+  "window": {
+    "first_fault": "2026-07-23T13:37:49+00:00",
+    "last_fault": "2026-07-23T16:44:44+00:00"
+  },
+  "counts": {
+    "page_fault_lines": 78,
+    "status_0x00801431": 8,
+    "sqc_data_client": 8,
+    "address_zero": 78,
+    "mes_remove_queue_fail": 29,
+    "mode1_reset": 24
+  },
+  "distinct_pids": [
+    "1682872",
+    "1687153",
+    "1689784",
+    "1706008",
+    "1707529",
+    "1922531",
+    "1930028",
+    "1994355"
+  ],
+  "faulting_process": "hip_dot_path",
+  "signature_match_to_6529": {
+    "address_zero": true,
+    "client_sqc_data_0xa": true,
+    "status_0x00801431": true,
+    "permission_faults_0x3": true,
+    "mapping_error_0x0": true,
+    "escalates_to_mode1_reset": true
+  },
+  "open_question": "Which backend was executing. hip_dot_path is a hipEngine micro-benchmark whose redline and stock-HIP legs build to the same binary name. The faulting runs left no artifacts; all surviving result dirs under redline-bench-results/gfx1100/ were written 16:01-16:44, ~2h after the burst.",
+  "corrects": "docs/investigations/2026-07-31-rocm-6529-address-zero-sqc-fault.md previously stated hipx faults were APU-only (0000:bf:00.0) with status 0x00801030/31.",
+  "sample_records": [
+    "2026-07-23T13:37:49+00:00 hipx kernel: amdgpu 0000:66:00.0: sq_intr: error, detail 0x00000000, type 2, sh 1, priv 0, wave_id 0, simd_id 0, wgp_id 0",
+    "2026-07-23T13:37:49+00:00 hipx kernel: amdgpu 0000:66:00.0: sq_intr: error, detail 0x00000000, type 2, sh 1, priv 0, wave_id 0, simd_id 0, wgp_id 0",
+    "2026-07-23T13:37:49+00:00 hipx kernel: amdgpu 0000:66:00.0: sq_intr: error, detail 0x00000000, type 2, sh 1, priv 0, wave_id 0, simd_id 0, wgp_id 0",
+    "2026-07-23T13:37:49+00:00 hipx kernel: amdgpu 0000:66:00.0: sq_intr: error, detail 0x00000000, type 2, sh 0, priv 0, wave_id 0, simd_id 0, wgp_id 0",
+    "2026-07-23T13:37:49+00:00 hipx kernel: amdgpu 0000:66:00.0: sq_intr: error, detail 0x00000000, type 2, sh 0, priv 0, wave_id 0, simd_id 0, wgp_id 0",
+    "2026-07-23T13:37:49+00:00 hipx kernel: amdgpu 0000:66:00.0: sq_intr: error, detail 0x00000000, type 2, sh 0, priv 0, wave_id 0, simd_id 0, wgp_id 0",
+    "2026-07-23T13:37:49+00:00 hipx kernel: amdgpu 0000:66:00.0: sq_intr: error, detail 0x00000000, type 2, sh 1, priv 0, wave_id 0, simd_id 0, wgp_id 0",
+    "2026-07-23T13:37:49+00:00 hipx kernel: amdgpu 0000:66:00.0: sq_intr: error, detail 0x00000000, type 2, sh 0, priv 0, wave_id 0, simd_id 0, wgp_id 0",
+    "2026-07-23T13:37:49+00:00 hipx kernel: amdgpu 0000:66:00.0: sq_intr: error, detail 0x00000000, type 2, sh 0, priv 0, wave_id 0, simd_id 0, wgp_id 0",
+    "2026-07-23T13:37:49+00:00 hipx kernel: amdgpu 0000:66:00.0: sq_intr: error, detail 0x00000000, type 2, sh 1, priv 0, wave_id 0, simd_id 0, wgp_id 0",
+    "2026-07-23T13:37:49+00:00 hipx kernel: amdgpu 0000:66:00.0: [gfxhub] page fault (src_id:0 ring:24 vmid:8 pasid:7626)"
+  ]
+}
