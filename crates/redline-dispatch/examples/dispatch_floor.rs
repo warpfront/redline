@@ -189,6 +189,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let runtime = Runtime::initialize(load_symbols()?)?;
     let device = runtime.select_gpu(GpuSelector::Ordinal(0))?;
+    if !device.name().starts_with("gfx12") {
+        return Err(format!("dispatch_floor requires gfx12, selected {}", device.name()).into());
+    }
     let code: Arc<[u8]> = std::fs::read(&hsaco)?.into();
     let exec = Executable::load(&device, code)?;
 

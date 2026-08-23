@@ -349,6 +349,26 @@ fn open_libamdhip64() -> usize {
             )
         };
     }
+    if handle.is_null() {
+        // Fallback to resolver-provided absolute paths after the two bare
+        // sonames. Keep NOLOAD-then-GLOBAL escalation exactly as before;
+        // absolute attempts use GLOBAL so a first load succeeds, while bare
+        // NOLOAD already covered the already-loaded interposer case. Build
+        // NUL-terminated CStrings locally because dlopen takes *const c_char.
+        for cand in redline_rocr::install::library_candidates("libamdhip64.so", &["libamdhip64.so.7"])
+        {
+            if !cand.contains('/') {
+                continue;
+            }
+            if let Ok(cs) = std::ffi::CString::new(cand.as_str()) {
+                let h = unsafe { libc::dlopen(cs.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
+                if !h.is_null() {
+                    handle = h;
+                    break;
+                }
+            }
+        }
+    }
     handle as usize
 }
 

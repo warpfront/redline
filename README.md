@@ -100,7 +100,8 @@ Dispatch-floor methodology (historical ROCm 7.2 microbench):
 
 The canonical **[Using Redline](docs/INTEGRATION.md)** guide covers prerequisites,
 the shared kernel/kernarg contract, verified C, Python, preload, and Rust
-walkthroughs, failure behavior, and current package availability.
+walkthroughs, [device-anchored GPU selection](docs/INTEGRATION.md#device-anchored-gpu-selection),
+failure behavior, and current package availability.
 
 Common source-build setup:
 

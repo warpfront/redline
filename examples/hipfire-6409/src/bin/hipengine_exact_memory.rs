@@ -8,12 +8,12 @@
 //! fixture and launch ABI, then submits the retained sequence through the Rust
 //! Redline API used by the Hipfire microbenchmark.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use hip_bridge::{DeviceBuffer, HipRuntime};
 use radiowave::{CodeObjectCertification, MutableReadCache};
 use redline_dispatch::aql::{
-    load_symbols, Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargBuffer,
-    KernargPool, LaunchGeometry, Runtime, SingleQueuePm4Ib,
+    Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargBuffer, KernargPool,
+    LaunchGeometry, Runtime, SingleQueuePm4Ib, load_symbols,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -279,8 +279,7 @@ fn main() -> Result<()> {
     let report = Report {
         kind: "hipfire_hipengine_exact_memory_waitcnt_parity",
         artifact_root: args.artifact_root.display().to_string(),
-        code_object_policy:
-            "load exact HipEngine Radiowave-certified .redline.co without recompilation",
+        code_object_policy: "load exact HipEngine Radiowave-certified .redline.co without recompilation",
         fixture_policy: "byte-identical deterministic HipEngine memory/waitcnt input generator",
         rows,
     };
@@ -301,6 +300,12 @@ impl ProbeRuntime {
         hip.set_device(0)?;
         let runtime = Runtime::initialize(load_symbols()?).context("initialize public ROCr")?;
         let device = runtime.select_gpu(GpuSelector::Ordinal(0))?;
+        if !device.name().starts_with("gfx12") {
+            bail!(
+                "hipengine_exact_memory requires gfx12, selected {}",
+                device.name()
+            );
+        }
         let pool = KernargPool::discover(&device)?;
         Ok(Self {
             hip,
@@ -730,8 +735,8 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 fn parse_args() -> Result<Args> {
-    let default_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../hipengine-6409/.artifacts/redline");
+    let default_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../hipengine-6409/.artifacts/redline");
     let mut parsed = Args {
         artifact_root: default_root,
         out: None,

@@ -302,8 +302,37 @@ uint32_t rl_abi_version(void);
 /**
  * Bind ROCr GPU `device_ordinal` (of the `ROCR_VISIBLE_DEVICES` set). Returns
  * null on failure. Free with [`rl_gpu_free`].
+ *
+ * **Volatile:** the ordinal is discovery order under the current visibility
+ * filter and is not stable across tools or reboots. Prefer [`rl_gpu_open`]
+ * with `uuid:…` or `bdf:…`.
  */
 struct RlGpu *rl_gpu_new(int32_t device_ordinal);
+
+/**
+ * Bind a GPU by anchored selector (`uuid:…`, `bdf:…`, `slot:…`, `name:…`,
+ * `index:…`, or `@alias`). Returns null on failure and prints one
+ * `redline: …` diagnostic to stderr.
+ *
+ * This is the safe pin path: UUID/BDF refuse the wrong device, aliases expand
+ * through the host manifest, and deny-listed devices are refused. Free with
+ * [`rl_gpu_free`].
+ *
+ * # Safety
+ * `selector` must be a valid NUL-terminated C string, or null.
+ */
+struct RlGpu *rl_gpu_open(const char *selector);
+
+/**
+ * Write the joined device identity description into `buf` (NUL-terminated when
+ * `buflen > 0`). Returns the number of bytes that would be written excluding
+ * the trailing NUL (same contract as `snprintf`). Null `gpu` returns 0.
+ *
+ * # Safety
+ * `gpu` from [`rl_gpu_open`] / [`rl_gpu_new`], or null. When `buflen > 0`,
+ * `buf` must point to at least `buflen` writable bytes.
+ */
+uintptr_t rl_gpu_describe(const struct RlGpu *gpu, char *buf, uintptr_t buflen);
 
 /**
  * # Safety

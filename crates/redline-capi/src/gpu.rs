@@ -26,14 +26,17 @@
 //! from it; an IB must outlive its replays. Free with the matching `*_free`.
 
 use std::ffi::{CStr, c_char};
-use std::sync::Arc;
+use std::ptr;
+use std::sync::{Arc, LazyLock};
 
 use radiowave::{CodeObjectCertification, MutableReadCache, SchedulerProfile};
 use redline_dispatch::aql::{
-    Executable, Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector,
-    KernargBuffer, KernargPool, MultiQueuePm4Ib, QueuePolicy, Runtime, SingleQueuePm4Ib,
-    load_symbols,
+    DeviceIdentity, DeviceQuery, Executable, Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer,
+    GpuDevice, GpuSelector, KernargBuffer, KernargPool, MultiQueuePm4Ib, QueuePolicy, Runtime,
+    RuntimeError, SingleQueuePm4Ib, load_symbols, parse_device_query, selector,
 };
+use redline_dispatch::hip;
+use redline_rocr::HostManifest;
 
 use crate::{
     RL_ERR_CERTIFICATION, RL_ERR_COMPILE, RL_ERR_HANDLE, RL_ERR_NULL, RL_ERR_RECORD, RL_ERR_REPLAY,
@@ -44,6 +47,8 @@ use crate::{
 pub struct RlGpu {
     pub(crate) device: GpuDevice,
     pub(crate) pool: KernargPool,
+    /// Joined identity (HIP ordinal filled when HIP is loadable).
+    identity: DeviceIdentity,
     _runtime: Runtime,
 }
 
@@ -140,6 +145,52 @@ enum Pm4Commands {
     Gfx12(Gfx12Pm4CommandBuffer),
 }
 
+/// Process-scoped A/B knob for ROCm/ROCm#6529: when true, every dispatch
+/// re-emits complete SH register state instead of relying on mid-IB persistence.
+fn pm4_full_state_enabled() -> bool {
+    static FULL_STATE: LazyLock<bool> = LazyLock::new(|| {
+        std::env::var("REDLINE_PM4_FULL_STATE")
+            .map(|value| value != "0")
+            .unwrap_or(false)
+    });
+    *FULL_STATE
+}
+
+/// Max dwords in one retained PM4 IB. Must agree with the authoritative check in
+/// `PacketImage::pm4_indirect_buffer` (`redline-rocr` `packet.rs:431`), which
+/// rejects `dwords == 0 || dwords > 0x000f_ffff` — the PM4 INDIRECT_BUFFER size
+/// field is 20 bits.
+const PM4_INDIRECT_BUFFER_MAX_DWORDS: u32 = 0x000f_ffff;
+
+/// Pure size gate used by finalize paths and unit tests. Does not replace the
+/// packet-layer check; it only makes the ceiling fail closed with a clear
+/// diagnostic before IB allocation.
+fn ib_dwords_within_ceiling(dwords: usize) -> Result<(), OversizeIb> {
+    if dwords > PM4_INDIRECT_BUFFER_MAX_DWORDS as usize {
+        Err(OversizeIb { dwords })
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct OversizeIb {
+    dwords: usize,
+}
+
+fn report_oversize_ib(oversize: OversizeIb, lane: Option<usize>) {
+    let dwords = oversize.dwords;
+    let ceiling = PM4_INDIRECT_BUFFER_MAX_DWORDS;
+    match lane {
+        Some(lane) => eprintln!(
+            "redline: PM4 IB exceeds 20-bit INDIRECT_BUFFER size ceiling (lane {lane}): recorded {dwords} dwords > {ceiling} (0x000fffff); split the recording into multiple IBs (REDLINE_PM4_FULL_STATE=1 roughly halves how many dispatches fit)"
+        ),
+        None => eprintln!(
+            "redline: PM4 IB exceeds 20-bit INDIRECT_BUFFER size ceiling: recorded {dwords} dwords > {ceiling} (0x000fffff); split the recording into multiple IBs (REDLINE_PM4_FULL_STATE=1 roughly halves how many dispatches fit)"
+        ),
+    }
+}
+
 impl Pm4Commands {
     fn stateful_with_leading_acquire(family: Pm4Family) -> Self {
         match family {
@@ -163,6 +214,43 @@ impl Pm4Commands {
                 commands.acquire_inter_node_gfx12();
                 Self::Gfx12(commands)
             }
+        }
+    }
+
+    /// Conservative form of [`Self::stateful_with_leading_acquire`]: no SH
+    /// register elision, so every dispatch re-emits its complete register
+    /// state. Retained IBs then depend on SH persistence only within one
+    /// packet pair rather than across the whole buffer, shrinking the
+    /// mid-IB preemption (CWSR/MCBP) corruption window on gfx10/gfx11.
+    fn full_state_with_leading_acquire(family: Pm4Family) -> Self {
+        match family {
+            Pm4Family::Gfx10 | Pm4Family::Gfx11 => {
+                let mut commands = Gfx10Pm4CommandBuffer::new();
+                commands.acquire_system();
+                Self::Legacy(commands)
+            }
+            Pm4Family::Gfx12 => {
+                let mut commands = Gfx12Pm4CommandBuffer::new();
+                commands.acquire_inter_node_gfx12();
+                Self::Gfx12(commands)
+            }
+        }
+    }
+
+    /// Shared private constructor: every caller-facing builder path must go
+    /// through this so `REDLINE_PM4_FULL_STATE` cannot silently miss a path.
+    fn with_leading_acquire(family: Pm4Family) -> Self {
+        if pm4_full_state_enabled() {
+            Self::full_state_with_leading_acquire(family)
+        } else {
+            Self::stateful_with_leading_acquire(family)
+        }
+    }
+
+    fn dwords(&self) -> &[u32] {
+        match self {
+            Self::Legacy(commands) => commands.dwords(),
+            Self::Gfx12(commands) => commands.dwords(),
         }
     }
 
@@ -214,23 +302,130 @@ pub struct RlPm4MultiIb {
 
 /// Bind ROCr GPU `device_ordinal` (of the `ROCR_VISIBLE_DEVICES` set). Returns
 /// null on failure. Free with [`rl_gpu_free`].
+///
+/// **Volatile:** the ordinal is discovery order under the current visibility
+/// filter and is not stable across tools or reboots. Prefer [`rl_gpu_open`]
+/// with `uuid:…` or `bdf:…`.
 #[unsafe(no_mangle)]
 pub extern "C" fn rl_gpu_new(device_ordinal: i32) -> *mut RlGpu {
     let build = || -> Option<RlGpu> {
         let runtime = Runtime::initialize(load_symbols().ok()?).ok()?;
         let ordinal = usize::try_from(device_ordinal).ok()?;
         let device = runtime.select_gpu(GpuSelector::Ordinal(ordinal)).ok()?;
+        let mut identity = device.identity().clone();
+        // Best-effort HIP join; missing HIP leaves hip_ordinal None.
+        let mut one = [identity.clone()];
+        hip::join_hip_ordinals(&mut one);
+        identity = one.into_iter().next().unwrap_or(identity);
         let pool = KernargPool::discover(&device).ok()?;
         Some(RlGpu {
             device,
             pool,
+            identity,
             _runtime: runtime,
         })
     };
     match build() {
         Some(gpu) => Box::into_raw(Box::new(gpu)),
-        None => std::ptr::null_mut(),
+        None => ptr::null_mut(),
     }
+}
+
+/// Bind a GPU by anchored selector (`uuid:…`, `bdf:…`, `slot:…`, `name:…`,
+/// `index:…`, or `@alias`). Returns null on failure and prints one
+/// `redline: …` diagnostic to stderr.
+///
+/// This is the safe pin path: UUID/BDF refuse the wrong device, aliases expand
+/// through the host manifest, and deny-listed devices are refused. Free with
+/// [`rl_gpu_free`].
+///
+/// # Safety
+/// `selector` must be a valid NUL-terminated C string, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_gpu_open(selector: *const c_char) -> *mut RlGpu {
+    if selector.is_null() {
+        eprintln!("redline: rl_gpu_open: selector is null");
+        return ptr::null_mut();
+    }
+    // SAFETY: caller guarantees a live NUL-terminated string.
+    let raw = unsafe { CStr::from_ptr(selector) };
+    let text = match raw.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("redline: rl_gpu_open: selector is not valid UTF-8");
+            return ptr::null_mut();
+        }
+    };
+    match open_gpu_by_selector(text) {
+        Ok(gpu) => Box::into_raw(Box::new(gpu)),
+        Err(err) => {
+            eprintln!("redline: {err}");
+            ptr::null_mut()
+        }
+    }
+}
+
+fn open_gpu_by_selector(selector_text: &str) -> Result<RlGpu, RuntimeError> {
+    let symbols = load_symbols()
+        .map_err(|_| RuntimeError::InvalidRuntimeObject("failed to load libhsa-runtime64"))?;
+    let runtime = Runtime::initialize(symbols)?;
+
+    // Alias expansion and deny-list live in the host manifest. Missing files
+    // are fine (empty aliases / empty deny); parse errors are hard failures.
+    let manifest = HostManifest::load()?;
+
+    let mut query = parse_device_query(selector_text)?;
+    if let DeviceQuery::Alias(name) = &query {
+        query = manifest.resolve_alias(name)?;
+    }
+
+    let mut identities = runtime.device_identities()?;
+    hip::join_hip_ordinals(&mut identities);
+    let chosen = selector::resolve(&query, &identities)?.clone();
+    manifest.check_denied(&chosen)?;
+
+    // Re-select through Runtime so GpuDevice owns the live HSA agent handle.
+    let device = runtime.select_gpu_by_query(&query)?;
+    let pool = KernargPool::discover(&device)?;
+    Ok(RlGpu {
+        device,
+        pool,
+        identity: chosen,
+        _runtime: runtime,
+    })
+}
+
+/// Write the joined device identity description into `buf` (NUL-terminated when
+/// `buflen > 0`). Returns the number of bytes that would be written excluding
+/// the trailing NUL (same contract as `snprintf`). Null `gpu` returns 0.
+///
+/// # Safety
+/// `gpu` from [`rl_gpu_open`] / [`rl_gpu_new`], or null. When `buflen > 0`,
+/// `buf` must point to at least `buflen` writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_gpu_describe(
+    gpu: *const RlGpu,
+    buf: *mut c_char,
+    buflen: usize,
+) -> usize {
+    let Some(gpu) = (unsafe { gpu.as_ref() }) else {
+        return 0;
+    };
+    let text = gpu.identity.describe();
+    let needed = text.len();
+    if buflen == 0 || buf.is_null() {
+        return needed;
+    }
+    // Copy with room for NUL; truncate if needed.
+    let copy_len = needed.min(buflen.saturating_sub(1));
+    // SAFETY: buf is writable for buflen bytes per caller contract.
+    unsafe {
+        if copy_len > 0 {
+            ptr::copy_nonoverlapping(text.as_ptr(), buf.cast::<u8>(), copy_len);
+        }
+        *buf.add(copy_len) = 0;
+    }
+    needed
 }
 
 /// # Safety
@@ -465,7 +660,10 @@ pub unsafe extern "C" fn rl_pm4_builder_new(gpu: *const RlGpu) -> *mut RlPm4Buil
     };
     // Match the certified Hipfire retained-tape policy: preserve SH-register
     // state within the IB and omit writes whose values have not changed.
-    let cmd = Pm4Commands::stateful_with_leading_acquire(family);
+    // REDLINE_PM4_FULL_STATE=1 opts out of elision: every dispatch re-emits
+    // its complete SH state, shrinking the mid-IB preemption (CWSR/MCBP)
+    // corruption window investigated in ROCm/ROCm#6529.
+    let cmd = Pm4Commands::with_leading_acquire(family);
     Box::into_raw(Box::new(RlPm4Builder {
         family,
         device_agent: gpu.device.agent_handle(),
@@ -768,13 +966,21 @@ fn build_multi_ib(
     let mut gfx12_commands = Vec::with_capacity(builders.len());
     let mut kernargs = Vec::with_capacity(builders.len());
     let mut modules = Vec::new();
-    for builder in builders {
+    for (lane, builder) in builders.into_iter().enumerate() {
         let RlPm4Builder {
             cmd,
             kernargs: lane_kernargs,
             modules: lane_modules,
             ..
         } = builder;
+        if let Err(error) = crate::validate::validate_dispatch_stream(cmd.dwords()) {
+            eprintln!("redline: refusing to finalize invalid PM4 stream (lane {lane}): {error}");
+            return Err(());
+        }
+        if let Err(oversize) = ib_dwords_within_ceiling(cmd.dwords().len()) {
+            report_oversize_ib(oversize, Some(lane));
+            return Err(());
+        }
         match cmd {
             Pm4Commands::Legacy(commands) => legacy_commands.push(commands),
             Pm4Commands::Gfx12(commands) => gfx12_commands.push(commands),
@@ -803,7 +1009,9 @@ fn build_multi_ib(
             MultiQueuePm4Ib::create_profiled(&gpu.device, &gpu.pool, &gfx12_commands)
         }
     }
-    .map_err(|_| ())?;
+    .map_err(|error| {
+        eprintln!("redline: PM4 IB creation failed: {error}");
+    })?;
     Ok(RlPm4MultiIb {
         ib,
         kernargs,
@@ -932,26 +1140,38 @@ fn finalize_ib(
     commands: &Pm4Commands,
     profiled: bool,
 ) -> Result<SingleQueuePm4Ib, ()> {
+    if let Err(error) = crate::validate::validate_dispatch_stream(commands.dwords()) {
+        eprintln!("redline: refusing to finalize invalid PM4 stream: {error}");
+        return Err(());
+    }
+    if let Err(oversize) = ib_dwords_within_ceiling(commands.dwords().len()) {
+        report_oversize_ib(oversize, None);
+        return Err(());
+    }
+    let map_create_err = |error| {
+        eprintln!("redline: PM4 IB creation failed: {error}");
+    };
     match (family, commands, profiled) {
         (Pm4Family::Gfx10, Pm4Commands::Legacy(commands), false) => {
-            SingleQueuePm4Ib::create_gfx10(&gpu.device, &gpu.pool, commands).map_err(|_| ())
+            SingleQueuePm4Ib::create_gfx10(&gpu.device, &gpu.pool, commands).map_err(map_create_err)
         }
         (Pm4Family::Gfx10, Pm4Commands::Legacy(commands), true) => {
             SingleQueuePm4Ib::create_profiled_gfx10(&gpu.device, &gpu.pool, commands)
-                .map_err(|_| ())
+                .map_err(map_create_err)
         }
         (Pm4Family::Gfx11, Pm4Commands::Legacy(commands), false) => {
-            SingleQueuePm4Ib::create_gfx11(&gpu.device, &gpu.pool, commands).map_err(|_| ())
+            SingleQueuePm4Ib::create_gfx11(&gpu.device, &gpu.pool, commands).map_err(map_create_err)
         }
         (Pm4Family::Gfx11, Pm4Commands::Legacy(commands), true) => {
             SingleQueuePm4Ib::create_profiled_gfx11(&gpu.device, &gpu.pool, commands)
-                .map_err(|_| ())
+                .map_err(map_create_err)
         }
         (Pm4Family::Gfx12, Pm4Commands::Gfx12(commands), false) => {
-            SingleQueuePm4Ib::create(&gpu.device, &gpu.pool, commands).map_err(|_| ())
+            SingleQueuePm4Ib::create(&gpu.device, &gpu.pool, commands).map_err(map_create_err)
         }
         (Pm4Family::Gfx12, Pm4Commands::Gfx12(commands), true) => {
-            SingleQueuePm4Ib::create_profiled(&gpu.device, &gpu.pool, commands).map_err(|_| ())
+            SingleQueuePm4Ib::create_profiled(&gpu.device, &gpu.pool, commands)
+                .map_err(map_create_err)
         }
         _ => unreachable!("PM4 command family is selected from the same device family"),
     }
@@ -1056,14 +1276,30 @@ pub unsafe extern "C" fn rl_pm4_ib_free(ib: *mut RlPm4Ib) {
     }
 }
 
+/// Stream-level proofs for the #6529 full-state A/B knob.
+///
+/// Layer under test: `Pm4Commands::{stateful,full_state}_with_leading_acquire`
+/// plus the family command buffers they wrap (`Gfx10Pm4CommandBuffer` /
+/// `Gfx12Pm4CommandBuffer`), driven via `dispatch_image` with a synthetic
+/// nonzero code entry. A real `Kernel` / GPU module is not required and is not
+/// mocked — the builder's `dispatch` path only bridges HSA metadata into the
+/// same `dispatch_image` entry points exercised here. The emitted dword stream
+/// is the only available proof without gfx1100 hardware.
 #[cfg(test)]
 mod tests {
     use super::{
-        Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, Pm4Commands, Pm4Family, QueuePolicy,
-        RL_ERR_NULL, RlQueuePolicy, rl_pm4_finalize_multi, rl_pm4_multi_ib_dispatch_count,
-        rl_pm4_multi_ib_free, rl_pm4_multi_ib_lane_count, rl_pm4_multi_ib_set_kernargs,
-        rl_pm4_replay_multi, rl_pm4_replay_multi_profiled,
+        Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, PM4_INDIRECT_BUFFER_MAX_DWORDS, Pm4Commands,
+        Pm4Family, QueuePolicy, RL_ERR_NULL, RlQueuePolicy, ib_dwords_within_ceiling,
+        rl_pm4_finalize_multi, rl_pm4_multi_ib_dispatch_count, rl_pm4_multi_ib_free,
+        rl_pm4_multi_ib_lane_count, rl_pm4_multi_ib_set_kernargs, rl_pm4_replay_multi,
+        rl_pm4_replay_multi_profiled,
     };
+    use redline_dispatch::aql::{Gfx10KernelImage, Gfx12KernelImage, LaunchGeometry};
+
+    const PACKET3_SET_SH_REG: u32 = 0x76;
+    const PACKET3_DISPATCH_DIRECT: u32 = 0x15;
+    const COMPUTE_PGM_LO: u32 = 0x20c;
+    const DISPATCH_COUNT: usize = 3;
 
     #[test]
     fn rdna_generations_select_their_pm4_family() {
@@ -1142,5 +1378,192 @@ mod tests {
             );
             rl_pm4_multi_ib_free(std::ptr::null_mut());
         }
+    }
+
+    /// Walk a packet3 stream: (dispatch count, COMPUTE_PGM_LO write count,
+    /// whether every DISPATCH_DIRECT is preceded by a PGM_LO write since the
+    /// previous dispatch).
+    fn walk_pgm_lo_vs_dispatch(dwords: &[u32]) -> (usize, usize, bool) {
+        let mut dispatches = 0_usize;
+        let mut pgm_lo_writes = 0_usize;
+        let mut saw_pgm_lo_since_prev_dispatch = false;
+        let mut every_dispatch_has_prior_write = true;
+        let mut cursor = 0_usize;
+        while cursor < dwords.len() {
+            let header = dwords[cursor];
+            assert_eq!(header >> 30, 3, "only packet3 is expected in these streams");
+            let body = ((header >> 16) & 0x3fff) as usize + 1;
+            let opcode = (header >> 8) & 0xff;
+            let end = cursor + 1 + body;
+            assert!(end <= dwords.len(), "truncated packet3 body");
+            match opcode {
+                PACKET3_SET_SH_REG => {
+                    assert!(body >= 1, "SET_SH_REG needs a register offset");
+                    let first = dwords[cursor + 1];
+                    for (offset, _) in dwords[cursor + 2..end].iter().enumerate() {
+                        if first + offset as u32 == COMPUTE_PGM_LO {
+                            pgm_lo_writes += 1;
+                            saw_pgm_lo_since_prev_dispatch = true;
+                        }
+                    }
+                }
+                PACKET3_DISPATCH_DIRECT => {
+                    dispatches += 1;
+                    if !saw_pgm_lo_since_prev_dispatch {
+                        every_dispatch_has_prior_write = false;
+                    }
+                    saw_pgm_lo_since_prev_dispatch = false;
+                }
+                _ => {}
+            }
+            cursor = end;
+        }
+        (dispatches, pgm_lo_writes, every_dispatch_has_prior_write)
+    }
+
+    fn legacy_image() -> Gfx10KernelImage {
+        Gfx10KernelImage {
+            code_entry: 0x1_0000,
+            compute_pgm_rsrc1: 0x11,
+            compute_pgm_rsrc2: 0x22,
+            compute_pgm_rsrc3: 0x33,
+            group_segment_size: 0,
+            private_segment_size: 0,
+            dynamic_callstack: false,
+            wave32: true,
+            kernel_code_properties: 0,
+        }
+    }
+
+    fn gfx12_image() -> Gfx12KernelImage {
+        Gfx12KernelImage {
+            code_entry: 0x1_0000,
+            compute_pgm_rsrc1: 0x11,
+            compute_pgm_rsrc2: 0x22,
+            compute_pgm_rsrc3: 0x33,
+            group_segment_size: 0,
+            private_segment_size: 0,
+            dynamic_callstack: false,
+            wave32: true,
+        }
+    }
+
+    /// Record N identical dispatches through the same `Pm4Commands` constructors
+    /// the C builder uses, driving the wrapped buffers via `dispatch_image`.
+    fn record_n_identical(family: Pm4Family, full_state: bool, n: usize) -> Pm4Commands {
+        let mut cmd = if full_state {
+            Pm4Commands::full_state_with_leading_acquire(family)
+        } else {
+            Pm4Commands::stateful_with_leading_acquire(family)
+        };
+        let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1]).expect("geometry");
+        // Nonzero synthetic kernarg address — mirrors what hsa_user_sgprs would
+        // place in COMPUTE_USER_DATA; keeps the stream realistic without a GPU.
+        let kernarg_words = [0x1000_u32, 0];
+        for _ in 0..n {
+            match (&mut cmd, family) {
+                (Pm4Commands::Legacy(buf), Pm4Family::Gfx10 | Pm4Family::Gfx11) => {
+                    buf.dispatch_image(&legacy_image(), geometry, 0, &kernarg_words)
+                        .expect("legacy dispatch_image");
+                }
+                (Pm4Commands::Gfx12(buf), Pm4Family::Gfx12) => {
+                    buf.dispatch_image(&gfx12_image(), geometry, 0, &kernarg_words)
+                        .expect("gfx12 dispatch_image");
+                }
+                _ => panic!("Pm4Commands variant must match Pm4Family"),
+            }
+        }
+        cmd
+    }
+
+    fn assert_elided_mode(family: Pm4Family) {
+        let cmd = record_n_identical(family, false, DISPATCH_COUNT);
+        let dwords = cmd.dwords();
+        let (dispatches, pgm_lo_writes, _) = walk_pgm_lo_vs_dispatch(dwords);
+        assert_eq!(
+            dispatches, DISPATCH_COUNT,
+            "{family:?}: expected {DISPATCH_COUNT} DISPATCH_DIRECT"
+        );
+        // Elision: one COMPUTE_PGM_LO write covers every subsequent identical
+        // dispatch — fewer PGM_LO writes than dispatches is the definition.
+        assert!(
+            pgm_lo_writes < dispatches,
+            "{family:?}: stateful mode must elide COMPUTE_PGM_LO (writes={pgm_lo_writes}, dispatches={dispatches})"
+        );
+        crate::validate::validate_dispatch_stream(dwords)
+            .expect("stateful stream must pass finalize-time validation");
+    }
+
+    fn assert_full_state_mode(family: Pm4Family) {
+        let cmd = record_n_identical(family, true, DISPATCH_COUNT);
+        let dwords = cmd.dwords();
+        let (dispatches, pgm_lo_writes, every_has_prior) = walk_pgm_lo_vs_dispatch(dwords);
+        assert_eq!(
+            dispatches, DISPATCH_COUNT,
+            "{family:?}: expected {DISPATCH_COUNT} DISPATCH_DIRECT"
+        );
+        assert!(
+            every_has_prior,
+            "{family:?}: full-state must write COMPUTE_PGM_LO before every DISPATCH_DIRECT"
+        );
+        assert!(
+            pgm_lo_writes >= dispatches,
+            "{family:?}: full-state must not elide COMPUTE_PGM_LO (writes={pgm_lo_writes}, dispatches={dispatches})"
+        );
+        crate::validate::validate_dispatch_stream(dwords)
+            .expect("full-state stream must pass finalize-time validation");
+    }
+
+    /// Catches a regression that makes the stateful encoder always re-emit
+    /// COMPUTE_PGM_LO (elision broken → A/B knob becomes a no-op on the
+    /// elided side, and IB size balloons).
+    #[test]
+    fn stateful_elides_compute_pgm_lo_on_legacy_and_gfx12() {
+        assert_elided_mode(Pm4Family::Gfx10);
+        assert_elided_mode(Pm4Family::Gfx11);
+        assert_elided_mode(Pm4Family::Gfx12);
+    }
+
+    /// Catches a regression that re-enables SH elision under the full-state
+    /// constructors (the #6529 A/B knob silently stops working).
+    #[test]
+    fn full_state_rewrites_compute_pgm_lo_before_every_dispatch() {
+        assert_full_state_mode(Pm4Family::Gfx10);
+        assert_full_state_mode(Pm4Family::Gfx11);
+        assert_full_state_mode(Pm4Family::Gfx12);
+    }
+
+    /// Catches the two modes collapsing to the same stream (e.g. both paths
+    /// accidentally call `new()` or both call `new_stateful()`).
+    #[test]
+    fn full_state_and_stateful_streams_differ_for_repeated_dispatches() {
+        for family in [Pm4Family::Gfx10, Pm4Family::Gfx11, Pm4Family::Gfx12] {
+            let elided = record_n_identical(family, false, DISPATCH_COUNT);
+            let full = record_n_identical(family, true, DISPATCH_COUNT);
+            assert_ne!(
+                elided.dwords(),
+                full.dwords(),
+                "{family:?}: full-state and stateful streams must differ for N={DISPATCH_COUNT}"
+            );
+            let (_, elided_writes, _) = walk_pgm_lo_vs_dispatch(elided.dwords());
+            let (_, full_writes, _) = walk_pgm_lo_vs_dispatch(full.dwords());
+            assert!(
+                full_writes > elided_writes,
+                "{family:?}: full-state must emit more COMPUTE_PGM_LO writes ({full_writes}) than stateful ({elided_writes})"
+            );
+        }
+    }
+
+    /// Boundary values around the 20-bit PM4 INDIRECT_BUFFER size field
+    /// (`0x000f_ffff`). Must stay aligned with packet.rs:431.
+    #[test]
+    fn ib_dwords_within_ceiling_rejects_above_20_bit_max() {
+        let max = PM4_INDIRECT_BUFFER_MAX_DWORDS as usize;
+        assert_eq!(max, 0x000f_ffff);
+        assert!(ib_dwords_within_ceiling(0x000f_fffe).is_ok());
+        assert!(ib_dwords_within_ceiling(0x000f_ffff).is_ok());
+        assert!(ib_dwords_within_ceiling(0x0010_0000).is_err());
+        assert!(ib_dwords_within_ceiling(max).is_ok());
+        assert!(ib_dwords_within_ceiling(max + 1).is_err());
     }
 }

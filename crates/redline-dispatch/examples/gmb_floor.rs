@@ -592,6 +592,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let runtime = Runtime::initialize(load_symbols()?)?;
     let device = runtime.select_gpu(GpuSelector::Ordinal(0))?;
+    if !device.name().starts_with("gfx12") {
+        return Err(format!("gmb_floor requires gfx12, selected {}", device.name()).into());
+    }
     let pool = KernargPool::discover(&device)?;
     let device_pool = DevicePool::discover(&device)?;
     let code: Arc<[u8]> = std::fs::read(&hsaco)?.into();

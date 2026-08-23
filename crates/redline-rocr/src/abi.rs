@@ -37,6 +37,13 @@ pub const AGENT_INFO_QUEUE_TYPE: u32 = 15;
 pub const AGENT_INFO_DEVICE: u32 = 17;
 pub const AMD_AGENT_INFO_BDFID: u32 = 0xA006;
 pub const AMD_AGENT_INFO_DOMAIN: u32 = 0xA00F;
+/// Internal driver/KFD node id. uint32_t (hsa_ext_amd.h).
+pub const AMD_AGENT_INFO_DRIVER_NODE_ID: u32 = 0xA004;
+/// Board marketing name — Ascii string of 64 chars (hsa_ext_amd.h).
+pub const AMD_AGENT_INFO_PRODUCT_NAME: u32 = 0xA009;
+/// Agent UUID — Ascii string, max 21 chars including NUL (hsa_ext_amd.h).
+/// Devices without a UUID report the literal "GPU-XX".
+pub const AMD_AGENT_INFO_UUID: u32 = 0xA011;
 pub const AMD_AGENT_INFO_TIMESTAMP_FREQUENCY: u32 = 0xA016;
 pub const AMD_AGENT_INFO_COMPUTE_UNIT_COUNT: u32 = 0xA002;
 pub const AMD_AGENT_INFO_COOPERATIVE_COMPUTE_UNIT_COUNT: u32 = 0xA014;

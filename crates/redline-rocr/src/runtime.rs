@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use super::abi;
+use super::identity::DeviceIdentity;
 use super::packet::{AQL_PACKET_BYTES, KernelMetadata, LaunchGeometry, PacketImage};
 
 /// Default bound for host-side queue-capacity and completion polling.
@@ -86,39 +87,127 @@ impl Runtime {
             .iter()
             .find(|agent| agent.device_type == abi::DEVICE_TYPE_CPU)
             .cloned();
-        let devices = agents
+        let mut devices = Vec::new();
+        for gpu in agents
             .into_iter()
             .filter(|agent| agent.device_type == abi::DEVICE_TYPE_GPU)
-            .map(|gpu| GpuDevice {
+        {
+            let rocr_index = devices.len();
+            let mut identity = gpu.to_device_identity(rocr_index);
+            super::identity_sysfs::enrich_device_identity(&mut identity);
+            devices.push(GpuDevice {
                 runtime: self.inner.clone(),
                 gpu,
                 cpu: cpu.clone(),
-            })
-            .collect::<Vec<_>>();
+                identity,
+            });
+        }
         if devices.is_empty() {
             return Err(RuntimeError::NoGpuAgent);
         }
         Ok(devices)
     }
-
+    /// Select a GPU by ordinal or agent-name substring.
+    ///
+    /// The manifest deny-list is enforced here too. A guard that the default
+    /// call path skips is not a guard: every existing caller uses an ordinal,
+    /// and an ordinal is exactly the selector most likely to land on the wrong
+    /// device. With no manifest present the deny-list is empty, so this costs
+    /// nothing until an operator writes one.
     pub fn select_gpu(&self, selector: GpuSelector<'_>) -> Result<GpuDevice, RuntimeError> {
+        self.select_gpu_with_risk(selector, crate::manifest::RiskClass::Normal)
+    }
+
+    /// Select a GPU by ordinal or agent-name substring with an explicit risk class.
+    ///
+    /// `Normal` refuses only `deny` matches. `ResetProvoking` refuses both
+    /// `deny` and `fragile` matches. This `*_with_risk` shape keeps the
+    /// existing `select_gpu` signature working unchanged for `Normal` callers
+    /// (Rust has no defaulted parameters) with least churn.
+    pub fn select_gpu_with_risk(
+        &self,
+        selector: GpuSelector<'_>,
+        risk: crate::manifest::RiskClass,
+    ) -> Result<GpuDevice, RuntimeError> {
         let devices = self.gpu_devices()?;
-        match selector {
+        let chosen = match selector {
             GpuSelector::Ordinal(ordinal) => devices
                 .into_iter()
                 .nth(ordinal)
-                .ok_or(RuntimeError::GpuOrdinalOutOfRange { ordinal }),
+                .ok_or(RuntimeError::GpuOrdinalOutOfRange { ordinal })?,
             GpuSelector::NameContains(needle) => {
-                let needle_lower = needle.to_ascii_lowercase();
+                let index = {
+                    let names: Vec<&str> = devices.iter().map(GpuDevice::name).collect();
+                    let labels: Vec<String> = devices
+                        .iter()
+                        .map(|device| format!("{} ({})", device.name(), device.pci_bus_id()))
+                        .collect();
+                    resolve_name_contains(&names, &labels, needle)?
+                };
                 devices
                     .into_iter()
-                    .find(|device| device.name().to_ascii_lowercase().contains(&needle_lower))
-                    .ok_or_else(|| RuntimeError::GpuNameNotFound {
-                        needle: needle.to_owned(),
-                    })
+                    .nth(index)
+                    .expect("resolve_name_contains index is in range")
             }
-        }
+        };
+        super::manifest::HostManifest::load()?.check_with_risk(chosen.identity(), risk)?;
+        Ok(chosen)
     }
+
+    /// Pin a GPU with an anchored [`super::identity::DeviceQuery`] (`uuid:` / `bdf:` / …).
+    ///
+    /// Prefer this over [`Self::select_gpu`] whenever the caller has a durable
+    /// pin. The legacy `GpuSelector` path is kept unchanged so existing ordinal
+    /// and name call sites keep their current error strings and tests.
+    ///
+    /// `@alias` queries are expanded through the host manifest, and every
+    /// resolved device is checked against that manifest's deny-list before it
+    /// is handed back. The check runs on the *resolved device*, so no query
+    /// form can route around it. There is deliberately no environment override:
+    /// a device is forbidden because someone wrote down why, and an env var to
+    /// ignore that is precisely the thing that ends up pasted into a script.
+    /// To use a denied device, edit the manifest.
+    pub fn select_gpu_by_query(
+        &self,
+        query: &super::identity::DeviceQuery,
+    ) -> Result<GpuDevice, RuntimeError> {
+        self.select_gpu_by_query_with_risk(query, crate::manifest::RiskClass::Normal)
+    }
+
+    /// Pin a GPU with an anchored query and an explicit risk class.
+    ///
+    /// See [`Self::select_gpu_with_risk`] for why the `*_with_risk` shape is
+    /// used instead of a defaulted parameter.
+    pub fn select_gpu_by_query_with_risk(
+        &self,
+        query: &super::identity::DeviceQuery,
+        risk: crate::manifest::RiskClass,
+    ) -> Result<GpuDevice, RuntimeError> {
+        let manifest = super::manifest::HostManifest::load()?;
+        let expanded;
+        let query = match query {
+            super::identity::DeviceQuery::Alias(alias) => {
+                expanded = manifest.resolve_alias(alias)?;
+                &expanded
+            }
+            other => other,
+        };
+        let devices = self.gpu_devices()?;
+        let identities: Vec<DeviceIdentity> = devices
+            .iter()
+            .map(|device| device.identity().clone())
+            .collect();
+        let chosen = super::selector::resolve(query, &identities)?;
+        manifest.check_with_risk(chosen, risk)?;
+        let bdf = chosen.bdf;
+        devices
+            .into_iter()
+            .find(|device| device.pci_bus_id() == bdf)
+            .ok_or(RuntimeError::InvalidRuntimeObject(
+                "resolved device identity has no matching HSA GPU agent",
+            ))
+    }
+
 
     /// HSA system-clock frequency used by ROCr dispatch profiling timestamps.
     pub fn timestamp_frequency_hz(&self) -> Result<u64, RuntimeError> {
@@ -184,6 +273,10 @@ impl Runtime {
         let mut grid_max_size = 0_u32;
         let mut pci_domain = 0_u32;
         let mut pci_bdfid = 0_u32;
+        let mut driver_node_id = 0_u32;
+        let mut product_name = [0_u8; 64];
+        // UUID is max 21 chars including NUL per hsa_ext_amd.h.
+        let mut uuid = [0_u8; 21];
         query_agent(
             symbols,
             agent,
@@ -263,12 +356,36 @@ impl Runtime {
                 abi::AMD_AGENT_INFO_BDFID,
                 (&mut pci_bdfid as *mut u32).cast(),
             )?;
+            query_agent(
+                symbols,
+                agent,
+                abi::AMD_AGENT_INFO_DRIVER_NODE_ID,
+                (&mut driver_node_id as *mut u32).cast(),
+            )?;
+            query_agent(
+                symbols,
+                agent,
+                abi::AMD_AGENT_INFO_PRODUCT_NAME,
+                product_name.as_mut_ptr().cast(),
+            )?;
+            query_agent(
+                symbols,
+                agent,
+                abi::AMD_AGENT_INFO_UUID,
+                uuid.as_mut_ptr().cast(),
+            )?;
         }
-        let name_end = name
-            .iter()
-            .position(|byte| *byte == 0)
-            .unwrap_or(name.len());
-        let name = String::from_utf8_lossy(&name[..name_end]).into_owned();
+        let name = cstr_from_fixed(&name);
+        let product_name = if device_type == abi::DEVICE_TYPE_GPU {
+            cstr_from_fixed(&product_name)
+        } else {
+            String::new()
+        };
+        let uuid = if device_type == abi::DEVICE_TYPE_GPU {
+            normalize_agent_uuid(&cstr_from_fixed(&uuid))
+        } else {
+            None
+        };
         let pci_bus_id = if device_type == abi::DEVICE_TYPE_GPU {
             Some(pci_bus_id_from_hsa_location(pci_domain, pci_bdfid))
         } else {
@@ -288,7 +405,69 @@ impl Runtime {
             grid_max_dim,
             grid_max_size,
             pci_bus_id,
+            driver_node_id,
+            product_name,
+            uuid,
         })
+    }
+
+    /// One [`DeviceIdentity`] per GPU agent, in `hsa_iterate_agents` order.
+    ///
+    /// `rocr_index` is the position in that GPU-only list under the current
+    /// `ROCR_VISIBLE_DEVICES`. Slot and DRM-card fields are enriched from sysfs
+    /// here; the HIP ordinal stays empty so the optional HIP join can fill it
+    /// by PCI address without re-querying HSA.
+    pub fn device_identities(&self) -> Result<Vec<DeviceIdentity>, RuntimeError> {
+        let agents = self.agents()?;
+        let mut identities = Vec::new();
+        for agent in agents {
+            if agent.device_type != abi::DEVICE_TYPE_GPU {
+                continue;
+            }
+            let rocr_index = identities.len();
+            let mut identity = agent.to_device_identity(rocr_index);
+            super::identity_sysfs::enrich_device_identity(&mut identity);
+            identities.push(identity);
+        }
+        if identities.is_empty() {
+            return Err(RuntimeError::NoGpuAgent);
+        }
+        Ok(identities)
+    }
+}
+
+/// Resolve `NameContains` against an ordered GPU agent-name list.
+///
+/// Pure so unit tests can exercise ambiguity without an HSA runtime. Matching is
+/// case-insensitive substring over `names` only; `labels[i]` describes `names[i]`
+/// in the ambiguity error. Agent names repeat across cards of one architecture —
+/// two RDNA3 boards are both `gfx1100` — so the label carries the PCI identity
+/// that actually tells them apart.
+fn resolve_name_contains(
+    names: &[impl AsRef<str>],
+    labels: &[impl AsRef<str>],
+    needle: &str,
+) -> Result<usize, RuntimeError> {
+    debug_assert_eq!(names.len(), labels.len());
+    let needle_lower = needle.to_ascii_lowercase();
+    let hits: Vec<usize> = names
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| name.as_ref().to_ascii_lowercase().contains(&needle_lower))
+        .map(|(ordinal, _)| ordinal)
+        .collect();
+    match hits.as_slice() {
+        [ordinal] => Ok(*ordinal),
+        [] => Err(RuntimeError::GpuNameNotFound {
+            needle: needle.to_owned(),
+        }),
+        many => Err(RuntimeError::GpuNameAmbiguous {
+            needle: needle.to_owned(),
+            matches: many
+                .iter()
+                .map(|ordinal| format!("{ordinal}:{}", labels[*ordinal].as_ref()))
+                .collect(),
+        }),
     }
 }
 
@@ -327,6 +506,29 @@ struct AgentInfo {
     grid_max_dim: [u32; 3],
     grid_max_size: u32,
     pci_bus_id: Option<PciBusId>,
+    /// KFD driver node id (`HSA_AMD_AGENT_INFO_DRIVER_NODE_ID`).
+    driver_node_id: u32,
+    product_name: String,
+    /// Normalized UUID; `None` when the agent reported no unique id.
+    uuid: Option<String>,
+}
+
+impl AgentInfo {
+    fn to_device_identity(&self, rocr_index: usize) -> DeviceIdentity {
+        DeviceIdentity {
+            uuid: self.uuid.clone(),
+            bdf: self
+                .pci_bus_id
+                .expect("GPU agent construction requires a ROCm/HIP PCI identity"),
+            agent_name: self.name.clone(),
+            product_name: self.product_name.clone(),
+            kfd_node: self.driver_node_id,
+            rocr_index,
+            hip_ordinal: None,
+            pci_slot: None,
+            drm_card: None,
+        }
+    }
 }
 
 /// A normalized ROCm/HIP PCI domain/bus/device/function identity.
@@ -368,6 +570,39 @@ fn pci_bus_id_from_hsa_location(domain: u32, bdfid: u32) -> PciBusId {
     }
 }
 
+/// Trim a fixed HSA char buffer at the first NUL (or end).
+fn cstr_from_fixed(buf: &[u8]) -> String {
+    let end = buf.iter().position(|byte| *byte == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..end]).into_owned()
+}
+
+/// Map ROCr UUID strings that are not unique device ids to `None`.
+///
+/// ROCr returns the literal `GPU-XX` (or CPU/DSP variants) when the agent has
+/// no UUID. Empty and all-zero bodies are the same non-identity and must never
+/// become `Some` — otherwise an anchor would claim uniqueness it does not have.
+fn normalize_agent_uuid(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // ROCr emits "GPU-XX" / "CPU-XX" / "DSP-XX" when there is no unique id.
+    // Compare case-insensitively so a mangled form cannot sneak into Some.
+    let upper = trimmed.to_ascii_uppercase();
+    if let Some(body) = upper
+        .strip_prefix("GPU-")
+        .or_else(|| upper.strip_prefix("CPU-"))
+        .or_else(|| upper.strip_prefix("DSP-"))
+    {
+        if body == "XX" || (!body.is_empty() && body.bytes().all(|b| b == b'0')) {
+            return None;
+        }
+    } else if upper.bytes().all(|b| b == b'0') {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
 impl fmt::Display for PciBusId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -387,7 +622,7 @@ impl fmt::Display for PciBusIdParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid PCI bus ID {:?}; expected dddd:bb:dd.f",
+            "invalid PCI bus ID {:?}; expected dddd:bb:dd.f or bb:dd.f",
             self.input
         )
     }
@@ -403,16 +638,15 @@ impl std::str::FromStr for PciBusId {
             input: input.to_owned(),
         };
         let (domain_bus_device, function) = input.rsplit_once('.').ok_or_else(invalid)?;
-        let mut components = domain_bus_device.split(':');
-        let domain = components.next().ok_or_else(invalid)?;
-        let bus = components.next().ok_or_else(invalid)?;
-        let device = components.next().ok_or_else(invalid)?;
-        if components.next().is_some()
-            || domain.is_empty()
-            || bus.is_empty()
-            || device.is_empty()
-            || function.is_empty()
-        {
+        let parts: Vec<&str> = domain_bus_device.split(':').collect();
+        // Full form `dddd:bb:dd.f` or short form `bb:dd.f` (domain defaults to 0).
+        // Bare bus is what operators copy from `lspci` without the domain prefix.
+        let (domain, bus, device) = match parts.as_slice() {
+            [bus, device] => ("0", *bus, *device),
+            [domain, bus, device] => (*domain, *bus, *device),
+            _ => return Err(invalid()),
+        };
+        if domain.is_empty() || bus.is_empty() || device.is_empty() || function.is_empty() {
             return Err(invalid());
         }
         let domain = u32::from_str_radix(domain, 16).map_err(|_| invalid())?;
@@ -434,6 +668,10 @@ impl std::str::FromStr for PciBusId {
 #[derive(Clone, Copy, Debug)]
 pub enum GpuSelector<'a> {
     Ordinal(usize),
+    /// Case-insensitive substring match on the HSA GPU agent name.
+    ///
+    /// `HIP_VISIBLE_DEVICES` is a CLR filter and does not affect HSA enumeration.
+    /// Redline enumerates via `hsa_iterate_agents`, which honours `ROCR_VISIBLE_DEVICES` only.
     NameContains(&'a str),
 }
 
@@ -442,6 +680,7 @@ pub struct GpuDevice {
     runtime: Arc<RuntimeInner>,
     gpu: AgentInfo,
     cpu: Option<AgentInfo>,
+    identity: DeviceIdentity,
 }
 
 impl fmt::Debug for GpuDevice {
@@ -464,6 +703,11 @@ impl GpuDevice {
 
     pub fn agent_handle(&self) -> u64 {
         self.gpu.handle.0
+    }
+
+    /// Stable provenance for this GPU under the current ROCr view.
+    pub fn identity(&self) -> &DeviceIdentity {
+        &self.identity
     }
 
     pub fn pci_bus_id(&self) -> PciBusId {
@@ -2679,6 +2923,34 @@ pub enum RuntimeError {
     GpuNameNotFound {
         needle: String,
     },
+    GpuNameAmbiguous {
+        needle: String,
+        matches: Vec<String>,
+    },
+    /// Selector string failed to parse (`uuid:` / `bdf:` / … grammar).
+    InvalidDeviceSelector {
+        input: String,
+        reason: String,
+    },
+    /// No device matched the anchored query.
+    DeviceNotFound {
+        query: String,
+    },
+    /// More than one device matched; `matches` lists every candidate.
+    DeviceAmbiguous {
+        query: String,
+        matches: Vec<String>,
+    },
+    /// `resolve` was called with an empty device list.
+    NoDevicesForSelector,
+    /// A `slot:` query was used but this host exposes no PCI slot labels at all.
+    NoPciSlotLabels {
+        slot: String,
+    },
+    /// `@alias` reached pure `resolve`; the manifest layer must expand it first.
+    AliasNotResolved {
+        alias: String,
+    },
     InvalidQueueSize {
         requested: u32,
         min: u32,
@@ -2750,6 +3022,55 @@ pub enum RuntimeError {
     InvalidOffloadBundle(&'static str),
     SymbolContainsNul,
     SymbolIsNotKernel(String),
+    /// Resolved device is on the host manifest deny-list.
+    ///
+    /// This is the only automatic guard against selecting a device whose reset
+    /// takes the host down: sysfs cannot identify that class of GPU, so a human
+    /// must put it on `deny` with a note. Fail closed — any query form that
+    /// resolves to this device is refused.
+    DeviceDenied {
+        /// Canonical description of the resolved device (anchor + bdf).
+        device: String,
+        /// Selector string as written in the deny list.
+        selector: String,
+        /// Trailing `#` comment from the deny entry, when present.
+        note: Option<String>,
+        /// Hostname section that supplied the deny entry.
+        host: String,
+    },
+    /// Resolved device is on the host manifest fragile-list and the caller
+    /// declared a reset-risk operation.
+    ///
+    /// Like [`RuntimeError::DeviceDenied`] this is evaluated on the resolved
+    /// device so no selector form can bypass it. Unlike `deny`, a fragile
+    /// device is fully usable for normal work and is only refused when the
+    /// caller passes [`crate::manifest::RiskClass::ResetProvoking`].
+    DeviceFragile {
+        /// Canonical description of the resolved device (anchor + bdf).
+        device: String,
+        /// Selector string as written in the fragile list.
+        selector: String,
+        /// Trailing `#` comment from the fragile entry, when present.
+        note: Option<String>,
+        /// Hostname section that supplied the fragile entry.
+        host: String,
+    },
+    /// Host manifest TOML-subset parse failure.
+    ManifestParse {
+        path: String,
+        line: usize,
+        message: String,
+    },
+    /// Host manifest file could not be read.
+    ManifestIo {
+        path: String,
+        message: String,
+    },
+    /// `@alias` is not defined for the active host section.
+    AliasNotFound {
+        alias: String,
+        host: String,
+    },
 }
 
 impl fmt::Display for RuntimeError {
@@ -2768,6 +3089,38 @@ impl fmt::Display for RuntimeError {
             Self::GpuNameNotFound { needle } => {
                 write!(f, "no HSA GPU name contains {needle:?}")
             }
+            Self::GpuNameAmbiguous { needle, matches } => write!(
+                f,
+                "HSA GPU name {needle:?} is ambiguous; matches [{}]; disambiguate with an explicit ordinal or ROCR_VISIBLE_DEVICES",
+                matches.join(", ")
+            ),
+            Self::InvalidDeviceSelector { input, reason } => {
+                write!(f, "invalid device selector {input:?}: {reason}")
+            }
+            Self::DeviceNotFound { query } => {
+                write!(f, "no device matched selector {query:?}")
+            }
+            Self::DeviceAmbiguous { query, matches } => write!(
+                f,
+                "device selector {query:?} is ambiguous; matches [{}]; disambiguate with uuid:… or bdf:…",
+                matches.join(", ")
+            ),
+            Self::NoDevicesForSelector => {
+                write!(
+                    f,
+                    "device selector resolution requires a non-empty device list"
+                )
+            }
+            Self::NoPciSlotLabels { slot } => write!(
+                f,
+                "PCI slot {slot:?} cannot be resolved: no slot labels on this host \
+                 (firmware/ACPI did not expose /sys/bus/pci/slots for any GPU)"
+            ),
+            Self::AliasNotResolved { alias } => write!(
+                f,
+                "device alias @{alias} is not resolved by pure selector::resolve; \
+                 expand it through the host manifest first"
+            ),
             Self::InvalidQueueSize {
                 requested,
                 min,
@@ -2885,6 +3238,50 @@ impl fmt::Display for RuntimeError {
             Self::SymbolIsNotKernel(name) => {
                 write!(f, "executable symbol {name:?} is not a kernel")
             }
+            Self::DeviceDenied {
+                device,
+                selector,
+                note,
+                host,
+            } => match note {
+                Some(note) if !note.is_empty() => write!(
+                    f,
+                    "device {device} is denied by host manifest [{host}] (deny entry {selector}): {note}"
+                ),
+                _ => write!(
+                    f,
+                    "device {device} is denied by host manifest [{host}] (deny entry {selector}); \
+                     no note was recorded — add a trailing # comment on the deny entry explaining why"
+                ),
+            },
+            Self::DeviceFragile {
+                device,
+                selector,
+                note,
+                host,
+            } => match note {
+                Some(note) if !note.is_empty() => write!(
+                    f,
+                    "device {device} is fragile on host {host} (reset-provoking operation refused; fragile entry {selector}): {note}"
+                ),
+                _ => write!(
+                    f,
+                    "device {device} is fragile on host {host} (reset-provoking operation refused; fragile entry {selector}); \
+                     no note was recorded — add a trailing # comment on the fragile entry explaining why"
+                ),
+            },
+            Self::ManifestParse {
+                path,
+                line,
+                message,
+            } => write!(f, "host manifest {path} line {line}: {message}"),
+            Self::ManifestIo { path, message } => {
+                write!(f, "host manifest {path}: {message}")
+            }
+            Self::AliasNotFound { alias, host } => write!(
+                f,
+                "alias @{alias} is not defined in host manifest section [host.{host}]"
+            ),
         }
     }
 }
@@ -3037,6 +3434,20 @@ mod tests {
     }
 
     #[test]
+    fn pci_bus_id_parser_accepts_short_form_domain_zero() {
+        let short = "66:00.0".parse::<PciBusId>().unwrap();
+        let full = "0000:66:00.0".parse::<PciBusId>().unwrap();
+        assert_eq!(short, full);
+        assert_eq!(short.domain(), 0);
+        assert_eq!(short.to_string(), "0000:66:00.0");
+        // Hex case still folds.
+        assert_eq!(
+            "BF:00.0".parse::<PciBusId>().unwrap(),
+            "0000:bf:00.0".parse().unwrap()
+        );
+    }
+
+    #[test]
     fn pci_bus_id_parser_rejects_malformed_or_out_of_range_components() {
         for invalid in [
             "0000:01:00",
@@ -3055,6 +3466,65 @@ mod tests {
         let partitioned = pci_bus_id_from_hsa_location(0x1234, 0xf000_abee);
         assert_eq!(plain, partitioned);
         assert_eq!(plain.to_string(), "1234:ab:1d.6");
+    }
+
+    #[test]
+    fn bdfid_domain_decodes_hipx_and_hiptrx_locations() {
+        // hipx measured BDFID values (domain 0).
+        assert_eq!(
+            pci_bus_id_from_hsa_location(0, 26112).to_string(),
+            "0000:66:00.0"
+        );
+        assert_eq!(
+            pci_bus_id_from_hsa_location(0, 48896).to_string(),
+            "0000:bf:00.0"
+        );
+        assert_eq!(
+            pci_bus_id_from_hsa_location(0, 28160).to_string(),
+            "0000:6e:00.0"
+        );
+        assert_eq!(
+            pci_bus_id_from_hsa_location(0, 39168).to_string(),
+            "0000:99:00.0"
+        );
+        // hiptrx measured BDFID values (domain 0).
+        assert_eq!(
+            pci_bus_id_from_hsa_location(0, 768).to_string(),
+            "0000:03:00.0"
+        );
+        assert_eq!(
+            pci_bus_id_from_hsa_location(0, 4864).to_string(),
+            "0000:13:00.0"
+        );
+        assert_eq!(
+            pci_bus_id_from_hsa_location(0, 49920).to_string(),
+            "0000:c3:00.0"
+        );
+        assert_eq!(
+            pci_bus_id_from_hsa_location(0, 58112).to_string(),
+            "0000:e3:00.0"
+        );
+        // Known-good packing check from the task: 26112 == 0x6600.
+        assert_eq!(26112_u32, 0x6600);
+    }
+
+    #[test]
+    fn normalize_agent_uuid_rejects_non_unique_forms() {
+        assert_eq!(normalize_agent_uuid("GPU-XX"), None);
+        assert_eq!(normalize_agent_uuid("gpu-xx"), None);
+        assert_eq!(normalize_agent_uuid("CPU-XX"), None);
+        assert_eq!(normalize_agent_uuid("DSP-XX"), None);
+        assert_eq!(normalize_agent_uuid(""), None);
+        assert_eq!(normalize_agent_uuid("   "), None);
+        assert_eq!(normalize_agent_uuid("GPU-0000000000000000"), None);
+        assert_eq!(
+            normalize_agent_uuid("GPU-43390a851e296ee5"),
+            Some("GPU-43390a851e296ee5".to_owned())
+        );
+        assert_eq!(
+            normalize_agent_uuid("GPU-c7ff6b154d0128bc"),
+            Some("GPU-c7ff6b154d0128bc".to_owned())
+        );
     }
 
     #[test]
@@ -3109,5 +3579,72 @@ mod tests {
     #[test]
     fn status_cu_mask_reduced_is_hsa_value_44() {
         assert_eq!(STATUS_CU_MASK_REDUCED, 44);
+    }
+
+    /// The two-card shape from ROCm/ROCm#6529: both agents report `gfx1100`,
+    /// only the PCI identity separates them.
+    const TWO_CARD_NAMES: [&str; 2] = ["gfx1100", "gfx1100"];
+    const TWO_CARD_LABELS: [&str; 2] = ["gfx1100 (0000:03:00.0)", "gfx1100 (0000:83:00.0)"];
+
+    #[test]
+    fn resolve_name_contains_returns_unique_match_index() {
+        let names = ["gfx1201", "gfx1100"];
+        let labels = ["gfx1201 (0000:0c:00.0)", "gfx1100 (0000:03:00.0)"];
+        assert_eq!(resolve_name_contains(&names, &labels, "1201").unwrap(), 0);
+        assert_eq!(resolve_name_contains(&names, &labels, "1100").unwrap(), 1);
+    }
+
+    #[test]
+    fn resolve_name_contains_is_case_insensitive() {
+        let names = ["gfx1100"];
+        let labels = ["gfx1100 (0000:03:00.0)"];
+        assert_eq!(
+            resolve_name_contains(&names, &labels, "GFX1100").unwrap(),
+            0
+        );
+        assert_eq!(resolve_name_contains(&names, &labels, "Gfx11").unwrap(), 0);
+    }
+
+    #[test]
+    fn resolve_name_contains_zero_matches_is_not_found() {
+        let names = ["gfx1201", "gfx1100"];
+        let labels = ["gfx1201 (0000:0c:00.0)", "gfx1100 (0000:03:00.0)"];
+        let err = resolve_name_contains(&names, &labels, "vega").unwrap_err();
+        match err {
+            RuntimeError::GpuNameNotFound { needle } => assert_eq!(needle, "vega"),
+            other => panic!("expected GpuNameNotFound, got {other}"),
+        }
+    }
+
+    /// The PCI identity is reporting only. Matching it would silently invent an
+    /// undocumented selector syntax on exactly the multi-card hosts this guard
+    /// exists to protect.
+    #[test]
+    fn resolve_name_contains_never_matches_the_pci_identity() {
+        let err = resolve_name_contains(&TWO_CARD_NAMES, &TWO_CARD_LABELS, "0000:83").unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::GpuNameNotFound { .. }),
+            "PCI substring must not select a device, got {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_name_contains_multiple_matches_is_ambiguous() {
+        let err = resolve_name_contains(&TWO_CARD_NAMES, &TWO_CARD_LABELS, "gfx1100").unwrap_err();
+        let RuntimeError::GpuNameAmbiguous { needle, matches } = err else {
+            panic!("expected GpuNameAmbiguous, got {err}");
+        };
+        assert_eq!(needle, "gfx1100");
+        assert_eq!(
+            matches,
+            vec![
+                "0:gfx1100 (0000:03:00.0)".to_owned(),
+                "1:gfx1100 (0000:83:00.0)".to_owned(),
+            ]
+        );
+        let text = RuntimeError::GpuNameAmbiguous { needle, matches }.to_string();
+        assert!(text.contains("0:gfx1100 (0000:03:00.0)"), "{text}");
+        assert!(text.contains("1:gfx1100 (0000:83:00.0)"), "{text}");
+        assert!(text.contains("ROCR_VISIBLE_DEVICES"), "{text}");
     }
 }

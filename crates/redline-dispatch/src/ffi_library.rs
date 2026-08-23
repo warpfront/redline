@@ -210,17 +210,12 @@ pub enum LoadError {
     Symbol(#[from] MissingSymbol),
 }
 
-const HIP_LIBRARY_CANDIDATES: &[&str] = &[
-    "libamdhip64.so",
-    "libamdhip64.so.7",
-    "/opt/rocm/core/lib/libamdhip64.so",
-    "/opt/rocm/lib/libamdhip64.so",
-];
-
 /// Load library-management symbols from the installed HIP runtime.
 pub fn load_library_symbols() -> Result<Arc<LibrarySymbols>, LoadError> {
+    let candidates =
+        redline_rocr::install::library_candidates("libamdhip64.so", &["libamdhip64.so.7"]);
     let mut failures = Vec::new();
-    let library = HIP_LIBRARY_CANDIDATES
+    let library = candidates
         .iter()
         .find_map(|candidate| {
             // SAFETY: loading the installed HIP runtime is the purpose of this
@@ -234,7 +229,7 @@ pub fn load_library_symbols() -> Result<Arc<LibrarySymbols>, LoadError> {
             }
         })
         .ok_or_else(|| LoadError::Library {
-            candidates: HIP_LIBRARY_CANDIDATES.join(", "),
+            candidates: candidates.join(", "),
             detail: failures.join("; "),
         })?;
     let keepalive: Arc<dyn Send + Sync> = library.clone();

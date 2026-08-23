@@ -28,13 +28,21 @@ use libloading::Library;
 compile_error!("the manual ROCr ABI currently supports only 64-bit little-endian hosts");
 
 pub mod abi;
+pub mod identity;
+mod identity_sysfs;
+pub mod install;
+pub mod manifest;
 #[doc(hidden)]
 pub mod packet;
 mod pm4;
 mod pm4_gfx10;
 mod runtime;
-
+pub mod selector;
 pub use abi::{MissingSymbol, Symbols};
+pub use identity::{Anchor, DeviceIdentity, DeviceQuery};
+pub use manifest::{DeniedDevice, FragileDevice, HostManifest, RiskClass};
+pub use selector::{parse as parse_device_query, resolve as resolve_device_query};
+
 pub use packet::{
     BARRIER_DEPENDENCY_CAPACITY, FenceScope, HeaderPolicy, KernelMetadata, LaunchGeometry,
     PacketError,
@@ -55,14 +63,9 @@ pub use runtime::{
 
 /// Load the installed public ROCr runtime without a link-time ROCm dependency.
 pub fn load_symbols() -> Result<Arc<Symbols>, LoadError> {
-    const CANDIDATES: &[&str] = &[
-        "libhsa-runtime64.so",
-        "libhsa-runtime64.so.1",
-        "/opt/rocm/core/lib/libhsa-runtime64.so",
-        "/opt/rocm/lib/libhsa-runtime64.so",
-    ];
+    let candidates = install::library_candidates("libhsa-runtime64.so", &["libhsa-runtime64.so.1"]);
     let mut failures = Vec::new();
-    let library = CANDIDATES
+    let library = candidates
         .iter()
         .find_map(|candidate| {
             // SAFETY: loading the installed ROCr runtime is the purpose of this
@@ -76,7 +79,7 @@ pub fn load_symbols() -> Result<Arc<Symbols>, LoadError> {
             }
         })
         .ok_or_else(|| LoadError::Library {
-            candidates: CANDIDATES.join(", "),
+            candidates: candidates.join(", "),
             detail: failures.join("; "),
         })?;
     let keepalive: Arc<dyn Send + Sync> = library.clone();
