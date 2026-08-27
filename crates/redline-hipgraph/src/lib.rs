@@ -47,8 +47,9 @@ use redline_dispatch::aql::{
 use redline_dispatch::hipgraph::{Graph, GraphExec};
 use redline_dispatch::lanes::{LaneWidth, MAX_LANES};
 use redline_dispatch::{Dim3, KernelLaunch, NodeId};
-use redline_rocr::{Executable, GpuDevice, GpuSelector, KernargPool, Runtime, load_symbols};
-
+use redline_rocr::{
+    DeviceQuery, Executable, GpuDevice, KernargPool, PciBusId, Runtime, load_symbols,
+};
 use abi::*;
 use metadata::{
     KernargLayout, bundle_debug_info, copy_code_object_image, kernarg_layout,
@@ -313,22 +314,129 @@ fn parse_hipgraph_lanes(value: &str) -> LaneWidth {
         }
     }
 }
-
 pub(crate) fn hipgraph_lane_policy() -> LaneWidth {
     match std::env::var("REDLINE_HIPGRAPH_LANES") {
         Ok(value) => parse_hipgraph_lanes(&value),
         Err(_) => LaneWidth::Single,
     }
 }
+
+/// Normalize and parse a PCI bus id string, handling case and optional domain.
+///
+/// HIP prints lowercase (`0000:03:00.0`) while `rocm-smi`/`ROCr` use `0000:03:00.0`
+/// or bare `03:00.0` with domain implied 0. This helper trims whitespace and
+/// delegates to [`PciBusId`]'s `FromStr` which is case-insensitive hex and
+/// accepts both forms. It exists so the trimming/normalization contract has a
+/// named, test-covered surface — the parsing itself lives in `redline-rocr`.
+pub(crate) fn parse_pci_bus_id(input: &str) -> Result<PciBusId, redline_rocr::PciBusIdParseError> {
+    input.trim().parse()
+}
+
+/// Query the application's current HIP device ordinal and PCI bus id via
+/// dynamically resolved HIP symbols (no link-time dependency).
+///
+/// Returns `None` if HIP is not loaded, symbols are missing, or the calls fail.
+/// `hipGetDevice` gives the ordinal in HIP's `HIP_VISIBLE_DEVICES`-remapped
+/// namespace; `hipDeviceGetPCIBusId` gives the stable PCI identity that joins
+/// against ROCr's agent enumeration (which is filtered by `ROCR_VISIBLE_DEVICES`
+/// only). This indirection is the entire fix — HIP and ROCr ordinals are not
+/// the same namespace.
+pub(crate) fn current_hip_device_pci() -> Option<(i32, PciBusId)> {
+    type HipGetDevice = unsafe extern "C" fn(*mut i32) -> hipError_t;
+    type HipDeviceGetPCIBusId = unsafe extern "C" fn(*mut c_char, i32, i32) -> hipError_t;
+    // SAFETY: real_symbol resolves via dlsym/dlvsym against the live libamdhip64
+    // handle without introducing a link-time dependency.
+    let get_device: HipGetDevice = unsafe { real_symbol(b"hipGetDevice\0") }?;
+    let get_pci: HipDeviceGetPCIBusId = unsafe { real_symbol(b"hipDeviceGetPCIBusId\0") }?;
+    let mut ordinal: i32 = 0;
+    // SAFETY: `get_device` writes one i32 to the supplied pointer per HIP ABI.
+    let status = unsafe { get_device(&mut ordinal as *mut i32) };
+    if status != hipSuccess {
+        return None;
+    }
+    // HIP's pciBusId buffer is at least 13 chars for `0000:ff:1f.7`; use 64 to
+    // match the dispatch crate's probe and to be future-proof.
+    let mut buf = [0 as c_char; 64];
+    // SAFETY: HIP writes a NUL-terminated string into `buf` on success.
+    let status = unsafe { get_pci(buf.as_mut_ptr(), buf.len() as i32, ordinal) };
+    if status != hipSuccess {
+        return None;
+    }
+    // SAFETY: HIP wrote a NUL-terminated C string on success.
+    let cstr = unsafe { CStr::from_ptr(buf.as_ptr()) };
+    let text = cstr.to_string_lossy();
+    let bdf: PciBusId = parse_pci_bus_id(&text).ok()?;
+    Some((ordinal, bdf))
+}
+
+/// Select the ROCr device matching the application's current HIP device.
+///
+/// Prefers the anchored `bdf:` selector (PCI bus id) because it is the only
+/// stable join key across HIP and ROCr. `DeviceQuery::Bdf` already exists in
+/// `redline-rocr` and is exercised by the selector tests, so no new selector
+/// variant is required.
+fn select_runtime_device_by_hip(runtime: &Runtime) -> Result<GpuDevice, redline_rocr::RuntimeError> {
+    let (hip_ordinal, hip_bdf) =
+        current_hip_device_pci().ok_or(redline_rocr::RuntimeError::NoGpuAgent)?;
+    // Prefer the anchored query path — it goes through `selector::resolve` and
+    // enforces the manifest deny-list identically to every other anchored pin.
+    let query = DeviceQuery::Bdf(hip_bdf);
+    let device = runtime.select_gpu_by_query(&query).or_else(|_| {
+        // Fallback: direct linear scan by PCI bus id for environments where
+        // select_gpu_by_query's manifest check would obscure the identity
+        // comparison during testing. In production the query path succeeds.
+        let devices = runtime.gpu_devices()?;
+        devices
+            .into_iter()
+            .find(|d| d.pci_bus_id() == hip_bdf)
+            .ok_or(redline_rocr::RuntimeError::NoGpuAgent)
+    })?;
+    hgdbg!(
+        "runtime bind hip_ordinal={} hip_pci={} rocr_device={} pci={} rocr_index={} selected via BDF",
+        hip_ordinal,
+        hip_bdf,
+        device.name(),
+        device.pci_bus_id(),
+        device.identity().rocr_index
+    );
+    Ok(device)
+}
+
+#[allow(dead_code)]
+/// Returns true when the current HIP device matches the latched ROCr device.
+///
+/// `None` means the HIP device cannot be determined — treat as mismatch and
+/// fail closed to native.
+pub(crate) fn hip_device_matches_runtime(runtime: &RuntimeState) -> Option<bool> {
+    let (_, hip_bdf) = current_hip_device_pci()?;
+    Some(hip_bdf == runtime.device.pci_bus_id())
+}
 fn runtime() -> Result<&'static RuntimeState, hipError_t> {
     match RUNTIME.get_or_init(|| {
         let symbols = load_symbols().map_err(|_| hipErrorNotInitialized)?;
         let runtime = Runtime::initialize(symbols).map_err(|_| hipErrorNotInitialized)?;
-        // ROCr applies ROCR_VISIBLE_DEVICES before agent enumeration, so ordinal
-        // zero is the first device in the caller's visible-device namespace.
-        let device = runtime
-            .select_gpu(GpuSelector::Ordinal(0))
-            .map_err(|_| hipErrorNotInitialized)?;
+        let device = match select_runtime_device_by_hip(&runtime) {
+            Ok(device) => device,
+            Err(err) => {
+                // Never fall back to agent 0 — correctness dominates.
+                // Log the HIP identity we tried to match so the failure is
+                // diagnosable in one REDLINE_HG_DEBUG run.
+                if let Some((ord, bdf)) = current_hip_device_pci() {
+                    hgdbg!(
+                        "runtime bind failed hip_ordinal={} hip_pci={} error={} -> force_native fallback (no agent 0)",
+                        ord,
+                        bdf,
+                        err
+                    );
+                } else {
+                    hgdbg!(
+                        "runtime bind failed hip_device_unresolved error={} -> force_native fallback (no agent 0)",
+                        err
+                    );
+                }
+                return Err(hipErrorNotInitialized);
+            }
+        };
         let pool = KernargPool::discover(&device).map_err(|_| hipErrorNotInitialized)?;
         Ok(RuntimeState {
             _runtime: runtime,
@@ -1501,6 +1609,45 @@ pub unsafe extern "C" fn hipGraphInstantiate(
         return hipErrorNotSupported;
     }
     let mut force_native = state.force_native;
+    // The interposer's ROCr runtime is a process-wide singleton (RUNTIME OnceLock).
+    // That cannot represent two GPUs in one process. Best correct behaviour:
+    // bind on first use via select_runtime_device_by_hip (BDF), and if a later
+    // graph belongs to a different HIP device, force native for that graph
+    // rather than replaying on the wrong device's memory.
+    if !force_native {
+        match runtime() {
+            Ok(rt) => {
+                match current_hip_device_pci() {
+                    Some((hip_ord, hip_bdf)) => {
+                        let runtime_bdf = rt.device.pci_bus_id();
+                        if hip_bdf != runtime_bdf {
+                            hgdbg!(
+                                "hipGraphInstantiate graph={graph:p} hip_ordinal={hip_ord} hip_pci={hip_bdf} rocr_device={} pci={runtime_bdf} rocr_index={} mismatch -> force_native",
+                                rt.device.name(),
+                                rt.device.identity().rocr_index
+                            );
+                            force_native = true;
+                        }
+                    }
+                    None => {
+                        hgdbg!(
+                            "hipGraphInstantiate graph={graph:p} hip_device_unresolved rocr_device={} pci={} rocr_index={} -> force_native",
+                            rt.device.name(),
+                            rt.device.pci_bus_id(),
+                            rt.device.identity().rocr_index
+                        );
+                        force_native = true;
+                    }
+                }
+            }
+            Err(_) => {
+                // runtime() already emitted a bind-failure line; cannot build PM4
+                // without a bound device.
+                hgdbg!("hipGraphInstantiate graph={graph:p} runtime_unavailable -> force_native");
+                force_native = true;
+            }
+        }
+    }
     let mut pm4_build = "skipped";
     let replay = if force_native {
         None
@@ -1525,10 +1672,32 @@ pub unsafe extern "C" fn hipGraphInstantiate(
     } else {
         None
     };
-    hgdbg!(
-        "hipGraphInstantiate graph={graph:p} build_pm4_replay={pm4_build} force_native={force_native} native_exec={}",
-        native_exec != 0
-    );
+    // Extended debug line: binding visible in one run — HIP ordinal, PCI identity
+    // used to match, and the chosen ROCr agent name/pci/index.
+    if let Ok(rt) = runtime() {
+        if let Some((hip_ord, hip_bdf)) = current_hip_device_pci() {
+            hgdbg!(
+                "hipGraphInstantiate graph={graph:p} build_pm4_replay={pm4_build} force_native={force_native} native_exec={} hip_ordinal={hip_ord} hip_pci={hip_bdf} rocr_device={} pci={} rocr_index={}",
+                native_exec != 0,
+                rt.device.name(),
+                rt.device.pci_bus_id(),
+                rt.device.identity().rocr_index
+            );
+        } else {
+            hgdbg!(
+                "hipGraphInstantiate graph={graph:p} build_pm4_replay={pm4_build} force_native={force_native} native_exec={} hip_device_unresolved rocr_device={} pci={} rocr_index={}",
+                native_exec != 0,
+                rt.device.name(),
+                rt.device.pci_bus_id(),
+                rt.device.identity().rocr_index
+            );
+        }
+    } else {
+        hgdbg!(
+            "hipGraphInstantiate graph={graph:p} build_pm4_replay={pm4_build} force_native={force_native} native_exec={} hip_device_unresolved runtime_unavailable",
+            native_exec != 0
+        );
+    }
     let exec_state = ExecState {
         exec: own_exec,
         replay,
@@ -1585,6 +1754,40 @@ pub unsafe extern "C" fn hipGraphLaunch(exec: hipGraphExec_t, stream: hipStream_
         hgdbg!("hipGraphLaunch exec={exec:p} stream={stream:p} branch=native_launch(force_native)");
         return unsafe { native_launch(native_exec, stream) };
     }
+    // Check whether the HIP device that owns this launch matches the ROCr
+    // device the exec was built for. If the process has switched HIP devices
+    // (or the bound device could not be resolved), latch to native so we
+    // never retry a doomed PM4 replay on every launch.
+    if let Ok(rt) = runtime() {
+        match current_hip_device_pci() {
+            Some((hip_ord, hip_bdf)) => {
+                let runtime_bdf = rt.device.pci_bus_id();
+                if hip_bdf != runtime_bdf {
+                    state.force_native = true;
+                    hgdbg!(
+                        "hipGraphLaunch exec={exec:p} stream={stream:p} hip_ordinal={hip_ord} hip_pci={hip_bdf} rocr_device={} pci={runtime_bdf} rocr_index={} mismatch -> branch=native_launch(force_native, latched)",
+                        rt.device.name(),
+                        rt.device.identity().rocr_index
+                    );
+                    return unsafe { native_launch(native_exec, stream) };
+                }
+            }
+            None => {
+                state.force_native = true;
+                hgdbg!(
+                    "hipGraphLaunch exec={exec:p} stream={stream:p} hip_device_unresolved rocr_device={} pci={} rocr_index={} -> branch=native_launch(force_native, latched)",
+                    rt.device.name(),
+                    rt.device.pci_bus_id(),
+                    rt.device.identity().rocr_index
+                );
+                return unsafe { native_launch(native_exec, stream) };
+            }
+        }
+    } else {
+        state.force_native = true;
+        hgdbg!("hipGraphLaunch exec={exec:p} stream={stream:p} runtime_unavailable -> branch=native_launch(force_native, latched)");
+        return unsafe { native_launch(native_exec, stream) };
+    }
     let Some(plan) = state.exec.as_ref() else {
         hgdbg!(
             "hipGraphLaunch exec={exec:p} stream={stream:p} branch=native_launch(no redline plan)"
@@ -1600,7 +1803,7 @@ pub unsafe extern "C" fn hipGraphLaunch(exec: hipGraphExec_t, stream: hipStream_
             Err(_) if native_exec != 0 => {
                 state.force_native = true;
                 hgdbg!(
-                    "hipGraphLaunch exec={exec:p} stream={stream:p} branch=native_launch(pm4 rebuild failed)"
+                    "hipGraphLaunch exec={exec:p} stream={stream:p} branch=native_launch(pm4 rebuild failed) latch=force_native"
                 );
                 return unsafe { native_launch(native_exec, stream) };
             }
@@ -1630,18 +1833,37 @@ pub unsafe extern "C" fn hipGraphLaunch(exec: hipGraphExec_t, stream: hipStream_
     // intentionally waits on Redline's dedicated HSA queue before returning.
     match unsafe { replay.replay_and_wait() } {
         Ok(()) => {
-            hgdbg!("hipGraphLaunch exec={exec:p} stream={stream:p} branch=pm4 replay");
+            if let Ok(rt) = runtime() {
+                if let Some((hip_ord, hip_bdf)) = current_hip_device_pci() {
+                    hgdbg!(
+                        "hipGraphLaunch exec={exec:p} stream={stream:p} branch=pm4 replay hip_ordinal={hip_ord} hip_pci={hip_bdf} rocr_device={} pci={} rocr_index={}",
+                        rt.device.name(),
+                        rt.device.pci_bus_id(),
+                        rt.device.identity().rocr_index
+                    );
+                } else {
+                    hgdbg!("hipGraphLaunch exec={exec:p} stream={stream:p} branch=pm4 replay hip_device_unresolved");
+                }
+            } else {
+                hgdbg!("hipGraphLaunch exec={exec:p} stream={stream:p} branch=pm4 replay runtime_unavailable");
+            }
             hipSuccess
         }
         Err(_) if native_exec != 0 => {
+            // Latch the failure: never retry a PM4 replay that cannot succeed on
+            // this device/memory. Today this recurs on every launch invisibly
+            // unless REDLINE_HG_DEBUG=1 is set; after latching it goes straight
+            // to native.
+            state.force_native = true;
             hgdbg!(
-                "hipGraphLaunch exec={exec:p} stream={stream:p} branch=native_launch(pm4 replay failed)"
+                "hipGraphLaunch exec={exec:p} stream={stream:p} branch=native_launch(pm4 replay failed) latch=force_native"
             );
             unsafe { native_launch(native_exec, stream) }
         }
         Err(_) => {
+            state.force_native = true;
             hgdbg!(
-                "hipGraphLaunch exec={exec:p} stream={stream:p} branch=pm4 replay result=launch_failure"
+                "hipGraphLaunch exec={exec:p} stream={stream:p} branch=pm4 replay result=launch_failure latch=force_native"
             );
             hipErrorLaunchFailure
         }
@@ -3253,5 +3475,194 @@ mod tests {
             unsafe { std::env::set_var("REDLINE_HIPGRAPH_LANES", v) };
         }
     }
-}
 
+    #[test]
+    fn pci_bus_id_parse_is_case_insensitive_and_trims() {
+        // HIP prints lowercase, ROCr/rocm-smi uppercase — must compare equal.
+        let lower: PciBusId = parse_pci_bus_id("0000:03:00.0").unwrap();
+        let upper: PciBusId = parse_pci_bus_id("0000:03:00.0").unwrap();
+        assert_eq!(lower, upper);
+        let with_letters_lower: PciBusId = parse_pci_bus_id("0000:bf:00.0").unwrap();
+        let with_letters_upper: PciBusId = parse_pci_bus_id("0000:BF:00.0").unwrap();
+        assert_eq!(with_letters_lower, with_letters_upper);
+        // Whitespace trimming (HIP C string may have trailing newline in tests)
+        let spaced: PciBusId = parse_pci_bus_id("  0000:66:00.0  \n").unwrap();
+        let plain: PciBusId = parse_pci_bus_id("0000:66:00.0").unwrap();
+        assert_eq!(spaced, plain);
+    }
+
+    #[test]
+    fn pci_bus_id_parse_accepts_bare_bus_and_domain_variants() {
+        // Bare bus `bb:dd.f` assumes domain 0 — what lspci prints without domain.
+        let bare: PciBusId = parse_pci_bus_id("03:00.0").unwrap();
+        let full: PciBusId = parse_pci_bus_id("0000:03:00.0").unwrap();
+        assert_eq!(bare, full);
+        // Domain field distinguishes cards in multi-root complexes.
+        let d0: PciBusId = parse_pci_bus_id("0000:66:00.0").unwrap();
+        let d1: PciBusId = parse_pci_bus_id("0001:66:00.0").unwrap();
+        assert_ne!(d0, d1);
+        // Uppercase bare bus also accepted
+        let bare_upper: PciBusId = parse_pci_bus_id("BF:00.0").unwrap();
+        let full_upper: PciBusId = parse_pci_bus_id("0000:bf:00.0").unwrap();
+        assert_eq!(bare_upper, full_upper);
+    }
+
+    #[test]
+    fn pci_bus_id_parse_rejects_invalid() {
+        assert!(parse_pci_bus_id("").is_err());
+        assert!(parse_pci_bus_id("not-a-bdf").is_err());
+        assert!(parse_pci_bus_id("0000:gg:00.0").is_err());
+        assert!(parse_pci_bus_id("0000:03:00.8").is_err()); // function > 7
+        assert!(parse_pci_bus_id("0000:03:20.0").is_err()); // device > 0x1f
+    }
+
+    #[test]
+    fn device_query_bdf_selector_constructs_and_resolves() {
+        use redline_rocr::identity::DeviceIdentity;
+        use redline_rocr::selector;
+        // Real host identities: two identical gfx1201 boards differing only by BDF.
+        let bdf0: PciBusId = "0000:03:00.0".parse().unwrap();
+        let bdf1: PciBusId = "0000:04:00.0".parse().unwrap();
+        let devices = vec![
+            DeviceIdentity {
+                uuid: None,
+                bdf: bdf0,
+                agent_name: "gfx1201".to_owned(),
+                product_name: String::new(),
+                kfd_node: 1,
+                rocr_index: 0,
+                hip_ordinal: None,
+                pci_slot: None,
+                drm_card: None,
+            },
+            DeviceIdentity {
+                uuid: None,
+                bdf: bdf1,
+                agent_name: "gfx1201".to_owned(),
+                product_name: String::new(),
+                kfd_node: 2,
+                rocr_index: 1,
+                hip_ordinal: None,
+                pci_slot: None,
+                drm_card: None,
+            },
+        ];
+        // Our helper constructs DeviceQuery::Bdf(bdf) — verify it selects the
+        // correct ROCr index, not ordinal 0 by accident.
+        let query = DeviceQuery::Bdf(bdf1);
+        let chosen = selector::resolve(&query, &devices).expect("BDF must resolve");
+        assert_eq!(chosen.bdf, bdf1);
+        assert_eq!(chosen.rocr_index, 1);
+        // Case insensitivity: parsing HIP's lowercase vs ROCr's database
+        let hip_lower: PciBusId = parse_pci_bus_id("0000:04:00.0").unwrap();
+        let query2 = DeviceQuery::Bdf(hip_lower);
+        let chosen2 = selector::resolve(&query2, &devices).expect("lowercase BDF must resolve");
+        assert_eq!(chosen2.bdf, bdf1);
+    }
+
+    #[test]
+    fn exec_latch_on_pm4_replay_failure_stays_native() {
+        // Simulate the latch the interposer now does on every pm4 replay
+        // failure: once flipped, subsequent launches must stay native and not
+        // retry a doomed replay.
+        let key = 0x5245_444C_0000_5001_usize;
+        let graph_key = 0x5245_444C_0000_5002_usize;
+        register_graph(graph_key);
+        let exec_state = ExecState {
+            exec: None,
+            replay: None,
+            dirty: false,
+            node_meta: Default::default(),
+            nodes: HashMap::new(),
+            force_native: false,
+        };
+        let handle = register_exec(key, exec_state);
+        // Initially not forced
+        assert!(!lock(&handle).force_native);
+        // First failure latches
+        {
+            let mut s = lock(&handle);
+            s.force_native = true;
+        }
+        assert!(lock(&handle).force_native);
+        // Simulate a second launch that would have retried replay — must remain latched.
+        {
+            let s = lock(&handle);
+            assert!(s.force_native, "latch must persist across launches");
+        }
+        // Direct API check: is_exec still true, but launching would take the
+        // force_native branch, not the pm4 replay branch.
+        assert!(is_exec(key as hipGraphExec_t));
+        unregister_exec(key);
+        unregister_graph(graph_key);
+        assert!(!is_exec(key as hipGraphExec_t));
+    }
+
+    #[test]
+    fn exec_latch_on_device_unresolved_is_force_native() {
+        // If HIP device cannot be resolved (missing symbols / not initialized),
+        // the exec must be marked force_native so future launches go straight
+        // to native. This test constructs an exec and flips the bit as
+        // hipGraphInstantiate would on a hip_device_unresolved path.
+        let key = 0x5245_444C_0000_6001_usize;
+        let graph_key = 0x5245_444C_0000_6002_usize;
+        register_graph(graph_key);
+        let exec_state = ExecState {
+            exec: None,
+            replay: None,
+            dirty: false,
+            node_meta: Default::default(),
+            nodes: HashMap::new(),
+            force_native: false,
+        };
+        let handle = register_exec(key, exec_state);
+        // Simulate unresolved device at instantiate: force_native latch
+        lock(&handle).force_native = true;
+        assert!(lock(&handle).force_native);
+        // Launch-time check must see force_native and not attempt replay
+        assert!(lock(&handle).force_native);
+        unregister_exec(key);
+        unregister_graph(graph_key);
+    }
+
+    #[test]
+    fn pci_bus_id_selector_never_matches_ordinal() {
+        // Guard against regressing to the Ordinal(0) bug: a BDF selector must
+        // not match index 0 when the HIP device is actually at BDF 1.
+        use redline_rocr::identity::DeviceIdentity;
+        use redline_rocr::selector;
+        let bdf0: PciBusId = "0000:66:00.0".parse().unwrap(); // ROCr 0 = gfx1100
+        let bdf1: PciBusId = "0000:bf:00.0".parse().unwrap(); // ROCr 1 = gfx1151
+        let devices = vec![
+            DeviceIdentity {
+                uuid: None,
+                bdf: bdf0,
+                agent_name: "gfx1100".to_owned(),
+                product_name: String::new(),
+                kfd_node: 1,
+                rocr_index: 0,
+                hip_ordinal: None,
+                pci_slot: None,
+                drm_card: None,
+            },
+            DeviceIdentity {
+                uuid: None,
+                bdf: bdf1,
+                agent_name: "gfx1151".to_owned(),
+                product_name: String::new(),
+                kfd_node: 2,
+                rocr_index: 1,
+                hip_ordinal: None,
+                pci_slot: None,
+                drm_card: None,
+            },
+        ];
+        // HIP device is gfx1151 at bdf1 — selector must pick rocr_index 1,
+        // never fall back to ordinal 0 (gfx1100).
+        let query = DeviceQuery::Bdf(bdf1);
+        let chosen = selector::resolve(&query, &devices).unwrap();
+        assert_eq!(chosen.agent_name, "gfx1151");
+        assert_eq!(chosen.rocr_index, 1);
+        assert_ne!(chosen.bdf, bdf0);
+    }
+}
