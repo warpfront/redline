@@ -179,7 +179,25 @@ impl Pm4Family {
         // Agent names can carry target features, e.g. `gfx1010:xnack-`.
         let base = name.split(':').next().unwrap_or(name);
         if base.starts_with("gfx10") {
-            Some(Self::Gfx10)
+            // RDNA1/RDNA2 are REFUSED, deliberately, even though the Legacy
+            // encoder nominally covers them.
+            //
+            // On gfx1030 the multi-queue and single-queue correctness gates both
+            // read `counter = 0 / 512`: the command buffers submit and the
+            // completion signal fires, but no dispatch executes. Plain HIP with
+            // its own counter gate passes on that same device in the same
+            // session, and the byte-identical encoder works on gfx1100, so the
+            // fault is in this crate's register map for RDNA2, not the hardware.
+            // Adding the per-lane wait_compute_idle + acquire_system flush did
+            // not fix it, which rules out a stale host read.
+            //
+            // Accepting these parts is worse than refusing them: a caller gets
+            // silently empty execution with a success return, and through the
+            // hipGraph interposer that means a consumer's kernels quietly do
+            // nothing. No gfx10-class part has ever been hardware-validated
+            // here. Restore this arm only with a passing gate on real RDNA1 or
+            // RDNA2 silicon.
+            None
         } else if base.starts_with("gfx11") {
             Some(Self::Gfx11)
         } else if base.starts_with("gfx120") {
@@ -558,11 +576,23 @@ mod tests {
 
     #[test]
     fn rdna_generations_select_their_pm4_family() {
-        assert_eq!(Pm4Family::from_name("gfx1010"), Some(Pm4Family::Gfx10));
-        assert_eq!(Pm4Family::from_name("gfx1030"), Some(Pm4Family::Gfx10));
         assert_eq!(Pm4Family::from_name("gfx1100"), Some(Pm4Family::Gfx11));
         assert_eq!(Pm4Family::from_name("gfx1201"), Some(Pm4Family::Gfx12));
         assert_eq!(Pm4Family::from_name("gfx900"), None);
+    }
+
+    #[test]
+    fn rdna1_and_rdna2_are_refused_because_their_pm4_does_not_execute() {
+        // Not conservatism: on gfx1030 both correctness gates read
+        // `counter = 0 / 512` while plain HIP passes its own gate on the same
+        // device, and the byte-identical encoder works on gfx1100. Accepting
+        // these parts hands a caller silent empty execution with a success
+        // return, which through the hipGraph interposer means a consumer's
+        // kernels quietly do nothing.
+        assert_eq!(Pm4Family::from_name("gfx1010"), None);
+        assert_eq!(Pm4Family::from_name("gfx1030"), None);
+        assert_eq!(Pm4Family::from_name("gfx1031"), None);
+        assert_eq!(Pm4Family::from_name("gfx1036"), None);
     }
 
     #[test]
@@ -580,14 +610,17 @@ mod tests {
     #[test]
     fn target_features_do_not_defeat_the_match() {
         assert_eq!(
-            Pm4Family::from_name("gfx1010:xnack-"),
-            Some(Pm4Family::Gfx10)
+            Pm4Family::from_name("gfx1100:xnack-"),
+            Some(Pm4Family::Gfx11)
         );
         assert_eq!(
             Pm4Family::from_name("gfx1201:xnack-"),
             Some(Pm4Family::Gfx12)
         );
         assert_eq!(Pm4Family::from_name("gfx1250:xnack+"), None);
+        // A refused family stays refused with features appended, so a suffix
+        // cannot smuggle RDNA2 back onto the PM4 path.
+        assert_eq!(Pm4Family::from_name("gfx1030:xnack-"), None);
     }
 
     #[test]
