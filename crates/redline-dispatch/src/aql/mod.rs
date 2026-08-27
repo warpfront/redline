@@ -13,7 +13,10 @@ mod queue_policy;
 mod replay;
 pub mod segment;
 pub use generic::{AqlKernelCatalog, GenericAqlError, PreparedAqlPlan};
-pub use graph_pm4::{GraphPm4Error, NodeDispatch, Pm4GraphReplay, lower_plan_to_pm4_ib};
+pub use graph_pm4::{
+    GraphPm4Error, NodeDispatch, Pm4GraphReplay, lower_plan_to_pm4_ib,
+    lower_plan_to_pm4_ib_with_policy,
+};
 pub use queue_policy::{
     PartitionedQueueError, QueuePolicy, QueuePolicyParseError, create_queue_set,
     cu_mask_for_partition,

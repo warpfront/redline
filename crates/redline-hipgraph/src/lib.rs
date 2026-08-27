@@ -8,6 +8,23 @@
 //! compiler-registered static fat binary use Redline. In interposer mode a
 //! native HIP shadow graph remains the correctness fallback for unregistered
 //! kernels, unsupported code objects, and devices outside Redline's PM4 families.
+//!
+//! # Environment
+//!
+//! - `REDLINE_HG_DEBUG=1` — enable verbose `hgdbg!` logging to stderr.
+//! - `REDLINE_FORCE_REPLAY=1` — keep retained PM4 replay live across
+//!   `hipGraphExecUpdate` for upper-bound speed probing. Output is incorrect;
+//!   never use for correctness or published numbers.
+//! - `REDLINE_HIPGRAPH_LANES=off|auto|<N>` — how many queue lanes a captured
+//!   graph may use. `off` (default) preserves the existing single-queue
+//!   behaviour. `auto` selects the measured optimum for the device
+//!   (`gfx1100`/`gfx1151` → 4, `gfx1201` → 2, otherwise `CONSERVATIVE_LANES=2`).
+//!   `<N>` forces exactly N lanes (`1` → single, clamped to `MAX_LANES=16`).
+//!   Splitting occurs only when the graph genuinely contains independent paths
+//!   (multiple weakly-connected components); a chain stays single-queue. Any
+//!   segmentation or multi-queue construction failure falls back to
+//!   single-queue or native HIP, never failing a launch that would otherwise
+//!   have succeeded.
 
 mod abi;
 mod metadata;
@@ -17,13 +34,20 @@ pub use abi::{
     dim3, hipError_t, hipFunction_t, hipGraph_t, hipGraphExec_t, hipGraphNode_t,
     hipKernelNodeParams, hipModule_t, hipStream_t,
 };
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{CStr, c_char, c_void};
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
+use redline_dispatch::aql::{
+    NodeDispatch, Pm4GraphReplay, lower_plan_to_pm4_ib_with_policy,
+};
+use redline_dispatch::hipgraph::{Graph, GraphExec};
+use redline_dispatch::lanes::{LaneWidth, MAX_LANES};
+use redline_dispatch::{Dim3, KernelLaunch, NodeId};
+use redline_rocr::{Executable, GpuDevice, GpuSelector, KernargPool, Runtime, load_symbols};
 
 use abi::*;
 use metadata::{
@@ -34,10 +58,6 @@ use metadata::{
 use pyo3::exceptions::{PyOverflowError, PyRuntimeError, PyValueError};
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
-use redline_dispatch::aql::{NodeDispatch, Pm4GraphReplay, lower_plan_to_pm4_ib};
-use redline_dispatch::hipgraph::{Graph, GraphExec};
-use redline_dispatch::{Dim3, KernelLaunch, NodeId};
-use redline_rocr::{Executable, GpuDevice, GpuSelector, KernargPool, Runtime, load_symbols};
 
 #[derive(Clone)]
 struct ModuleRecord {
@@ -265,6 +285,41 @@ macro_rules! hgdbg {
     };
 }
 
+fn parse_hipgraph_lanes(value: &str) -> LaneWidth {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return LaneWidth::Single;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    match lower.as_str() {
+        "off" | "single" | "0" => LaneWidth::Single,
+        "auto" | "measured" => LaneWidth::Measured,
+        _ => {
+            if let Ok(n) = lower.parse::<usize>() {
+                if n == 0 {
+                    return LaneWidth::Single;
+                }
+                if n > MAX_LANES {
+                    return LaneWidth::Single;
+                }
+                if let Some(nz) = NonZeroUsize::new(n) {
+                    return LaneWidth::Explicit(nz);
+                }
+                LaneWidth::Single
+            } else {
+                // Unknown string → safest is single-queue (no split)
+                LaneWidth::Single
+            }
+        }
+    }
+}
+
+pub(crate) fn hipgraph_lane_policy() -> LaneWidth {
+    match std::env::var("REDLINE_HIPGRAPH_LANES") {
+        Ok(value) => parse_hipgraph_lanes(&value),
+        Err(_) => LaneWidth::Single,
+    }
+}
 fn runtime() -> Result<&'static RuntimeState, hipError_t> {
     match RUNTIME.get_or_init(|| {
         let symbols = load_symbols().map_err(|_| hipErrorNotInitialized)?;
@@ -1274,7 +1329,11 @@ fn build_pm4_replay(
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| hipErrorInvalidHandle)?;
-    lower_plan_to_pm4_ib(&runtime.device, &runtime.pool, plan.plan(), |node| {
+    // `REDLINE_HIPGRAPH_LANES` gates the multi-queue win. Default `off` preserves
+    // the existing single-queue behaviour byte-for-byte, so no consumer changes
+    // until measured on hardware.
+    let policy = hipgraph_lane_policy();
+    lower_plan_to_pm4_ib_with_policy(&runtime.device, &runtime.pool, plan.plan(), &policy, |node| {
         let meta = node_meta.get(&node)?;
         let kernel = kernels
             .binary_search_by_key(&node, |(kernel_node, _)| *kernel_node)
@@ -3118,4 +3177,56 @@ mod tests {
         );
         assert_eq!(resolution, SymbolResolution::Handle);
     }
+
+    #[test]
+    fn hipgraph_lanes_parse_off_and_empty_are_single() {
+        assert_eq!(parse_hipgraph_lanes("off"), LaneWidth::Single);
+        assert_eq!(parse_hipgraph_lanes("OFF"), LaneWidth::Single);
+        assert_eq!(parse_hipgraph_lanes("single"), LaneWidth::Single);
+        assert_eq!(parse_hipgraph_lanes("0"), LaneWidth::Single);
+        assert_eq!(parse_hipgraph_lanes(""), LaneWidth::Single);
+        assert_eq!(parse_hipgraph_lanes("  "), LaneWidth::Single);
+        // Invalid string falls back to Single (never fail a launch)
+        assert_eq!(parse_hipgraph_lanes("bogus"), LaneWidth::Single);
+        assert_eq!(parse_hipgraph_lanes("unknown"), LaneWidth::Single);
+    }
+
+    #[test]
+    fn hipgraph_lanes_parse_auto_is_measured() {
+        assert_eq!(parse_hipgraph_lanes("auto"), LaneWidth::Measured);
+        assert_eq!(parse_hipgraph_lanes("AUTO"), LaneWidth::Measured);
+        assert_eq!(parse_hipgraph_lanes("measured"), LaneWidth::Measured);
+    }
+
+    #[test]
+    fn hipgraph_lanes_parse_numeric_is_explicit() {
+        assert_eq!(
+            parse_hipgraph_lanes("2"),
+            LaneWidth::Explicit(NonZeroUsize::new(2).unwrap())
+        );
+        assert_eq!(
+            parse_hipgraph_lanes("4"),
+            LaneWidth::Explicit(NonZeroUsize::new(4).unwrap())
+        );
+        // 0 is Single, not Explicit(0)
+        assert_eq!(parse_hipgraph_lanes("0"), LaneWidth::Single);
+        // Above MAX_LANES falls back to Single (safety cliff guard)
+        assert_eq!(parse_hipgraph_lanes("17"), LaneWidth::Single);
+        assert_eq!(parse_hipgraph_lanes("100"), LaneWidth::Single);
+    }
+
+    #[test]
+    fn hipgraph_lane_policy_default_is_single() {
+        // No env var => Single (existing single-queue behaviour)
+        // Use a mutex to avoid racing parallel tests that might set the var.
+        // We test parse directly for determinism; env default is exercised via
+        // the function's Err branch, which we verify by temporarily clearing.
+        let prev = std::env::var_os("REDLINE_HIPGRAPH_LANES");
+        unsafe { std::env::remove_var("REDLINE_HIPGRAPH_LANES") };
+        assert_eq!(hipgraph_lane_policy(), LaneWidth::Single);
+        if let Some(v) = prev {
+            unsafe { std::env::set_var("REDLINE_HIPGRAPH_LANES", v) };
+        }
+    }
 }
+

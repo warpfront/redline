@@ -6,6 +6,7 @@ use crate::spec::{Fixture, RowSpec, TimingMode};
 use anyhow::{Context, Result};
 use hip_bridge::{DeviceBuffer, Function, Graph, GraphExec, HipRuntime, Module, Stream};
 use radiowave::{SchedulerProfile, Wavefront};
+use redline_dispatch::lanes::{self, LaneWidth};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
@@ -27,9 +28,9 @@ pub enum HipQueuePolicy {
     /// the default so old numbers remain reproducible.
     Legacy,
     /// Device-tuned width for ROCm 10.0: gfx1201 -> 2, gfx1100 -> 4,
-    /// gfx1151 -> 5, gfx1030 -> 4, unknown -> conservative 2. The 5 for
-    /// gfx1151 is the measured hipGraph optimum (4 is the PM4 no-op
-    /// optimum); see the assignment's baselines.
+    /// gfx1151 -> 5, gfx1010 -> 2, unknown -> conservative 2. gfx1030 is
+    /// deliberately excluded — see `hip_auto_lanes` for why.
+    /// gfx1151's 5 is the hipGraph optimum (4 is the PM4 no-op optimum).
     Auto,
     /// Explicit lane count chosen by the caller.
     Explicit(NonZeroUsize),
@@ -60,46 +61,70 @@ impl HipQueuePolicy {
     }
 
     /// Resolve to a concrete lane count for `iterations` independent ops
-    /// on `arch`. Serial modes always return 1. Mirrors
-    /// `redline_dispatch::lanes::resolve` clamping: never exceeds
-    /// iterations, at least 1, and errors when exceeding MAX_LANES.
+    /// on `arch`. Serial modes always return 1. All other validation,
+    /// clamping to `iterations`, `MAX_LANES` guarding and conservative
+    /// fallback are delegated to `redline_dispatch::lanes` so the queue
+    /// mechanism is not re-implemented here.
     pub fn resolve(&self, arch: &str, iterations: usize, mode: TimingMode) -> Result<usize> {
         if mode != TimingMode::IndependentThroughput {
             return Ok(1);
         }
-        if iterations == 0 {
-            anyhow::bail!("cannot resolve HIP lanes for zero dispatches");
-        }
-        let requested = match self {
-            Self::Legacy => 4,
-            Self::Auto => hip_auto_lanes(arch),
-            Self::Explicit(n) => n.get(),
+        let lanes_result = match self {
+            Self::Legacy => lanes::resolve(
+                &LaneWidth::Explicit(NonZeroUsize::new(4).unwrap()),
+                arch,
+                iterations,
+            ),
+            Self::Auto => hip_auto_lanes(arch, iterations),
+            Self::Explicit(n) => lanes::resolve(&LaneWidth::Explicit(*n), arch, iterations),
         };
-        if requested > 16 {
-            anyhow::bail!("requested {requested} HIP lanes exceeds the 16-lane guard");
-        }
-        Ok(requested.min(iterations).max(1))
+        lanes_result.map_err(|e| anyhow::anyhow!(e.to_string()))
     }
 }
 
-fn hip_auto_lanes(arch: &str) -> usize {
-    // Tuned hipGraph 1:1 optimums measured on ROCm 10.0.
-    // gfx1151 -> 5 is the hipGraph optimum; PM4 no-op optimum is 4.
-    if arch.starts_with("gfx1201") {
-        2
+fn hip_auto_lanes(arch: &str, dispatch_count: usize) -> Result<usize, lanes::LaneError> {
+    // hipGraph optima for this suite, not the PM4 no-op optima in
+    // `redline_dispatch::lanes::measured_lanes`. The two submission paths
+    // genuinely differ: hipGraph optimum on gfx1151 is 5 while PM4 no-op
+    // optimum is 4. A future reader must not "fix" one to match the other —
+    // they measure different stacks (hipGraph 1:1 chain:queue width vs PM4
+    // queue width for empty dispatches on ROCm 10.0).
+    //
+    // gfx1030 is deliberately absent. Redline's PM4 path executes zero
+    // dispatches on RDNA2 (correctness gate reads `counter = 0 / 512`), so any
+    // lane width "measured" there is a measurement of nothing and not
+    // trustworthy. HIP-arm rows on gfx1030 therefore fall back to the
+    // conservative width rather than a fabricated optimum.
+    let policy = if arch.starts_with("gfx1201") {
+        LaneWidth::Explicit(NonZeroUsize::new(2).unwrap())
     } else if arch.starts_with("gfx1151") {
-        5
+        LaneWidth::Explicit(NonZeroUsize::new(5).unwrap())
     } else if arch.starts_with("gfx1100") {
-        4
-    } else if arch.starts_with("gfx1030") {
-        4
+        LaneWidth::Explicit(NonZeroUsize::new(4).unwrap())
     } else if arch.starts_with("gfx1010") {
-        2
+        LaneWidth::Explicit(NonZeroUsize::new(2).unwrap())
     } else {
-        // Conservative fallback for unknown parts: same constant as
-        // redline_dispatch::lanes::CONSERVATIVE_LANES.
-        2
-    }
+        // Unknown parts and gfx1030: let the shared module decide. Using
+        // `LaneWidth::Measured` means `MAX_LANES` guard, clamp to
+        // `dispatch_count`, and conservative fallback (`CONSERVATIVE_LANES`)
+        // all come from `redline_dispatch::lanes` instead of being
+        // re-implemented here. For gfx1030 this is intentionally
+        // conservative — `redline_dispatch::lanes::measured_lanes` has no
+        // trustworthy entry for that part (see note above), so falling back
+        // to `CONSERVATIVE_LANES` is the correct behaviour even if the
+        // shared table ever temporarily contains a gfx1030 entry.
+        // To guarantee the conservative fallback even if the shared table
+        // currently carries a stale `gfx1030 => 4` entry, force
+        // `CONSERVATIVE_LANES` explicitly for that prefix.
+        if arch.starts_with("gfx1030") {
+            LaneWidth::Explicit(
+                NonZeroUsize::new(lanes::CONSERVATIVE_LANES).expect("conservative is non-zero"),
+            )
+        } else {
+            LaneWidth::Measured
+        }
+    };
+    lanes::resolve(&policy, arch, dispatch_count)
 }
 
 
@@ -618,6 +643,7 @@ fn words_as_bytes(words: &[u32]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::TimingMode;
 
     #[test]
     fn static_function_table_covers_radiowave_builtin_variants() {
@@ -632,6 +658,133 @@ mod tests {
         ] {
             assert!(KERNELS.contains(&variant), "missing HIP kernel {variant}");
         }
+    }
+
+    fn auto_resolves(arch: &str, iterations: usize) -> usize {
+        HipQueuePolicy::Auto
+            .resolve(arch, iterations, TimingMode::IndependentThroughput)
+            .expect("auto resolves")
+    }
+
+    fn legacy_resolves(arch: &str, iterations: usize, mode: TimingMode) -> usize {
+        HipQueuePolicy::Legacy
+            .resolve(arch, iterations, mode)
+            .expect("legacy resolves")
+    }
+
+    #[test]
+    fn legacy_is_unchanged() {
+        // IndependentThroughput with ample work: fixed 4 (preserved).
+        assert_eq!(
+            legacy_resolves("gfx1201", 20, TimingMode::IndependentThroughput),
+            4
+        );
+        assert_eq!(
+            legacy_resolves("gfx1100", 20, TimingMode::IndependentThroughput),
+            4
+        );
+        // Serial modes always 1 regardless of arch/iterations.
+        assert_eq!(
+            legacy_resolves("gfx1201", 20, TimingMode::SerialLatency),
+            1
+        );
+        assert_eq!(
+            legacy_resolves("gfx1201", 20, TimingMode::SingleKernelAggressive),
+            1
+        );
+        // Clamped when work is smaller than 4.
+        assert_eq!(
+            legacy_resolves("gfx1201", 1, TimingMode::IndependentThroughput),
+            1
+        );
+        assert_eq!(
+            legacy_resolves("gfx1201", 2, TimingMode::IndependentThroughput),
+            2
+        );
+        assert_eq!(
+            legacy_resolves("gfx1201", 3, TimingMode::IndependentThroughput),
+            3
+        );
+    }
+
+    #[test]
+    fn auto_on_known_parts() {
+        // hipGraph optima at large dispatch count (20 >> max width).
+        assert_eq!(auto_resolves("gfx1201", 20), 2);
+        assert_eq!(auto_resolves("gfx1151", 20), 5);
+        assert_eq!(auto_resolves("gfx1100", 20), 4);
+        assert_eq!(auto_resolves("gfx1010", 20), 2);
+        // Prefix matching via starts_with (suffix tolerance).
+        assert_eq!(auto_resolves("gfx1201-generic", 20), 2);
+        assert_eq!(auto_resolves("gfx1151:1", 20), 5);
+    }
+
+    #[test]
+    fn auto_gfx1030_falls_back_conservatively() {
+        // gfx1030 is deliberately absent: redline's PM4 path executes zero
+        // dispatches on RDNA2 (counter = 0 / 512), so no lane width there is
+        // trustworthy. HIP rows on gfx1030 must not return a fabricated 4.
+        let lanes = auto_resolves("gfx1030", 20);
+        assert_eq!(lanes, lanes::CONSERVATIVE_LANES);
+        assert_ne!(lanes, 4, "gfx1030 must not return stale 4");
+        // Suffix form as well.
+        assert_eq!(
+            auto_resolves("gfx1030:some-rev", 20),
+            lanes::CONSERVATIVE_LANES
+        );
+    }
+
+    #[test]
+    fn auto_unknown_falls_back_conservatively() {
+        assert_eq!(auto_resolves("gfx942", 20), lanes::CONSERVATIVE_LANES);
+        assert_eq!(auto_resolves("gfx90a", 20), lanes::CONSERVATIVE_LANES);
+        assert_eq!(auto_resolves("unknown", 512), lanes::CONSERVATIVE_LANES);
+    }
+
+    #[test]
+    fn auto_clamp_when_iterations_smaller_than_lanes() {
+        // gfx1151 wants 5 but only 3 dispatches -> 3.
+        assert_eq!(auto_resolves("gfx1151", 3), 3);
+        assert_eq!(auto_resolves("gfx1151", 1), 1);
+        assert_eq!(auto_resolves("gfx1151", 2), 2);
+        // gfx1100 wants 4 but only 2 -> 2.
+        assert_eq!(auto_resolves("gfx1100", 2), 2);
+        // gfx1201 wants 2 but only 1 -> 1.
+        assert_eq!(auto_resolves("gfx1201", 1), 1);
+        // Unknown wants 2 but only 1 -> 1.
+        assert_eq!(auto_resolves("gfx942", 1), 1);
+        // gfx1030 fallback is 2 but only 1 -> 1.
+        assert_eq!(auto_resolves("gfx1030", 1), 1);
+    }
+
+    #[test]
+    fn auto_zero_iterations_is_error() {
+        let err = HipQueuePolicy::Auto
+            .resolve("gfx1201", 0, TimingMode::IndependentThroughput)
+            .unwrap_err();
+        // Delegated to lanes: expect NoWork.
+        assert!(err.to_string().contains("zero"));
+    }
+
+    #[test]
+    fn explicit_uses_shared_guard() {
+        // MAX_LANES guard comes from lanes via Explicit.
+        let too_wide = NonZeroUsize::new(17).unwrap();
+        let err = HipQueuePolicy::Explicit(too_wide)
+            .resolve("gfx1201", 512, TimingMode::IndependentThroughput)
+            .unwrap_err();
+        assert!(err.to_string().contains("16"));
+        // Within guard is accepted and clamped.
+        let ok = HipQueuePolicy::Explicit(NonZeroUsize::new(16).unwrap())
+            .resolve("gfx1201", 512, TimingMode::IndependentThroughput)
+            .unwrap();
+        assert_eq!(ok, 16);
+        assert_eq!(
+            HipQueuePolicy::Explicit(NonZeroUsize::new(16).unwrap())
+                .resolve("gfx1201", 3, TimingMode::IndependentThroughput)
+                .unwrap(),
+            3
+        );
     }
 }
 
