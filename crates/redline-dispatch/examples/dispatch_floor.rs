@@ -373,6 +373,93 @@ fn verify_pm4_execution(
     Ok((observed, n as u32))
 }
 
+/// Multi-queue correctness gate: same as `verify_pm4_execution` but for the
+/// `lanes` retained-IB path. It builds the SAME per-lane command buffers
+/// `measure_pm4_multiqueue_host` builds (same N split: `base = n / lanes`,
+/// `extra = n % lanes`, first `extra` lanes get one more), points every
+/// lane's dispatches at ONE shared atomic counter, replays once via
+/// `MultiQueuePm4Ib::replay_and_wait`, and returns `(observed, expected == n,
+/// granted_queue_count)`.
+///
+/// A shared counter across lanes is the point: it proves total dispatch count
+/// is exactly N with no loss and no duplication. The per-lane counts are also
+/// asserted to sum to exactly `n` in host code before submitting, so a split
+/// bug is caught even if the GPU path is fine.
+fn verify_pm4_multiqueue_execution(
+    device: &GpuDevice,
+    exec: &Executable,
+    symbol: &str,
+    n: usize,
+    lanes: usize,
+    serialize: bool,
+) -> Result<(u32, u32, usize), Box<dyn std::error::Error>> {
+    if lanes == 0 {
+        return Err("lanes must be >= 1".into());
+    }
+    let family = FloorFamily::of(device)
+        .ok_or_else(|| format!("no PM4 encoding for device {}", device.name()))?;
+    let pool = KernargPool::discover(device)?;
+    let kernel = exec.kernel(symbol)?;
+    let mut counter = pool.allocate_executable_bytes(4)?;
+    counter.as_mut_bytes().fill(0);
+    let counter_addr = counter.address() as usize as u64;
+    let mut kernarg = pool.allocate_for(kernel.metadata())?;
+    kernarg.as_mut_bytes()[..8].copy_from_slice(&counter_addr.to_le_bytes());
+
+    // Same split as `measure_pm4_multiqueue_host`: evenly as possible, remainder
+    // to the first lanes so the total is exactly N.
+    let base = n / lanes;
+    let extra = n % lanes;
+    let total: usize = (0..lanes).map(|l| base + usize::from(l < extra)).sum();
+    assert_eq!(total, n, "lane split {total} != N {n}");
+
+    let mut ib = match family {
+        FloorFamily::Gfx10 | FloorFamily::Gfx11 => {
+            let mut cmds = Vec::with_capacity(lanes);
+            for l in 0..lanes {
+                let count = base + usize::from(l < extra);
+                let mut c = Gfx10Pm4CommandBuffer::new_stateful();
+                for i in 0..count {
+                    let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1])?;
+                    c.dispatch(&kernel, geometry, 0, kernarg.address())?;
+                    if serialize && i + 1 < count {
+                        c.wait_compute_idle();
+                    }
+                }
+                cmds.push(c);
+            }
+            if family == FloorFamily::Gfx10 {
+                MultiQueuePm4Ib::create_gfx10(device, &pool, &cmds)?
+            } else {
+                MultiQueuePm4Ib::create_gfx11(device, &pool, &cmds)?
+            }
+        }
+        FloorFamily::Gfx12 => {
+            let mut cmds = Vec::with_capacity(lanes);
+            for l in 0..lanes {
+                let count = base + usize::from(l < extra);
+                let mut c = Gfx12Pm4CommandBuffer::new_stateful();
+                for i in 0..count {
+                    let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1])?;
+                    c.dispatch(&kernel, geometry, 0, kernarg.address())?;
+                    if serialize && i + 1 < count {
+                        c.wait_compute_idle();
+                    }
+                }
+                cmds.push(c);
+            }
+            MultiQueuePm4Ib::create(device, &pool, &cmds)?
+        }
+    };
+
+    let queues = ib.queue_count();
+    // SAFETY: kernarg points at `counter`, which outlives `ib` and the kernel
+    // writes only to that counter via atomicAdd; no other external pointees.
+    unsafe { ib.replay_and_wait()? };
+    let observed = u32::from_le_bytes(counter.as_mut_bytes()[..4].try_into().unwrap());
+    Ok((observed, n as u32, queues))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hsaco = std::env::var("REDLINE_FLOOR_HSACO")
         .map_err(|_| "set REDLINE_FLOOR_HSACO to the code-object path")?;
@@ -486,6 +573,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // that is 2 on some parts and 5 on others, and cannot be derived from
     // published device properties. `queues` is what the runtime actually gave
     // us, which may be less than requested.
+    //
+    // Multi-queue correctness gate: before trusting the timing for a lane
+    // count, prove that the same per-lane split executes exactly N dispatches
+    // across lanes with no loss or duplication. The gate uses one shared
+    // atomic counter (`ctr_k`) so the observed count is the total across all
+    // queues. If the counter code object cannot be located, the gate is
+    // reported as not-run rather than inventing a PASS.
+    let mq_gate: Option<(Executable, String)> = {
+        let path = std::env::var("REDLINE_FLOOR_HSACO_CTR")
+            .or_else(|_| std::env::var("REDLINE_FLOOR_VERIFY_HSACO"))
+            .ok();
+        match path {
+            Some(vpath) => {
+                let vsym = std::env::var("REDLINE_FLOOR_VERIFY_SYMBOL")
+                    .or_else(|_| std::env::var("REDLINE_FLOOR_CTR_SYMBOL"))
+                    .unwrap_or_else(|_| "ctr_k.kd".to_owned());
+                match std::fs::read(&vpath) {
+                    Ok(bytes) => {
+                        let code: Arc<[u8]> = bytes.into();
+                        match Executable::load(&device, code) {
+                            Ok(vexec) => Some((vexec, vsym)),
+                            Err(e) => {
+                                println!(
+                                    "  PM4 multi-queue correctness gate: counter HSACO load failed for {vpath}: {e} — gate not run"
+                                );
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!(
+                            "  PM4 multi-queue correctness gate: counter HSACO read failed for {vpath}: {e} — gate not run"
+                        );
+                        None
+                    }
+                }
+            }
+            None => None,
+        }
+    };
     let lane_counts = std::env::var("REDLINE_FLOOR_LANES")
         .ok()
         .map(|s| {
@@ -497,6 +624,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| vec![2, 4, 5, 8]);
     for lanes in lane_counts {
         if lanes > n {
+            continue;
+        }
+        // Gate this lane count before timing it: prove N dispatches executed
+        // across lanes exactly once, with no loss or duplication.
+        let gate_pass = if let Some((vexec, vsym)) = &mq_gate {
+            match verify_pm4_multiqueue_execution(&device, vexec, vsym, n, lanes, true) {
+                Ok((observed, expected, _queues)) => {
+                    let status = if observed == expected { "PASS" } else { "FAIL" };
+                    println!(
+                        "  PM4 multi-queue correctness gate ({lanes} lane(s)): counter = {observed} / {expected}  [{status}]"
+                    );
+                    observed == expected
+                }
+                Err(e) => {
+                    println!(
+                        "  PM4 multi-queue correctness gate ({lanes} lane(s)): error: {e}  [FAIL]"
+                    );
+                    false
+                }
+            }
+        } else {
+            println!(
+                "  PM4 multi-queue correctness gate ({lanes} lane(s)): counter HSACO not set (set REDLINE_FLOOR_HSACO_CTR or REDLINE_FLOOR_VERIFY_HSACO) — gate not run"
+            );
+            // Gate not-run is not PASS; keep timing but clearly unverified.
+            // The caller must supply a counter HSACO to get a trustworthy number.
+            true
+        };
+        if !gate_pass {
+            println!(
+                "  {:<52} {}",
+                format!("PM4 multi-queue — {lanes} lane(s)"),
+                "skipped (gate FAIL)"
+            );
             continue;
         }
         match measure_pm4_multiqueue_host(&device, &exec, &symbol, n, lanes, m, warmup, true) {

@@ -41,6 +41,7 @@ pub mod batch_mem;
 pub mod ffi_batch_mem;
 pub mod ffi_execution_ctx;
 pub mod ffi_library;
+pub mod lanes;
 pub mod partition;
 
 mod backend;
