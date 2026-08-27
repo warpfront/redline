@@ -4,12 +4,13 @@
 mod common;
 mod hip_backend;
 mod redline_backend;
+mod rocm_provenance;
 mod spec;
 mod vulkan_backend;
 
 use anyhow::{bail, Context, Result};
 use common::{median, Distribution, Measurement};
-use hip_backend::{embedded_code_object, HipBackend};
+use hip_backend::{embedded_code_object, HipBackend, HipQueuePolicy};
 use radiowave::recipes::{RecipeCatalog, SelectionMode};
 use radiowave::{SchedulerProfile, Wavefront};
 use redline_backend::{RedlineBackend, RmwBoundary};
@@ -37,7 +38,6 @@ const BACKENDS: [&str; 4] = ["redline", "vulkan", "hipgraph", "hip"];
 const HIPENGINE_SUMMARY: &str =
     "../hipengine-6409/results/gfx1201/2026-07-22-714-bench/summary.json";
 const HIPFIRE_BRIDGE_REV: &str = "455ffb9dfd6a5712889b504737f88fbbe87d3efe";
-
 #[derive(Debug)]
 struct Config {
     output: PathBuf,
@@ -50,6 +50,7 @@ struct Config {
     rmw_boundary: RmwBoundary,
     dispatch_mode: Gfx12DispatchMode,
     redline_queue_policy: QueuePolicy,
+    hip_queue_policy: HipQueuePolicy,
     scheduler_profile: SchedulerProfile,
     scheduler_profile_explicit: bool,
     interleave_aggressive_b32: bool,
@@ -104,6 +105,7 @@ struct RowResult {
     iterations: usize,
     logical_operations: usize,
     redline_queue_count: usize,
+    hip_queue_count: usize,
     redline_submission_policy: &'static str,
     redline_dependency_cache_policies: BTreeMap<String, String>,
     partition_applied: bool,
@@ -173,6 +175,18 @@ fn main() -> Result<()> {
 
     println!("initializing Hipfire HIP bridge");
     let hip = HipBackend::new()?;
+    // Capture ROCm provenance immediately after HIP loads, before any
+    // other ROCm work, so the mapped objects reflect the runtime actually
+    // used for this run. This is the user-visible provenance line and the
+    // artifact's `environment.rocm_provenance`.
+    let rocm_provenance = rocm_provenance::collect(&hip.hip);
+    println!(
+        "ROCm provenance hip_runtime_version_raw={} libamdhip64={} libhsa={} mixed={}",
+        rocm_provenance["hip_runtime_version_raw"],
+        rocm_provenance["libamdhip64_path"],
+        rocm_provenance["libhsa_runtime_path"],
+        rocm_provenance["mixed_load_warning"]
+    );
     println!("initializing Redline retained-PM4 backend");
     let redline = RedlineBackend::new(
         config.rmw_boundary,
@@ -266,10 +280,24 @@ fn main() -> Result<()> {
         let mut backends = BTreeMap::new();
         for backend in &order {
             let measurement = match *backend {
-                "hip" => hip.measure_direct(&spec, &fixture, mode, config.warmups, config.samples),
-                "hipgraph" => {
-                    hip.measure_graph(&spec, &fixture, mode, config.warmups, config.samples)
-                }
+                "hip" => hip.measure_direct(
+                    &spec,
+                    &fixture,
+                    mode,
+                    config.hip_queue_policy,
+                    &config.target_architecture,
+                    config.warmups,
+                    config.samples,
+                ),
+                "hipgraph" => hip.measure_graph(
+                    &spec,
+                    &fixture,
+                    mode,
+                    config.hip_queue_policy,
+                    &config.target_architecture,
+                    config.warmups,
+                    config.samples,
+                ),
                 "redline" => {
                     redline.measure(&hip, &spec, &fixture, mode, config.warmups, config.samples)
                 }
@@ -288,6 +316,14 @@ fn main() -> Result<()> {
             backends.insert((*backend).to_owned(), result);
         }
         let redline_queue_count = redline.queue_count_for(mode, spec.logical_iterations(mode));
+        let hip_queue_count = config
+            .hip_queue_policy
+            .resolve(
+                &config.target_architecture,
+                spec.logical_iterations(mode),
+                mode,
+            )
+            .unwrap_or(1);
         let partition_applied =
             redline.partition_applied_for(mode, spec.logical_iterations(mode));
         rows.push(RowResult {
@@ -308,6 +344,7 @@ fn main() -> Result<()> {
             iterations: spec.iterations,
             logical_operations: spec.logical_iterations(mode),
             redline_queue_count,
+            hip_queue_count,
             redline_submission_policy: redline_submission_policy(&spec, mode, redline_queue_count),
             redline_dependency_cache_policies: redline_dependency_cache_policies(
                 &redline, &spec, mode,
@@ -377,9 +414,11 @@ fn main() -> Result<()> {
         methodology: json!({
             "timing_modes": {
                 "serial_latency": "One true output RMW chain. Every operation is separated by the backend's required compute-write to compute-read/write dependency. Redline reuses immutable kernargs when every operation has identical arguments.",
-                "independent_throughput": "Disjoint output slices with no inter-operation dependency; HIP, Vulkan, and Redline use up to four queues/streams. Redline release-publishes one retained PM4 IB per active lane before ringing any doorbell and measures the earliest GPU start through the latest GPU end. Serial RMW rows remain single-queue.",
+                "independent_throughput": "Disjoint output slices with no inter-operation dependency. HIP/HipGraph lanes are controlled by --hip-queues (legacy=4, auto=tuned per device, explicit N). Redline queues are controlled by --redline-queues. Redline release-publishes one retained PM4 IB per active lane before ringing any doorbell and measures the earliest GPU start through the latest GPU end. Serial RMW rows remain single-queue.",
                 "single_kernel_aggressive": "Exactly one dispatch and one output operation. Redline's timed retained IB contains no entry acquire or dependency fence; the HIP-to-PM4 ownership acquire is replayed and waited outside the GPU timestamp window. Two-stage rows are excluded."
             },
+            "hip_graph_queue_policy": "HIP/HipGraph independent width is set by --hip-queues / HIPFIRE_HIP_QUEUES. legacy (default) keeps the original fixed-4 width for reproducibility; auto selects the ROCm 10.0 tuned width (gfx1201=2, gfx1100=4, gfx1151=5, gfx1030=4) where 1:1 chain:queue is optimal and overshooting costs 4-7x. Explicit N requests N lanes clamped to iterations. ROCm 10.0 segments graphs across hardware queues by independent paths; 7.14 did not.",
+            "rocm_provenance": "Each artifact records hipRuntimeGetVersion (raw and tuple) plus the resolved libamdhip64/libhsa-runtime paths from /proc/self/maps and a per-tree summary (core-7.14 vs core-10.0). If mixed_load_warning is true the run mixed two ROCm trees and is not a valid single-version measurement. See bench/dispatch/rocm_ident.cpp.",
             "timers": {
                 "hip": "HIP device events",
                 "hipgraph": "HIP device events around graph replay",
@@ -396,7 +435,6 @@ fn main() -> Result<()> {
                 "radiowave_tuned": "The targeted kernels, interleave, and every VOPD variant select wave64; dispatch_tiny uses one 32-lane workgroup because only lane zero is live; interleave selects buffer output for independent throughput and B128 loads with a one-wave HIP workgroup for aggressive latency while Vulkan retains its native shader geometry.",
                 "blanket_wave64": "Every kernel family with any prior Vulkan-over-Redline row selects wave64."
             },
-            "correctness": "Every timed sequence is reset before timing and checked against a CPU oracle after its final sample. Only rows passing every selected backend are ranked.",
             "matrix_parity": "The default hipengine profile reproduces the pinned HipEngine f2c row set: the same family, operation, shape/sweep axes, repetition count, and serial/independent modes, totaling 112 core configurations plus 8 dispatch controls per mode. Each row is deliberately fired through Hipfire's existing Radiowave-tuned launch policy, so wave size, workgroup geometry, source variant, ABI, and machine code are optimization variables rather than parity constraints.",
             "vulkan_memory": "Device-local buffers with staging transfers outside the timing window.",
             "redline_dependency": format!("{} Every Redline sample completes its HIP-to-PM4 system ownership acquire before the timed retained tape. Independent single-stage and aggressive single-kernel tapes contain no dependency fence.", redline.rmw_boundary.description())
@@ -404,6 +442,12 @@ fn main() -> Result<()> {
         environment: json!({
             "hip_arch": hip.arch,
             "hipfire_device": "HIP ordinal 0",
+            "hip_queue_policy": config.hip_queue_policy.as_str(),
+            "hip_independent_queues_for_mode": {
+                "serial_latency": 1,
+                "independent_throughput": config.hip_queue_policy.resolve(&config.target_architecture, 9999, TimingMode::IndependentThroughput).unwrap_or(1),
+            },
+            "rocm_provenance": rocm_provenance.clone(),
             "redline_device": redline.name,
             "redline_pci": redline.pci,
             "redline_queue_policy": redline.queue_policy().as_str(),
@@ -492,6 +536,7 @@ fn main() -> Result<()> {
             },
             "redline_queue_policy": redline.queue_policy().as_str(),
             "redline_independent_queues": redline.independent_queue_count(),
+            "hip_queue_policy": config.hip_queue_policy.as_str(),
             "matrix_profile": config.matrix_profile.as_str(),
             "include_aggressive_extension": config.include_aggressive,
             "selected_rows": rows.len(),
@@ -943,6 +988,51 @@ fn render_report(artifact: &Artifact) -> String {
             if active_backends.contains(&"hipgraph") { "" } else { " This artifact does not measure HipGraph." },
         ));
     }
+    // ROCm provenance section: always emitted so the REPORT carries the same
+    // evidence as the JSON. This is the human-readable counterpart to
+    // environment.rocm_provenance and is generated from observed values only.
+    let rocm = &artifact.environment["rocm_provenance"];
+    let hip_queue = artifact.environment["hip_queue_policy"]
+        .as_str()
+        .or_else(|| artifact.config["hip_queue_policy"].as_str())
+        .unwrap_or("unknown");
+    let hip_arch = artifact.environment["hip_arch"].as_str().unwrap_or("unknown");
+    out.push_str("\n## ROCm provenance\n\n");
+    out.push_str(&format!(
+        "HIP arch `{}`; `HIPFIRE_BENCH_ARCH={}`.\n\n",
+        hip_arch,
+        artifact.config["radiowave_target_architecture"]
+            .as_str()
+            .unwrap_or("unknown")
+    ));
+    out.push_str(&format!(
+        "HIP queue policy `{}` (per-row `hip_queue_count` in `rows`; independent optimum per device: gfx1201=2, gfx1100=4, gfx1151=5, gfx1030=4).\n\n",
+        hip_queue
+    ));
+    if !rocm.is_null() {
+        let raw = rocm["hip_runtime_version_raw"].as_i64()
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "unknown".to_owned());
+        let tuple = rocm["hip_runtime_version_tuple"]
+            .as_array()
+            .map(|a| a.iter().map(|v| v.to_string()).collect::<Vec<_>>().join("."))
+            .unwrap_or_else(|| "unknown".to_owned());
+        let hip_path = rocm["libamdhip64_path"].as_str().unwrap_or("(unresolved)");
+        let hsa_path = rocm["libhsa_runtime_path"].as_str().unwrap_or("(unresolved)");
+        let mixed = rocm["mixed_load_warning"].as_bool().unwrap_or(false);
+        let summary = rocm["mapped_summary"].clone();
+        out.push_str(&format!(
+            "Observed `hipRuntimeGetVersion` raw `{}` tuple `({})`; `libamdhip64` `{}`; `libhsa-runtime` `{}`; mixed_load `{}`.\n\n",
+            raw, tuple, hip_path, hsa_path, mixed
+        ));
+        if mixed {
+            out.push_str("WARNING: this run mapped ROCm objects from both `core-7.14` and `core-10.0`; it mixed two runtimes and is not a valid single-version measurement.\n\n");
+        }
+        out.push_str(&format!("Mapped ROCm objects summary: `{}`.\n\n", summary));
+        out.push_str("Provenance source: `hipRuntimeGetVersion` plus resolved `libamdhip64`/`libhsa-runtime` paths from `/proc/self/maps` and per-tree summary (`core-7.14` vs `core-10.0`), mirroring `bench/dispatch/rocm_ident.cpp`. Evidence is observed inside the process, never inferred.\n\n");
+    } else {
+        out.push_str("ROCm provenance unavailable (pre-provenance artifact or `rocm_provenance` collection failed).\n\n");
+    }
     out.push_str("\n## Interpretation guardrails\n\n");
     out.push_str(&selected_code_identity(&active_backends));
     if active_backends
@@ -994,8 +1084,18 @@ fn parse_args() -> Result<Config> {
     let mut rmw_boundary = RmwBoundary::RadiowaveVmem;
     let mut dispatch_mode = Gfx12DispatchMode::Workitems;
     let mut redline_queue_policy = QueuePolicy::Auto;
+    let mut hip_queue_policy = HipQueuePolicy::Legacy;
     let mut scheduler_profile = SchedulerProfile::Default;
     let mut scheduler_profile_explicit = false;
+    // Optional env override so remote runs can set HIP width without changing
+    // the CLI in every wrapper script. CLI later overrides this.
+    if let Ok(value) = env::var("HIPFIRE_HIP_QUEUES") {
+        hip_queue_policy = HipQueuePolicy::parse(&value).with_context(|| {
+            format!(
+                "unknown HIPFIRE_HIP_QUEUES {value}; expected legacy, auto, or 1..16"
+            )
+        })?;
+    }
     let mut interleave_aggressive_b32 = false;
     let mut mixed_paired_hash = false;
     let mut matrix_profile = MatrixProfile::HipEngineF2c;
@@ -1061,6 +1161,16 @@ fn parse_args() -> Result<Config> {
                     .context("--redline-queues requires a value")?
                     .parse()?;
             }
+            "--hip-queues" => {
+                let value = args
+                    .next()
+                    .context("--hip-queues requires a value")?;
+                hip_queue_policy = HipQueuePolicy::parse(&value).with_context(|| {
+                    format!(
+                        "unknown HIP queue policy {value}; expected legacy, auto, or 1..16 (legacy keeps the original fixed-4 independent width; auto selects the ROCm 10.0 tuned width per device: gfx1201=2, gfx1100=4, gfx1151=5, gfx1030=4)"
+                    )
+                })?;
+            }
             "--scheduler-profile" => {
                 let value = args
                     .next()
@@ -1114,7 +1224,7 @@ fn parse_args() -> Result<Config> {
             "--list" => list = true,
             "--help" | "-h" => {
                 println!(
-                    "usage: hipfire-6409-bench [--out PATH] [--warmups N] [--samples N] [--filter TEXT] [--max-rows N] [--matrix hipengine|legacy] [--include-aggressive] [--backends all|redline,vulkan] [--wave-policy all32|targeted64|radiowave|blanket64] [--recipe-catalog PATH] [--recipe-mode certified|candidates] [--recipe-allow ID ...] [--scheduler-profile default|max-ilp|iterative-ilp|memory-clause|pipeline-ilp] [--interleave-aggressive-b32] [--mixed-paired-hash] [--redline-rmw radiowave-vmem|same-agent|radv-global] [--redline-dispatch-mode workitems|radv-workgroups|radv] [--redline-queues auto|1|2|3|4] [--partition-policy none|equal:N|cus:a,b,c] [--batch-mem (recorded-only on retained-PM4 path)] [--telemetry] [--roctx] [--list]"
+                    "usage: hipfire-6409-bench [--out PATH] [--warmups N] [--samples N] [--filter TEXT] [--max-rows N] [--matrix hipengine|legacy] [--include-aggressive] [--backends all|redline,vulkan] [--wave-policy all32|targeted64|radiowave|blanket64] [--recipe-catalog PATH] [--recipe-mode certified|candidates] [--recipe-allow ID ...] [--scheduler-profile default|max-ilp|iterative-ilp|memory-clause|pipeline-ilp] [--interleave-aggressive-b32] [--mixed-paired-hash] [--redline-rmw radiowave-vmem|same-agent|radv-global] [--redline-dispatch-mode workitems|radv-workgroups|radv] [--redline-queues auto|1|2|3|4] [--hip-queues legacy|auto|1..16] [--partition-policy none|equal:N|cus:a,b,c] [--batch-mem (recorded-only on retained-PM4 path)] [--telemetry] [--roctx] [--list]"
                 );
                 std::process::exit(0);
             }
@@ -1164,6 +1274,7 @@ fn parse_args() -> Result<Config> {
         rmw_boundary,
         dispatch_mode,
         redline_queue_policy,
+        hip_queue_policy,
         scheduler_profile,
         scheduler_profile_explicit,
         interleave_aggressive_b32,

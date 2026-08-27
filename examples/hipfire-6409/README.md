@@ -40,17 +40,21 @@ cargo build --release --bin hipfire-6409-bench
   --warmups 3 --samples 7 \
   --out results/gfx1201/manual/results.json
 ```
-
 Useful flags already supported by the binary:
 
 | Flag | Meaning |
 | --- | --- |
 | `--backends all` / `redline,vulkan,...` | Backend subset |
 | `--redline-queues auto\|1\|2\|3\|4` | Independent IB queue policy (auto: Q2 gfx1100/gfx12, Q4 other gfx11, Q1 else) |
+| `--hip-queues legacy\|auto\|1..16` | HIP/HipGraph independent queue width. `legacy` (default) keeps the original fixed-4 width for reproducibility; `auto` selects the ROCm 10.0 tuned 1:1 chain:queue optimum (`gfx1201=2, gfx1100=4, gfx1151=5, gfx1030=4`; overshooting costs 4-7x, `gfx1201` at 8 lanes is 129x). Explicit `N` requests `N` lanes clamped to iterations. Also set via `HIPFIRE_HIP_QUEUES` env var (CLI overrides env). |
 | `--redline-rmw radiowave-vmem\|same-agent` | RMW cache boundary |
 | `--wave-policy radiowave` | Radiowave recipe catalog selection |
 | `--scheduler-profile default` | Shared HIP/HipGraph/Redline object profile |
 | `HIPFIRE_BENCH_ARCH=gfx1100` | Target ISA / recipe plan (use a per-arch Cargo `--target-dir`) |
+
+ROCm 10.0 made HipGraph dramatically faster at the right width by segmenting graphs across hardware queues by independent paths (2 independent chains -> 2 queues, 4 -> 4), and converges all graph shapes onto chain cost. The fixed-4 `legacy` width is pessimal on `gfx1201` (optimum is 2). Use `--hip-queues auto` to measure HipGraph at its tuned width; the old configuration remains the default so previous numbers reproduce. See `bench/dispatch/rocm_ident.cpp` for the runtime provenance pattern.
+
+Every run now prints and records ROCm provenance: `hipRuntimeGetVersion` (raw and tuple) plus the resolved `libamdhip64` / `libhsa-runtime` paths from `/proc/self/maps` and a per-tree summary (`core-7.14` vs `core-10.0` vs `core`-symlink). The artifact stores this at `environment.rocm_provenance` and the console shows `ROCm provenance hip_runtime_version_raw=... libamdhip64=... libhsa=... mixed=...`. If `mixed_load_warning` is true the run mixed two ROCm trees and is not a valid single-version measurement.
 
 Cross-arch build pattern:
 

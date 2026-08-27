@@ -7,6 +7,101 @@ use anyhow::{Context, Result};
 use hip_bridge::{DeviceBuffer, Function, Graph, GraphExec, HipRuntime, Module, Stream};
 use radiowave::{SchedulerProfile, Wavefront};
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
+
+/// HIP queue/stream width for independent-throughput work.
+///
+/// Why this exists: ROCm 7.14 and 10.0 behave differently for hipGraph.
+/// 7.14 made independent nodes 2.1-2.7x cheaper than a chain on
+/// gfx1030/1100/1151 but 2.98x more expensive on gfx1201, while 10.0
+/// converges shapes onto chain cost and segments graphs across hardware
+/// queues based on independent paths (2 chains -> 2 queues, 4 -> 4).
+/// The tuned 1:1 chain:queue width is device-specific; overshooting by
+/// even one queue costs 4-7x. This policy keeps the original fixed-4
+/// behaviour as `Legacy` for reproducibility and adds `Auto` that selects
+/// the measured 10.0 optimum per device.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HipQueuePolicy {
+    /// Original behaviour: up to 4 lanes for independent throughput, hard-
+    /// coded at the time the suite was written for ROCm 7.14. Retained as
+    /// the default so old numbers remain reproducible.
+    Legacy,
+    /// Device-tuned width for ROCm 10.0: gfx1201 -> 2, gfx1100 -> 4,
+    /// gfx1151 -> 5, gfx1030 -> 4, unknown -> conservative 2. The 5 for
+    /// gfx1151 is the measured hipGraph optimum (4 is the PM4 no-op
+    /// optimum); see the assignment's baselines.
+    Auto,
+    /// Explicit lane count chosen by the caller.
+    Explicit(NonZeroUsize),
+}
+
+impl HipQueuePolicy {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "legacy" => Some(Self::Legacy),
+            "auto" => Some(Self::Auto),
+            _ => {
+                if let Ok(n) = value.parse::<usize>() {
+                    if let Some(nz) = NonZeroUsize::new(n) {
+                        return Some(Self::Explicit(nz));
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    pub fn as_str(self) -> String {
+        match self {
+            Self::Legacy => "legacy".to_owned(),
+            Self::Auto => "auto".to_owned(),
+            Self::Explicit(n) => n.get().to_string(),
+        }
+    }
+
+    /// Resolve to a concrete lane count for `iterations` independent ops
+    /// on `arch`. Serial modes always return 1. Mirrors
+    /// `redline_dispatch::lanes::resolve` clamping: never exceeds
+    /// iterations, at least 1, and errors when exceeding MAX_LANES.
+    pub fn resolve(&self, arch: &str, iterations: usize, mode: TimingMode) -> Result<usize> {
+        if mode != TimingMode::IndependentThroughput {
+            return Ok(1);
+        }
+        if iterations == 0 {
+            anyhow::bail!("cannot resolve HIP lanes for zero dispatches");
+        }
+        let requested = match self {
+            Self::Legacy => 4,
+            Self::Auto => hip_auto_lanes(arch),
+            Self::Explicit(n) => n.get(),
+        };
+        if requested > 16 {
+            anyhow::bail!("requested {requested} HIP lanes exceeds the 16-lane guard");
+        }
+        Ok(requested.min(iterations).max(1))
+    }
+}
+
+fn hip_auto_lanes(arch: &str) -> usize {
+    // Tuned hipGraph 1:1 optimums measured on ROCm 10.0.
+    // gfx1151 -> 5 is the hipGraph optimum; PM4 no-op optimum is 4.
+    if arch.starts_with("gfx1201") {
+        2
+    } else if arch.starts_with("gfx1151") {
+        5
+    } else if arch.starts_with("gfx1100") {
+        4
+    } else if arch.starts_with("gfx1030") {
+        4
+    } else if arch.starts_with("gfx1010") {
+        2
+    } else {
+        // Conservative fallback for unknown parts: same constant as
+        // redline_dispatch::lanes::CONSERVATIVE_LANES.
+        2
+    }
+}
+
 
 #[derive(Clone, Copy)]
 pub struct EmbeddedCodeObject {
@@ -351,15 +446,13 @@ impl HipBackend {
         spec: &RowSpec,
         fixture: &Fixture,
         mode: TimingMode,
+        hip_queue_policy: HipQueuePolicy,
+        arch: &str,
         warmups: usize,
         samples: usize,
     ) -> Result<Measurement> {
         let buffers = self.allocate(spec, fixture, mode)?;
-        let lanes = if mode == TimingMode::IndependentThroughput {
-            4.min(spec.logical_iterations(mode))
-        } else {
-            1
-        };
+        let lanes = hip_queue_policy.resolve(arch, spec.logical_iterations(mode), mode)?;
         let streams = (0..lanes)
             .map(|_| self.hip.stream_create())
             .collect::<Result<Vec<_>, _>>()?;
@@ -397,6 +490,8 @@ impl HipBackend {
         spec: &RowSpec,
         fixture: &Fixture,
         mode: TimingMode,
+        hip_queue_policy: HipQueuePolicy,
+        arch: &str,
         warmups: usize,
         samples: usize,
     ) -> Result<Measurement> {
@@ -408,11 +503,7 @@ impl HipBackend {
             self.function(second, spec)?;
         }
         let buffers = self.allocate(spec, fixture, mode)?;
-        let lanes = if mode == TimingMode::IndependentThroughput {
-            4.min(spec.logical_iterations(mode))
-        } else {
-            1
-        };
+        let lanes = hip_queue_policy.resolve(arch, spec.logical_iterations(mode), mode)?;
         let streams = (0..lanes)
             .map(|_| self.hip.stream_create())
             .collect::<Result<Vec<_>, _>>()?;
