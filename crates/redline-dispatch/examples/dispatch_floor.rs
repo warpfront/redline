@@ -28,9 +28,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use redline_dispatch::aql::{
-    BatchFencePolicy, Executable, Gfx12Pm4CommandBuffer, GpuDevice, GpuSelector, KernargPool,
-    LaunchGeometry, RecordedDispatch, Runtime, SingleQueueBatchGraph, SingleQueuePm4Ib,
-    load_symbols,
+    BatchFencePolicy, Executable, Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, GpuDevice,
+    GpuSelector, KernargPool, Kernel, LaunchGeometry, RecordedDispatch, Runtime,
+    SingleQueueBatchGraph, SingleQueuePm4Ib, load_symbols,
 };
 
 fn env_usize(key: &str, default: usize) -> usize {
@@ -100,11 +100,114 @@ fn measure(
     Ok(median(spans))
 }
 
-/// The PM4 champion: lower the same N dispatches into ONE retained GFX12 PM4
-/// indirect buffer (`SingleQueuePm4Ib`) and replay it. Unlike the general
-/// `RecordedGraph` (which re-arms N per-node completion signals per replay),
-/// this tight single-IB path resets only ONE completion signal per replay, so
-/// host latency reflects submission + GPU work, not signal re-arm.
+/// PM4 command buffers and the retained-IB constructor are both
+/// architecture-family specific: gfx10 and gfx11 share the legacy compute
+/// register map, gfx12 has its own. Choosing wrongly does not degrade
+/// gracefully -- it would emit register writes from the wrong map at the
+/// hardware -- so the family is resolved once from the agent name and both the
+/// buffer type and the constructor follow from that single decision.
+///
+/// The gfx12 arm deliberately matches `gfx120` rather than `gfx12`, because
+/// gfx125x shares the numeric family without sharing validation here. Refusing
+/// an unknown architecture costs a clear error; misencoding one costs a fault.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FloorFamily {
+    Gfx10,
+    Gfx11,
+    Gfx12,
+}
+
+impl FloorFamily {
+    fn of(device: &GpuDevice) -> Option<Self> {
+        let name = device.name();
+        // Agent names can carry target features, e.g. `gfx1010:xnack-`.
+        let base = name.split(':').next().unwrap_or(&name);
+        if base.starts_with("gfx10") {
+            Some(Self::Gfx10)
+        } else if base.starts_with("gfx11") {
+            Some(Self::Gfx11)
+        } else if base.starts_with("gfx120") {
+            Some(Self::Gfx12)
+        } else {
+            None
+        }
+    }
+}
+
+/// One retained PM4 command stream, in whichever encoding the device needs.
+enum FloorPm4 {
+    /// gfx10 and gfx11: `Gfx11Pm4CommandBuffer` is an alias of the gfx10 type.
+    Legacy(Gfx10Pm4CommandBuffer),
+    Gfx12(Gfx12Pm4CommandBuffer),
+}
+
+impl FloorPm4 {
+    fn new_stateful(family: FloorFamily) -> Self {
+        match family {
+            FloorFamily::Gfx10 | FloorFamily::Gfx11 => {
+                Self::Legacy(Gfx10Pm4CommandBuffer::new_stateful())
+            }
+            FloorFamily::Gfx12 => Self::Gfx12(Gfx12Pm4CommandBuffer::new_stateful()),
+        }
+    }
+
+    fn dispatch(
+        &mut self,
+        kernel: &Kernel,
+        geometry: LaunchGeometry,
+        group_segment: u32,
+        kernarg: *mut std::ffi::c_void,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        match self {
+            Self::Legacy(c) => c.dispatch(kernel, geometry, group_segment, kernarg)?,
+            Self::Gfx12(c) => c.dispatch(kernel, geometry, group_segment, kernarg)?,
+        }
+        Ok(())
+    }
+
+    fn wait_compute_idle(&mut self) {
+        match self {
+            Self::Legacy(c) => c.wait_compute_idle(),
+            Self::Gfx12(c) => c.wait_compute_idle(),
+        }
+    }
+
+    /// Build the retained IB through the constructor matching this encoding.
+    /// Each constructor re-checks the device family itself, so a mismatch here
+    /// is caught rather than submitted.
+    fn create_ib(
+        &self,
+        family: FloorFamily,
+        device: &GpuDevice,
+        pool: &KernargPool,
+    ) -> Result<SingleQueuePm4Ib, Box<dyn std::error::Error>> {
+        Ok(match (self, family) {
+            (Self::Legacy(c), FloorFamily::Gfx10) => {
+                SingleQueuePm4Ib::create_gfx10(device, pool, c)?
+            }
+            (Self::Legacy(c), FloorFamily::Gfx11) => {
+                SingleQueuePm4Ib::create_gfx11(device, pool, c)?
+            }
+            (Self::Gfx12(c), FloorFamily::Gfx12) => {
+                SingleQueuePm4Ib::create(device, pool, c)?
+            }
+            // Unreachable: the buffer is always built from the same family value.
+            _ => return Err("PM4 buffer encoding does not match device family".into()),
+        })
+    }
+}
+
+/// The PM4 champion: lower the same N dispatches into ONE retained PM4 indirect
+/// buffer (`SingleQueuePm4Ib`) and replay it. Unlike the general `RecordedGraph`
+/// (which re-arms N per-node completion signals per replay), this tight
+/// single-IB path resets only ONE completion signal per replay, so host latency
+/// reflects submission + GPU work, not signal re-arm.
+///
+/// The encoding follows the device family, so this runs on gfx10, gfx11 and
+/// gfx12 rather than gfx12 alone. That matters for cross-architecture
+/// comparison: hard-coding one family here silently reduces the whole PM4 row
+/// to an ArchitectureMismatch error on every other part, which reads as "PM4 is
+/// unavailable" when it is only unimplemented in the harness.
 ///
 /// `serialize` inserts a compute-idle wait between dispatches (conservative /
 /// dependency-ordered); `false` leaves them back-to-back (aggressive / minimal).
@@ -118,10 +221,12 @@ fn measure_pm4_ib_host(
     warmup: usize,
     serialize: bool,
 ) -> Result<f64, Box<dyn std::error::Error>> {
+    let family = FloorFamily::of(device)
+        .ok_or_else(|| format!("no PM4 encoding for device {}", device.name()))?;
     let pool = KernargPool::discover(device)?;
     let kernel = exec.kernel(symbol)?;
     let kernarg = pool.allocate_for(kernel.metadata())?;
-    let mut cmd = Gfx12Pm4CommandBuffer::new_stateful();
+    let mut cmd = FloorPm4::new_stateful(family);
     for i in 0..n {
         let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1])?;
         cmd.dispatch(&kernel, geometry, 0, kernarg.address())?;
@@ -129,7 +234,7 @@ fn measure_pm4_ib_host(
             cmd.wait_compute_idle();
         }
     }
-    let mut ib = SingleQueuePm4Ib::create(device, &pool, &cmd)?;
+    let mut ib = cmd.create_ib(family, device, &pool)?;
     for _ in 0..warmup {
         // SAFETY: no-op kernels reference no external pointees; the retained IB,
         // code object, and kernarg stay live for the lifetime of `ib`.
@@ -156,6 +261,8 @@ fn verify_pm4_execution(
     n: usize,
     serialize: bool,
 ) -> Result<(u32, u32), Box<dyn std::error::Error>> {
+    let family = FloorFamily::of(device)
+        .ok_or_else(|| format!("no PM4 encoding for device {}", device.name()))?;
     let pool = KernargPool::discover(device)?;
     let kernel = exec.kernel(symbol)?;
     let mut counter = pool.allocate_executable_bytes(4)?;
@@ -164,7 +271,7 @@ fn verify_pm4_execution(
     let mut kernarg = pool.allocate_for(kernel.metadata())?;
     kernarg.as_mut_bytes()[..8].copy_from_slice(&counter_addr.to_le_bytes());
 
-    let mut cmd = Gfx12Pm4CommandBuffer::new_stateful();
+    let mut cmd = FloorPm4::new_stateful(family);
     for i in 0..n {
         let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1])?;
         cmd.dispatch(&kernel, geometry, 0, kernarg.address())?;
@@ -172,7 +279,7 @@ fn verify_pm4_execution(
             cmd.wait_compute_idle(); // serialize the atomic increments
         }
     }
-    let mut ib = SingleQueuePm4Ib::create(device, &pool, &cmd)?;
+    let mut ib = cmd.create_ib(family, device, &pool)?;
     // SAFETY: kernarg points at `counter`, which outlives `ib`.
     unsafe { ib.replay_and_wait()? };
     let observed = u32::from_le_bytes(counter.as_mut_bytes()[..4].try_into().unwrap());
@@ -189,9 +296,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let runtime = Runtime::initialize(load_symbols()?)?;
     let device = runtime.select_gpu(GpuSelector::Ordinal(0))?;
-    if !device.name().starts_with("gfx12") {
-        return Err(format!("dispatch_floor requires gfx12, selected {}", device.name()).into());
-    }
+    // Accept any family this harness can encode PM4 for, rather than gfx12
+    // alone. The previous gfx12-only guard made every other architecture report
+    // the whole benchmark as unavailable, which is indistinguishable from PM4
+    // being unsupported on that part when in fact the encoders exist.
+    let family = FloorFamily::of(&device).ok_or_else(|| {
+        format!(
+            "dispatch_floor has no PM4 encoding for {}; supported: gfx10*, gfx11*, gfx120*",
+            device.name()
+        )
+    })?;
+    println!("device {} -> PM4 family {:?}", device.name(), family);
     let code: Arc<[u8]> = std::fs::read(&hsaco)?.into();
     let exec = Executable::load(&device, code)?;
 
