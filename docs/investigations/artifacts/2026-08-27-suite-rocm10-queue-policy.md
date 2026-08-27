@@ -82,3 +82,35 @@ comparison.
 - On gfx1151 the redline backend still fails to load its own code object
   (`hsa_executable_load_agent_code_object` -> `HSA_STATUS_ERROR_INCOMPATIBLE_ARGUMENTS`)
   after an arch-matched rebuild. Unresolved; the gfx1201 run above is unaffected.
+
+## gfx1100 control: the policy is inert where 4 was already right
+
+gfx1100's measured optimum is 4 lanes, which is exactly what the legacy hardcode
+used, so `legacy` and `auto` must agree there. They do — `independent_throughput/dispatch-grid`
+count=1, us/op:
+
+| policy | redline | vulkan | hipgraph | hip |
+| --- | ---: | ---: | ---: | ---: |
+| legacy (4) | 8.6400 | 9.3000 | 19.9800 | 15.0400 |
+| auto (4) | 7.9000 | 9.2800 | 19.8000 | 15.0800 |
+
+hip and hipgraph land within 0.3% across the two policies, and the redline delta
+(8.64 vs 7.90) is run variance in the same class as the count=941 outlier noted
+above, not a policy effect. `correctness=true mismatches=0` throughout, provenance
+`mixed=false`.
+
+This is the control the gfx1201 result needed: the policy changes numbers only
+where the hardcoded width was wrong for the part, rather than shifting everything
+uniformly.
+
+## Arch coverage actually achieved
+
+| arch | suite status |
+| --- | --- |
+| gfx1201 | full run, all four backends, legacy vs auto vs explicit-2 |
+| gfx1100 | full run, all four backends, legacy vs auto control |
+| gfx1151 | **blocked** — redline backend fails `hsa_executable_load_agent_code_object` with `HSA_STATUS_ERROR_INCOMPATIBLE_ARGUMENTS` even after an arch-matched rebuild. HIP, hipGraph and Vulkan arms initialise fine, so it is specific to the redline backend's own code-object load on this part. Unresolved. |
+| gfx1030 | **blocked upstream of the suite** — redline's PM4 path executes zero dispatches on RDNA2 (see the multi-queue artifact). A suite number here would be meaningless until that is fixed. |
+
+Two of four parts, not four. The two gaps have identified causes rather than
+being untried.
