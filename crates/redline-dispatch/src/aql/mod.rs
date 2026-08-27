@@ -11,15 +11,17 @@ mod generic;
 mod graph_pm4;
 mod queue_policy;
 mod replay;
-
+pub mod segment;
 pub use generic::{AqlKernelCatalog, GenericAqlError, PreparedAqlPlan};
 pub use graph_pm4::{GraphPm4Error, NodeDispatch, Pm4GraphReplay, lower_plan_to_pm4_ib};
 pub use queue_policy::{
     PartitionedQueueError, QueuePolicy, QueuePolicyParseError, create_queue_set,
     cu_mask_for_partition,
 };
+pub use segment::{
+    Segmentation, SegmentError, VerifyError, segment, segment_with_policy, verify_segmentation,
+};
 pub use redline_rocr::abi;
-pub use redline_rocr::selector;
 pub use redline_rocr::{
     AqlQueue, BARRIER_DEPENDENCY_CAPACITY, CompletionSignal, DeviceBuffer, DeviceIdentity,
     DevicePool, DeviceQuery, Executable, FenceScope, Gfx10KernelImage, Gfx10Pm4BuildError,
