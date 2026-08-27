@@ -180,3 +180,54 @@ reports `build_pm4_replay=skipped force_native=true` and
 2.248 us, gate ok`). Before the guard the same path lowered to PM4 that executed
 nothing. gfx1100 and gfx1151 are unaffected by the guard, and gfx1100 still takes
 `branch=pm4 replay`.
+
+## Root cause of the gfx1151 non-engagement: the interposer ignores the app's device
+
+The bundle matcher was never the problem. With candidate diagnostics added, one
+run settled it — app on HIP device 1 (gfx1151), hipx:
+
+```
+redline-hg: bundle magic=clang version=2 entries=2 device=gfx1100 candidates=[gfx1151] selected=none
+redline-hg: hipGraphLaunch branch=native_launch(force_native)
+```
+
+The bundle correctly contains `gfx1151`. The interposer was matching against
+**gfx1100**, because `crates/redline-hipgraph/src/lib.rs:330` hardcodes
+`GpuSelector::Ordinal(0)` and ROCr agent 0 on that host is gfx1100. HIP's device
+selection is simply not consulted.
+
+### It is a capability limit, not a wrong-device hazard
+
+The obvious fear is a same-architecture multi-GPU host, where the bundle WOULD
+match and PM4 could be replayed on a device the application never chose. Tested
+on hiptrx (5x gfx1201), which is exactly that configuration:
+
+| `HIP_VISIBLE_DEVICES` | instantiate | launch | gate |
+| --- | --- | --- | --- |
+| 0 | `build_pm4_replay=ok force_native=false` | `branch=pm4 replay` | ok, 0.939 us |
+| 1 | `build_pm4_replay=ok force_native=false` | `branch=native_launch(pm4 replay failed)` | ok |
+| 2 | `build_pm4_replay=ok force_native=false` | `branch=native_launch(pm4 replay failed)` | ok |
+
+Lowering succeeds because the architecture matches, then the replay **fails at
+launch** against memory that belongs to another device, and the interposer
+catches that and runs the native graph. The gate passes in all three cases.
+
+So the earlier concern was wrong in the safe direction, and worth stating plainly
+because it was my hypothesis: work is not executed on the wrong GPU. The system
+fails closed. What it does instead is attempt and abandon a PM4 replay on every
+single launch for any device other than ROCr agent 0, so devices 1+ pay the
+attempt and receive none of the benefit.
+
+Consequences worth fixing, in order:
+
+1. **Only ROCr agent 0 can ever benefit.** On any multi-GPU host every other
+   device silently gets native. This is invisible without `REDLINE_HG_DEBUG=1`.
+2. **A per-launch failed replay is pure overhead.** Once the first replay fails
+   for a device mismatch it will fail every time; it should set `force_native`
+   after the first failure rather than retrying forever.
+3. The fix is to bind the device the application is actually using — resolve
+   HIP's current device to its HSA agent — rather than assuming ordinal 0.
+
+None of this was visible before the candidate diagnostics existed. That is the
+argument for spending lines on a debug path that names both sides of a failed
+match.
