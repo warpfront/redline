@@ -231,3 +231,63 @@ Consequences worth fixing, in order:
 None of this was visible before the candidate diagnostics existed. That is the
 argument for spending lines on a debug path that names both sides of a failed
 match.
+
+## After the device-binding fix: gfx1151 was hiding the largest win
+
+With the interposer binding the application's actual GPU by PCI id, gfx1151 goes
+from getting nothing to the best result of the three parts. Same driver, three
+repeats, gate `ok` in every cell, us per dispatch.
+
+```
+redline-hg: runtime bind hip_ordinal=0 hip_pci=0000:bf:00.0 rocr_device=gfx1151
+            pci=0000:bf:00.0 rocr_index=1 selected via BDF
+```
+
+That line is the whole bug in one place: HIP ordinal 0 (because
+`HIP_VISIBLE_DEVICES=1` remaps it) resolves to PCI `0000:bf:00.0`, which is ROCr
+index **1**. The old code took ROCr index 0 and got gfx1100.
+
+| arch | chains | stock | `off` | `auto` | auto vs stock |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| gfx1151 | 2 | 0.904 | 0.512 | **0.273** | 3.31x |
+| gfx1151 | 4 | 1.007 | 0.516 | **0.146** | **6.90x** |
+| gfx1151 | 8 | 0.823 | 0.518 | **0.146** | 5.64x |
+| gfx1100 | 2 | 1.452 | 1.201 | **0.617** | 2.35x |
+| gfx1100 | 4 | 0.803 | 1.222 | **0.354** | 2.27x |
+| gfx1100 | 8 | 0.824 | 1.209 | **0.350** | 2.35x |
+| gfx1201 | 2 | 1.125 | 0.948 | **0.503** | 2.24x |
+| gfx1201 | 4 | 6.424 | **0.946** | 0.970 | 6.62x |
+| gfx1201 | 8 | 6.484 | **0.948** | 0.964 | 6.73x |
+
+Every previous gfx1151 measurement in this document — the "no effect" rows — was
+measuring gfx1100 through a gfx1151-labelled binary. They are superseded.
+
+`auto` now beats stock in **9 of 9 cells**, by 2.24x to 6.90x. `off` still loses
+in 2 of 9, both on gfx1100 at chains>=4.
+
+Also note gfx1151 is the only part where single-queue PM4 (`off`) beats stock at
+every chain count (0.512-0.518 vs 0.823-1.007), so its win is available even
+without segmentation, and segmentation then triples it.
+
+## The load-bearing caveat on all nine cells
+
+This is still ONE synthetic shape: `parallel-chains` with an empty kernel, a probe
+built to make independent paths obvious. Nine cells of one shape is not a basis
+for changing a default that affects every consumer, and the suite's own evidence
+says shape matters enormously — across its 240 rows redline wins 100% of
+dispatch-bound families and 40.8% of everything else, and loses outright on
+quantised matmul.
+
+Two things must land before the default is flipped:
+
+1. A benchmark shaped like a real inference engine. A transformer decode step is
+   a long serial chain, which `segment.rs` correctly reports as `Unsplittable`,
+   so the entire multi-queue result above may be unavailable to it and only the
+   per-dispatch PM4 saving would apply.
+2. The interposer must actually be reachable by such a consumer. An attempt to
+   drive the `hipfire-6409` suite's hipgraph arm through `LD_PRELOAD` produced
+   **zero** `redline-hg` lines: that suite loads HIP with `HipRuntime::load()`
+   (`examples/hipfire-6409/src/hip_backend.rs:260`), and `dlsym` on a private
+   handle returns libamdhip64's own symbol, bypassing interposition entirely.
+   Whether a real engine links HIP normally or dlopens it therefore decides
+   whether the drop-in path can reach it at all.
