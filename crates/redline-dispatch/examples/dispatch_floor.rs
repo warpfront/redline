@@ -29,7 +29,7 @@ use std::time::Instant;
 
 use redline_dispatch::aql::{
     BatchFencePolicy, Executable, Gfx10Pm4CommandBuffer, Gfx12Pm4CommandBuffer, GpuDevice,
-    GpuSelector, KernargPool, Kernel, LaunchGeometry, RecordedDispatch, Runtime,
+    GpuSelector, KernargPool, Kernel, LaunchGeometry, MultiQueuePm4Ib, RecordedDispatch, Runtime,
     SingleQueueBatchGraph, SingleQueuePm4Ib, load_symbols,
 };
 
@@ -195,6 +195,93 @@ impl FloorPm4 {
             _ => return Err("PM4 buffer encoding does not match device family".into()),
         })
     }
+}
+
+/// PM4 across several independent queue lanes, one retained IB per lane.
+///
+/// Why this arm exists: hipGraph on ROCm 10.0 gets 2.2x-3.6x from spreading a
+/// parallel-path graph across hardware queues, and the measured optimum is one
+/// chain per queue at a device-specific width. The single-queue PM4 arm cannot
+/// see that win at all, so comparing it against a *tuned* hipGraph understates
+/// PM4 by whatever the queue width is worth. This arm gives PM4 the same
+/// structural advantage: `lanes` command buffers, each holding N/lanes
+/// dispatches, submitted as `lanes` retained IBs on independent queues.
+///
+/// `serialize` orders dispatches within each lane, which mirrors a chain per
+/// lane; lanes are independent of each other by construction, exactly as
+/// ParallelChains builds the graph side.
+fn measure_pm4_multiqueue_host(
+    device: &GpuDevice,
+    exec: &Executable,
+    symbol: &str,
+    n: usize,
+    lanes: usize,
+    m: usize,
+    warmup: usize,
+    serialize: bool,
+) -> Result<(f64, usize), Box<dyn std::error::Error>> {
+    let family = FloorFamily::of(device)
+        .ok_or_else(|| format!("no PM4 encoding for device {}", device.name()))?;
+    let pool = KernargPool::discover(device)?;
+    let kernel = exec.kernel(symbol)?;
+    let kernarg = pool.allocate_for(kernel.metadata())?;
+    // Split N as evenly as possible; a remainder goes to the first lanes so the
+    // total dispatch count is exactly N and comparable to the other arms.
+    let base = n / lanes;
+    let extra = n % lanes;
+
+    let mut ib = match family {
+        FloorFamily::Gfx10 | FloorFamily::Gfx11 => {
+            let mut cmds = Vec::with_capacity(lanes);
+            for l in 0..lanes {
+                let count = base + usize::from(l < extra);
+                let mut c = Gfx10Pm4CommandBuffer::new_stateful();
+                for i in 0..count {
+                    let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1])?;
+                    c.dispatch(&kernel, geometry, 0, kernarg.address())?;
+                    if serialize && i + 1 < count {
+                        c.wait_compute_idle();
+                    }
+                }
+                cmds.push(c);
+            }
+            if family == FloorFamily::Gfx10 {
+                MultiQueuePm4Ib::create_gfx10(device, &pool, &cmds)?
+            } else {
+                MultiQueuePm4Ib::create_gfx11(device, &pool, &cmds)?
+            }
+        }
+        FloorFamily::Gfx12 => {
+            let mut cmds = Vec::with_capacity(lanes);
+            for l in 0..lanes {
+                let count = base + usize::from(l < extra);
+                let mut c = Gfx12Pm4CommandBuffer::new_stateful();
+                for i in 0..count {
+                    let geometry = LaunchGeometry::new([1, 1, 1], [1, 1, 1])?;
+                    c.dispatch(&kernel, geometry, 0, kernarg.address())?;
+                    if serialize && i + 1 < count {
+                        c.wait_compute_idle();
+                    }
+                }
+                cmds.push(c);
+            }
+            MultiQueuePm4Ib::create(device, &pool, &cmds)?
+        }
+    };
+
+    let queues = ib.queue_count();
+    for _ in 0..warmup {
+        // SAFETY: no-op kernels reference no external pointees; the retained IBs,
+        // code object and kernarg all outlive `ib`.
+        unsafe { ib.replay_and_wait()? };
+    }
+    let mut per = Vec::with_capacity(m);
+    for _ in 0..m {
+        let t0 = Instant::now();
+        unsafe { ib.replay_and_wait()? };
+        per.push(t0.elapsed().as_secs_f64() * 1e6);
+    }
+    Ok((median(per), queues))
 }
 
 /// The PM4 champion: lower the same N dispatches into ONE retained PM4 indirect
@@ -393,5 +480,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         pm4_aggr,
         pm4_aggr / n as f64
     );
+
+    // Multi-queue lanes. Swept rather than fixed, because the useful width is
+    // device-specific: the graph side peaks at one chain per queue at a width
+    // that is 2 on some parts and 5 on others, and cannot be derived from
+    // published device properties. `queues` is what the runtime actually gave
+    // us, which may be less than requested.
+    let lane_counts = std::env::var("REDLINE_FLOOR_LANES")
+        .ok()
+        .map(|s| {
+            s.split(',')
+                .filter_map(|t| t.trim().parse::<usize>().ok())
+                .filter(|&l| l >= 1)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec![2, 4, 5, 8]);
+    for lanes in lane_counts {
+        if lanes > n {
+            continue;
+        }
+        match measure_pm4_multiqueue_host(&device, &exec, &symbol, n, lanes, m, warmup, true) {
+            Ok((us, queues)) => println!(
+                "  {:<52} {:>10.3} {:>10.4}   {} queue(s)",
+                format!("PM4 multi-queue — conservative, {lanes} lane(s)"),
+                us,
+                us / n as f64,
+                queues
+            ),
+            // A lane count the runtime refuses is information, not a failure:
+            // report it and keep going rather than aborting the whole sweep.
+            Err(e) => println!(
+                "  {:<52} {}",
+                format!("PM4 multi-queue — {lanes} lane(s)"),
+                e
+            ),
+        }
+    }
     Ok(())
 }
