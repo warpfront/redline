@@ -36,11 +36,34 @@
 // Run:   ./gdf [N] [replays] [warmups]
 
 #include <hip/hip_runtime.h>
+#include <dlfcn.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
+
+// Every number this probe prints is only meaningful if we know which runtime
+// produced it. A side-by-side ROCm install makes it easy to believe an arm ran
+// against one version when it actually loaded another: hipcc emits no RPATH and
+// /opt/rocm/core is a symlink to one specific version, so an unset or wrong
+// LD_LIBRARY_PATH silently redirects the whole measurement. That failure is
+// invisible in the results except that the two arms agree suspiciously well.
+//
+// So the probe reports its own provenance, from inside the process, before it
+// reports any timing: the HIP runtime version it actually loaded, and the
+// on-disk object that supplied a HIP symbol as resolved by dladdr. Neither can
+// be faked by the environment that launched it.
+static void print_runtime_provenance() {
+    int rt = -1;
+    hipRuntimeGetVersion(&rt);
+    Dl_info info{};
+    const char* who = "(unresolved)";
+    if (dladdr((void*)&hipRuntimeGetVersion, &info) && info.dli_fname)
+        who = info.dli_fname;
+    printf("runtime: hipRuntimeGetVersion=%d  libamdhip64=%s\n", rt, who);
+}
 
 #define OK(x)                                                                    \
     do {                                                                         \
@@ -173,14 +196,37 @@ static Result run_shape(int n, int replays, int warmups, Shape shape,
 }
 
 int main(int argc, char** argv) {
-    const int n = argc > 1 ? atoi(argv[1]) : 512;
-    const int replays = argc > 2 ? atoi(argv[2]) : 200;
-    const int warmups = argc > 3 ? atoi(argv[3]) : 20;
+    // Positional: N, replays, warmups. Optional --only=<shape> restricts the run
+    // to a single graph shape.
+    //
+    // Why --only exists: a profiler trace from a run containing all three shapes
+    // has to be split back into phases afterwards, and on runtimes whose
+    // dispatch records carry no graph identity that split can only be done by
+    // assuming fixed-size blocks in time order. Running one shape per process
+    // makes the whole trace unambiguously that shape, so the scheduling evidence
+    // needs no assumption at all.
+    const char* only = nullptr;
+    std::vector<const char*> pos;
+    for (int i = 1; i < argc; ++i) {
+        if (strncmp(argv[i], "--only=", 7) == 0) only = argv[i] + 7;
+        else pos.push_back(argv[i]);
+    }
+    const int n = pos.size() > 0 ? atoi(pos[0]) : 512;
+    const int replays = pos.size() > 1 ? atoi(pos[1]) : 200;
+    const int warmups = pos.size() > 2 ? atoi(pos[2]) : 20;
+    const bool do_chain = !only || strcmp(only, "chain") == 0;
+    const bool do_indep = !only || strcmp(only, "independent") == 0;
+    const bool do_fanout = !only || strcmp(only, "fanout") == 0;
+    if (only && !do_chain && !do_indep && !do_fanout) {
+        printf("unknown --only=%s (expected chain|independent|fanout)\n", only);
+        return 1;
+    }
 
     OK(hipSetDevice(0));
     hipDeviceProp_t p;
     OK(hipGetDeviceProperties(&p, 0));
     printf("=== %s (%s) ===\n", p.name, p.gcnArchName);
+    print_runtime_provenance();
     printf("N=%d kernel nodes, %d replays (median), %d warmups\n", n, replays, warmups);
     printf("Same kernel and node count in every arm; only the DAG edges differ.\n\n");
     printf("  %-14s %9s %9s   %-6s %s\n", "graph shape", "host us", "event us",
@@ -189,19 +235,33 @@ int main(int argc, char** argv) {
     unsigned long long* d = nullptr;
     OK(hipMalloc(&d, sizeof(unsigned long long)));
 
-    Result chain = run_shape(n, replays, warmups, Shape::Chain, d);
-    printf("  %-14s %9.3f %9.3f   %s\n", "chain", chain.host_us, chain.event_us,
-           chain.correct ? "ok" : "MISMATCH");
-
-    Result indep = run_shape(n, replays, warmups, Shape::Independent, d);
-    printf("  %-14s %9.3f %9.3f   %s\n", "independent", indep.host_us, indep.event_us,
-           indep.correct ? "ok" : "MISMATCH");
-
-    Result fj = run_shape(n, replays, warmups, Shape::FanoutJoin, d);
-    printf("  %-14s %9.3f %9.3f   %s\n", "fanout-join", fj.host_us, fj.event_us,
-           fj.correct ? "ok" : "MISMATCH");
+    Result chain{}, indep{}, fj{};
+    if (do_chain) {
+        chain = run_shape(n, replays, warmups, Shape::Chain, d);
+        printf("  %-14s %9.3f %9.3f   %s\n", "chain", chain.host_us, chain.event_us,
+               chain.correct ? "ok" : "MISMATCH");
+    }
+    if (do_indep) {
+        indep = run_shape(n, replays, warmups, Shape::Independent, d);
+        printf("  %-14s %9.3f %9.3f   %s\n", "independent", indep.host_us,
+               indep.event_us, indep.correct ? "ok" : "MISMATCH");
+    }
+    if (do_fanout) {
+        fj = run_shape(n, replays, warmups, Shape::FanoutJoin, d);
+        printf("  %-14s %9.3f %9.3f   %s\n", "fanout-join", fj.host_us, fj.event_us,
+               fj.correct ? "ok" : "MISMATCH");
+    }
 
     OK(hipFree(d));
+
+    // With --only there is nothing to compare, so skip the interpretation
+    // entirely rather than print a ratio against an unpopulated arm.
+    if (only) {
+        const Result& r = do_chain ? chain : (do_indep ? indep : fj);
+        printf("\nsingle-shape run (--only=%s); gate %s\n", only,
+               r.correct ? "passed" : "FAILED");
+        return r.correct ? 0 : 2;
+    }
 
     printf("\n--- reading ---\n");
     if (!chain.correct || !indep.correct || !fj.correct) {
