@@ -33,11 +33,34 @@
 //!
 //! # What these numbers do and do not cover
 //!
-//! The table is submission cost for empty kernels: it measures the dispatch
-//! path, not occupancy. A device's best lane count for real kernels that
-//! contend for CUs, cache or memory bandwidth may differ, and nothing here
-//! claims otherwise. Callers with a real workload should measure it and pass
-//! [`LaneWidth::Explicit`].
+//! The table is submission cost for empty kernels at one work shape: N=512
+//! dispatches of a 1x1x1 grid. It measures the dispatch path, not occupancy.
+//!
+//! That caveat is not hypothetical. Measured afterwards on gfx1201 with the
+//! `hipfire-6409` suite, three repeats per point, HIP independent-throughput
+//! us/op, comparing 4 lanes against this table's 2:
+//!
+//! | dispatches | grid groups | 4 lanes | 2 lanes | better |
+//! | ---: | ---: | ---: | ---: | --- |
+//! | 50 | 1 | 9.5 | 4.3 | 2 lanes, 2.21x |
+//! | 200 | 1 | 8.0 | 3.3 | 2 lanes, 2.40x |
+//! | 941 | 1 | 7.6 | 14.9 | **4 lanes, 1.96x** |
+//! | 941 | 128 | 8.6 | 15.5 | **4 lanes, 1.79x** |
+//! | 941 | 1024 | 17.5 | 12.2 | 2 lanes, 1.44x |
+//! | 941 | 8192 | 65 | 51 | 2 lanes, 1.26x |
+//!
+//! The preferred width **reverses with work shape on a single device**, by up to
+//! 2.4x either way, and the direction is stable across repeats rather than
+//! noise. Across the suite's eleven kernel families, six preferred 4 lanes and
+//! four preferred 2 with a consistent sign over three runs.
+//!
+//! So [`measured_lanes`] returning one integer per device is the wrong shape for
+//! the real problem, and is kept only because it is an honest record of one
+//! measured point: submission-bound work, small grids, at the stated N. Treating
+//! it as a device-wide optimum will cost roughly 2x on the shapes that want the
+//! other width. A caller with a real workload MUST measure its own shapes and
+//! pass [`LaneWidth::Explicit`], or drive [`LaneWidth::Probe`]; that is not
+//! defensive boilerplate, it is the measured conclusion.
 //!
 //! # Runtime probing
 //!
