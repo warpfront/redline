@@ -106,3 +106,68 @@ headline timing.
   one.
 - Whether real workloads see the N>=64 effect. Every number here is a no-op
   kernel, so these are submission-cost ratios, not application speedups.
+
+---
+
+# CORRECTION (2026-08-27, later): 10.0 does use multiple queues
+
+**The claim above that ROCm 10.0 "places every dispatch on a single queue
+regardless of the declared dependency structure" is too strong and is
+withdrawn.** It was measured only on shapes that do not segment.
+
+10.0's executor derives segments from *execution paths*. A graph of N
+dependency-free singletons is one dependency level, and a fanout-join is a
+single level plus a join, so both plausibly reduce to one segment and therefore
+one stream. Neither shape can show segmentation working even if it does.
+
+Adding `Shape::ParallelChains` — `chains` independent serial chains of equal
+length, so the graph contains exactly `chains` distinct execution paths — shows
+the opposite result. gfx1201, N=512, one shape per process, rocprofv3
+`--kernel-trace`, 2048 dispatches per trace:
+
+| ROCm | chains | queues | distribution |
+| --- | ---: | ---: | --- |
+| 7.14 | 2 | 3 | q1:1024, q3:1022, q2:2 |
+| 7.14 | 4 | 4 | q1:512, q2:512, q3:512, q4:512 |
+| **10.0** | **2** | **2** | **q3:1024, q2:1024** |
+| **10.0** | **4** | **4** | **q1:512, q2:512, q4:512, q3:512** |
+
+**ROCm 10.0 distributes parallel-path graphs across multiple hardware queues,
+in perfectly even splits.** The segmentation machinery works; the earlier
+single-queue observation is a property of the shapes tested, not of the runtime.
+
+Timing, us/dispatch, 3 runs each, reproducible:
+
+| ROCm | chains=2 | chains=4 |
+| --- | ---: | ---: |
+| 7.14 | 12.820 / 13.092 / 13.001 | 6.469 / 6.412 / 6.410 |
+| 10.0 | **1.140 / 1.139 / 1.139** | 6.437 / 6.403 / 6.401 |
+
+At two chains 10.0 is **11.3x faster than 7.14** and **1.94x faster than a
+single chain** on the same runtime (2.206). At four chains the two releases
+converge (~6.4) and both are worse than a single chain, which is not explained
+here.
+
+## What this changes
+
+- The **mechanism** section above still holds for the shapes it measured:
+  independent singletons and fanout-join do land on one queue under 10.0 and
+  were spread across four under 7.14.
+- The **generalisation** does not hold. 10.0 has a working multi-queue graph
+  path, reachable by giving it a graph with distinct execution paths.
+- Consequently the framing of 10.0 as having "stopped spreading" is wrong. It
+  changed *which* shapes it spreads, and for parallel-path graphs at two chains
+  it is dramatically better than 7.14 rather than worse.
+- Anything published from the earlier reading must be corrected. The
+  `2026-08-27-graph-shape-rocm714-vs-100.md` timing tables remain accurate as
+  measurements; their interpretation as "10.0 removed concurrency" does not.
+
+## Still unexplained
+
+- Why chains=2 is 5.6x better than chains=4 on 10.0 despite both being
+  multi-queue with even splits.
+- Why 7.14 at chains=2 is 12.8 us — worse than its own single chain (2.168) and
+  worse than its four-chain case — while using 2-3 queues.
+- Whether `stream_id` differing between releases (10.0 reports one stream while
+  distributing across queues; 7.14 reports two) reflects a real difference or
+  only a change in how the field is populated.

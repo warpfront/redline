@@ -86,7 +86,20 @@ static double median(std::vector<double>& v) {
     return (v.size() & 1) ? v[m] : 0.5 * (v[m - 1] + v[m]);
 }
 
-enum class Shape { Chain, Independent, FanoutJoin };
+// ParallelChains exists because the other three shapes may not exercise graph
+// segmentation at all. ROCm 10.0's graph executor derives segments from
+// *execution paths* and schedules them across a bounded number of streams, so a
+// graph of N dependency-free singletons plausibly collapses to a single segment
+// (everything at one dependency level) and a strict chain is trivially one path.
+// Neither would produce multi-stream output even if the machinery works.
+//
+// ParallelChains builds `chains` independent serial chains of equal length, so
+// the graph contains exactly `chains` distinct execution paths. That is the
+// shape a real decode step resembles, and it is the one that should segment.
+enum class Shape { Chain, Independent, FanoutJoin, ParallelChains };
+
+// Number of independent chains for Shape::ParallelChains; set from --chains=.
+static int g_chains = 4;
 
 // Builds a graph of `n` kernel nodes with the requested dependency structure.
 static hipGraph_t build(int n, Shape shape, unsigned long long* d_counter) {
@@ -128,6 +141,22 @@ static hipGraph_t build(int n, Shape shape, unsigned long long* d_counter) {
                     OK(hipGraphAddKernelNode(&node, g, nodes.data(),
                                              (size_t)nodes.size(), &np));
                 }
+                break;
+            }
+            case Shape::ParallelChains: {
+                // `chains` independent chains, laid out round-robin so chain c
+                // owns nodes c, c+chains, c+2*chains, ... Each node depends on
+                // the previous node of its own chain and on nothing else, so the
+                // graph has exactly `chains` distinct execution paths.
+                const int c = i % g_chains;
+                const int prev = i - g_chains;
+                if (prev < 0) {
+                    OK(hipGraphAddKernelNode(&node, g, nullptr, 0, &np));
+                } else {
+                    hipGraphNode_t dep = nodes[prev];
+                    OK(hipGraphAddKernelNode(&node, g, &dep, 1, &np));
+                }
+                (void)c;
                 break;
             }
         }
@@ -209,16 +238,23 @@ int main(int argc, char** argv) {
     std::vector<const char*> pos;
     for (int i = 1; i < argc; ++i) {
         if (strncmp(argv[i], "--only=", 7) == 0) only = argv[i] + 7;
+        else if (strncmp(argv[i], "--chains=", 9) == 0) g_chains = atoi(argv[i] + 9);
         else pos.push_back(argv[i]);
     }
     const int n = pos.size() > 0 ? atoi(pos[0]) : 512;
     const int replays = pos.size() > 1 ? atoi(pos[1]) : 200;
     const int warmups = pos.size() > 2 ? atoi(pos[2]) : 20;
+    if (g_chains < 1) g_chains = 1;
     const bool do_chain = !only || strcmp(only, "chain") == 0;
     const bool do_indep = !only || strcmp(only, "independent") == 0;
     const bool do_fanout = !only || strcmp(only, "fanout") == 0;
-    if (only && !do_chain && !do_indep && !do_fanout) {
-        printf("unknown --only=%s (expected chain|independent|fanout)\n", only);
+    // parallel-chains is opt-in only: it is a different question from the other
+    // three (does segmentation happen at all) and mixing it into the default run
+    // would change the shape count that profiler traces are split by.
+    const bool do_pchains = only && strcmp(only, "parallel-chains") == 0;
+    if (only && !do_chain && !do_indep && !do_fanout && !do_pchains) {
+        printf("unknown --only=%s (expected chain|independent|fanout|parallel-chains)\n",
+               only);
         return 1;
     }
 
@@ -235,7 +271,7 @@ int main(int argc, char** argv) {
     unsigned long long* d = nullptr;
     OK(hipMalloc(&d, sizeof(unsigned long long)));
 
-    Result chain{}, indep{}, fj{};
+    Result chain{}, indep{}, fj{}, pc{};
     if (do_chain) {
         chain = run_shape(n, replays, warmups, Shape::Chain, d);
         printf("  %-14s %9.3f %9.3f   %s\n", "chain", chain.host_us, chain.event_us,
@@ -251,13 +287,21 @@ int main(int argc, char** argv) {
         printf("  %-14s %9.3f %9.3f   %s\n", "fanout-join", fj.host_us, fj.event_us,
                fj.correct ? "ok" : "MISMATCH");
     }
+    if (do_pchains) {
+        pc = run_shape(n, replays, warmups, Shape::ParallelChains, d);
+        char label[32];
+        snprintf(label, sizeof(label), "chains=%d", g_chains);
+        printf("  %-14s %9.3f %9.3f   %s\n", label, pc.host_us, pc.event_us,
+               pc.correct ? "ok" : "MISMATCH");
+    }
 
     OK(hipFree(d));
 
     // With --only there is nothing to compare, so skip the interpretation
     // entirely rather than print a ratio against an unpopulated arm.
     if (only) {
-        const Result& r = do_chain ? chain : (do_indep ? indep : fj);
+        const Result& r = do_chain ? chain
+                                   : (do_indep ? indep : (do_fanout ? fj : pc));
         printf("\nsingle-shape run (--only=%s); gate %s\n", only,
                r.correct ? "passed" : "FAILED");
         return r.correct ? 0 : 2;
