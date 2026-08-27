@@ -99,3 +99,84 @@ work-shape reversal recorded in `lanes.rs`.
   (`REDLINE_USE_MOLD=1`, mold 2.40.4 installed for this measurement). This is
   pre-existing — it reproduces at `455ff07` and `588bf22` — and is a real
   portability defect for anyone shipping the interposer.
+
+## Cross-architecture: the picture is not one story, and the default is wrong
+
+Same driver, same method, three repeats, gate `ok` in every cell. Medians, us per
+dispatch. `off` is the shipped default (single-queue PM4); `auto` resolves the
+lane budget from `lanes::measured_lanes` (gfx1201 => 2, gfx1100 => 4).
+
+| arch | chains | stock | `off` | `auto` | best vs stock |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| gfx1201 | 2 | 1.125 | 0.948 | **0.503** | 2.24x |
+| gfx1201 | 4 | 6.424 | **0.946** | 0.970 | 6.79x |
+| gfx1201 | 8 | 6.484 | **0.948** | 0.964 | 6.84x |
+| gfx1100 | 2 | 1.434 | 1.202 | **0.626** | 2.29x |
+| gfx1100 | 4 | 0.805 | 1.215 | **0.354** | 2.27x |
+| gfx1100 | 8 | 0.828 | 1.220 | **0.349** | 2.37x |
+| gfx1151 | 2 | 0.904 | 0.907 | 0.903 | none |
+| gfx1151 | 4 | 1.005 | 1.005 | 1.006 | none |
+| gfx1151 | 8 | 0.811 | 0.818 | 0.811 | none |
+
+### The shipped default is harmful on gfx1100
+
+At chains=4 and 8, single-queue PM4 (`off`, 1.215-1.220) is **1.47-1.51x SLOWER
+than stock hipGraph** (0.805-0.828). Stock spreads independent paths across
+queues; single-queue PM4 refuses to, and on a part with a usable width of 4 that
+loss exceeds everything PM4 saves on submission.
+
+This is not a regression introduced by the segmentation work — the interposer was
+always single-queue, so this is what it has always done on gfx1100. Naming `off`
+as "preserves existing behaviour" is accurate and simultaneously an
+understatement: the existing behaviour was the wrong choice on that part.
+
+Segmentation reverses it completely: `auto` is 2.27-2.37x faster than stock and
+**3.44x faster than the current default**. That is the case for making `auto` the
+default, and it should be made once gfx1151 works and more shapes are covered.
+
+The two parts want opposite things from the default, but not symmetrically:
+`auto` costs gfx1201 1.9% at chains>=4 (0.965 vs 0.947) and gains gfx1100 244%.
+
+### gfx1201 and gfx1100 win by different mechanisms
+
+gfx1201's advantage is PM4 lowering itself: stock collapses to 6.4 us past its
+2-wide queue limit, and PM4 is immune at ~0.947 regardless of chain count.
+Segmentation adds nothing beyond chains=2 because the budget is 2.
+
+gfx1100's advantage is almost entirely segmentation: stock is already competent
+(0.805-0.828) because 4 paths fit its 4-wide width, PM4 alone loses, and only
+PM4 *plus* four lanes wins. Same interposer, same flag, opposite reasons.
+
+So "the interposer is worth Nx" is not a well-formed claim. It is worth 6.8x on
+gfx1201 by avoiding a cliff, 2.3x on gfx1100 by exploiting width, and 0x on
+gfx1151 because of a bug.
+
+### gfx1151: the interposer never engages
+
+All three configurations are identical to stock within noise, because it silently
+falls back:
+
+```
+redline-hg: bundle magic=clang version=2 entries=2 selected=none
+redline-hg: hipGraphInstantiate build_pm4_replay=skipped force_native=true
+redline-hg: hipGraphLaunch branch=native_launch(force_native)
+```
+
+The fat binary is captured and the bundle parsed, but no entry matches the
+gfx1151 agent, so it degrades honestly to native HIP. Correct behaviour, zero
+benefit. gfx1201 and gfx1100 report `selected=gfx1201` / `selected=gfx1100` and
+`branch=pm4 replay` on the same code path.
+
+Hypothesis, not yet proven: this is the same defect as the `hipfire-6409` suite's
+redline backend failing only on gfx1151 with
+`hsa_executable_load_agent_code_object ... HSA_STATUS_ERROR_INCOMPATIBLE_ARGUMENTS`
+after an arch-matched rebuild. One target-string mismatch, two symptoms.
+
+### The fail-closed guard verified on hardware
+
+With RDNA1/RDNA2 refused at family selection, gfx1030 through the interposer now
+reports `build_pm4_replay=skipped force_native=true` and
+`branch=native_launch(force_native)`, and the driver's own gate passes (`chains=2
+2.248 us, gate ok`). Before the guard the same path lowered to PM4 that executed
+nothing. gfx1100 and gfx1151 are unaffected by the guard, and gfx1100 still takes
+`branch=pm4 replay`.
