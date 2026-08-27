@@ -239,14 +239,36 @@ fn names_match(requested: &str, candidate: &str) -> bool {
         || candidate == format!("{req_base}.kd")
 }
 
+fn gfx_base_arch(name: &str) -> Option<&str> {
+    // Split off target-feature suffixes like `:xnack-` or `:sramecc+`.
+    // Mirrors `Pm4Family::from_name` in `crates/redline-dispatch/src/aql/graph_pm4.rs:178`,
+    // which does `name.split(':').next()` before matching. The base before the
+    // first ':' is the architecture identity; feature flags after it do not
+    // affect loadability and ordering is irrelevant. This is intentionally
+    // stricter than the previous `take_while(is_alphanumeric)` which also
+    // stripped `-generic` and could collapse `gfx1151-generic` to `gfx1151`.
+    // For bundle selection a generic target must NOT implicitly match a specific
+    // part — that would load the wrong code object. `gfx1151-generic` and
+    // `gfx11-generic` therefore remain distinct from `gfx1151` and correctly
+    // refuse to match unless we explicitly justify a fallback (we don't).
+    let base = name.split(':').next().unwrap_or(name);
+    if base.starts_with("gfx") && base.len() > 3 {
+        Some(base)
+    } else {
+        None
+    }
+}
+
+#[allow(dead_code)]
 fn gfx_arch_prefix(name: &str) -> Option<&str> {
-    let suffix = name.strip_prefix("gfx")?;
-    let suffix_len = suffix
-        .as_bytes()
-        .iter()
-        .take_while(|byte| byte.is_ascii_alphanumeric())
-        .count();
-    (suffix_len > 0).then(|| &name[..3 + suffix_len])
+    gfx_base_arch(name)
+}
+
+/// One candidate bundle entry for debug reporting.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BundleCandidate<'a> {
+    pub(crate) raw_target: &'a str,
+    pub(crate) base: Option<&'a str>,
 }
 
 pub(crate) struct BundleDebugInfo<'a> {
@@ -254,6 +276,8 @@ pub(crate) struct BundleDebugInfo<'a> {
     pub(crate) version: u64,
     pub(crate) entries: u64,
     pub(crate) selected: Option<&'a str>,
+    pub(crate) device: String,
+    pub(crate) candidates: Vec<BundleCandidate<'a>>,
 }
 
 pub(crate) fn bundle_debug_info<'a>(
@@ -266,6 +290,8 @@ pub(crate) fn bundle_debug_info<'a>(
             version: u64::from(read_u16_at(bundle, CCOB_MAGIC.len())?),
             entries: 0,
             selected: None,
+            device: device_name.to_owned(),
+            candidates: Vec::new(),
         });
     }
     if !bundle.starts_with(CLANG_OFFLOAD_BUNDLE_MAGIC) {
@@ -274,10 +300,12 @@ pub(crate) fn bundle_debug_info<'a>(
             version: 0,
             entries: 0,
             selected: None,
+            device: device_name.to_owned(),
+            candidates: Vec::new(),
         });
     }
 
-    let device_arch = gfx_arch_prefix(device_name);
+    let device_arch = gfx_base_arch(device_name);
     let selected_image = select_bundle_code_object(bundle, device_name);
     let mut cursor = CLANG_OFFLOAD_BUNDLE_MAGIC.len();
     let entries = read_u64(bundle, &mut cursor)?;
@@ -285,6 +313,7 @@ pub(crate) fn bundle_debug_info<'a>(
         return None;
     }
     let mut selected = None;
+    let mut candidates = Vec::new();
     for _ in 0..entries {
         let _offset = read_u64(bundle, &mut cursor)?;
         let _size = read_u64(bundle, &mut cursor)?;
@@ -295,9 +324,13 @@ pub(crate) fn bundle_debug_info<'a>(
         let Some((kind, target)) = id.rsplit_once("--") else {
             continue;
         };
-        if selected_image.is_some() && kind.contains("amdgcn-amd-amdhsa") {
-            let target_arch = gfx_arch_prefix(target);
-            if target_arch == device_arch {
+        if kind.contains("amdgcn-amd-amdhsa") {
+            let target_arch = gfx_base_arch(target);
+            candidates.push(BundleCandidate {
+                raw_target: target,
+                base: target_arch,
+            });
+            if selected_image.is_some() && target_arch == device_arch {
                 selected = target_arch;
             }
         }
@@ -307,12 +340,18 @@ pub(crate) fn bundle_debug_info<'a>(
         version: CLANG_OFFLOAD_BUNDLE_VERSION,
         entries,
         selected,
+        device: device_name.to_owned(),
+        candidates,
     })
 }
-
 /// Select the AMDGPU code object whose bundle target architecture matches the
-/// device's leading `gfx...` architecture name. Target feature suffixes such as
-/// `:xnack+` do not affect architecture matching.
+/// device's base architecture name. Target feature suffixes such as
+/// `:xnack+` or `:sramecc+` are stripped before comparison (split on `:`),
+/// matching `Pm4Family::from_name`. Ordering of features is irrelevant. An
+/// entry whose base differs (e.g. `gfx1100` vs `gfx1151`) is never selected,
+/// and a generic target like `gfx11-generic` does not match `gfx1151` — it
+/// would be a wrong code object, not a fallback. When no entry matches, `None`
+/// is returned and the caller must force native HIP.
 pub(crate) fn select_bundle_code_object<'a>(
     bundle: &'a [u8],
     device_name: &str,
@@ -320,7 +359,7 @@ pub(crate) fn select_bundle_code_object<'a>(
     if !bundle.starts_with(CLANG_OFFLOAD_BUNDLE_MAGIC) {
         return None;
     }
-    let device_arch = gfx_arch_prefix(device_name)?;
+    let device_arch = gfx_base_arch(device_name)?;
     let mut cursor = CLANG_OFFLOAD_BUNDLE_MAGIC.len();
     let bundle_count = read_u64(bundle, &mut cursor)?;
     if bundle_count > 1024 {
@@ -342,7 +381,7 @@ pub(crate) fn select_bundle_code_object<'a>(
         if !kind.contains("amdgcn-amd-amdhsa") {
             continue;
         }
-        let target_arch = gfx_arch_prefix(target);
+        let target_arch = gfx_base_arch(target);
         if target_arch == Some(device_arch) && selected.replace(payload).is_some() {
             return None;
         }
@@ -1395,7 +1434,6 @@ mod tests {
         // SAFETY: garbage is a live local; inference fails after magic probe.
         assert!(unsafe { copy_code_object_image(garbage.as_ptr().cast()) }.is_none());
     }
-
     #[test]
     fn unknown_kernel_falls_back() {
         let msg = synthetic_metadata_msgpack("other", "other.kd", 8, &[("by_value", 0, 8)]);
@@ -1404,5 +1442,197 @@ mod tests {
         assert!(!layout.from_metadata);
         assert_eq!(layout.symbol, "missing.kd");
         assert_eq!(layout.segment_size, 16);
+    }
+
+    // ------------------------------------------------------------------
+    // Bundle matcher tests required by the gfx1151 fix.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn bundle_exact_match_selects() {
+        let elf = synthetic_elf_with_metadata(&synthetic_metadata_msgpack(
+            "k",
+            "k.kd",
+            8,
+            &[("by_value", 0, 8)],
+        ));
+        let bundle = wrap_bundle_entries(&[
+            (b"hipv4-amdgcn-amd-amdhsa--gfx1151", elf.as_slice()),
+            (b"host-x86_64-unknown-linux-gnu", b"host"),
+        ]);
+        // Exact match: device gfx1151 finds gfx1151 entry.
+        let sel = select_bundle_code_object(&bundle, "gfx1151").expect("exact");
+        assert_eq!(sel, elf.as_slice());
+        let info = bundle_debug_info(&bundle, "gfx1151").unwrap();
+        assert_eq!(info.selected, Some("gfx1151"));
+        assert_eq!(info.device, "gfx1151");
+        assert_eq!(info.candidates.len(), 1);
+        assert_eq!(info.candidates[0].raw_target, "gfx1151");
+        assert_eq!(info.candidates[0].base, Some("gfx1151"));
+    }
+
+    #[test]
+    fn bundle_matches_feature_suffix_on_bundle_side() {
+        let elf = synthetic_elf_with_metadata(&synthetic_metadata_msgpack(
+            "k",
+            "k.kd",
+            8,
+            &[("by_value", 0, 8)],
+        ));
+        // Bundle entry carries feature suffix, device does not.
+        let bundle = wrap_bundle_entries(&[(
+            b"hipv4-amdgcn-amd-amdhsa--gfx1151:xnack-",
+            elf.as_slice(),
+        )]);
+        let sel = select_bundle_code_object(&bundle, "gfx1151").expect("bundle suffix");
+        assert_eq!(sel, elf.as_slice());
+        let info = bundle_debug_info(&bundle, "gfx1151").unwrap();
+        assert_eq!(info.selected, Some("gfx1151"));
+        assert_eq!(info.candidates[0].raw_target, "gfx1151:xnack-");
+        assert_eq!(info.candidates[0].base, Some("gfx1151"));
+    }
+
+    #[test]
+    fn bundle_matches_feature_suffix_on_agent_side() {
+        let elf = synthetic_elf_with_metadata(&synthetic_metadata_msgpack(
+            "k",
+            "k.kd",
+            8,
+            &[("by_value", 0, 8)],
+        ));
+        // Device carries feature suffix, bundle does not.
+        let bundle = wrap_bundle_entries(&[(
+            b"hipv4-amdgcn-amd-amdhsa--gfx1151",
+            elf.as_slice(),
+        )]);
+        let sel = select_bundle_code_object(&bundle, "gfx1151:xnack+").expect("agent suffix");
+        assert_eq!(sel, elf.as_slice());
+        let info = bundle_debug_info(&bundle, "gfx1151:xnack+").unwrap();
+        assert_eq!(info.selected, Some("gfx1151"));
+        assert_eq!(info.device, "gfx1151:xnack+");
+    }
+
+    #[test]
+    fn bundle_feature_suffix_ordering_ignored() {
+        let elf = synthetic_elf_with_metadata(&synthetic_metadata_msgpack(
+            "k",
+            "k.kd",
+            8,
+            &[("by_value", 0, 8)],
+        ));
+        let bundle = wrap_bundle_entries(&[(
+            b"hipv4-amdgcn-amd-amdhsa--gfx1151:sramecc+:xnack-",
+            elf.as_slice(),
+        )]);
+        // Agent order differs but base same.
+        let sel =
+            select_bundle_code_object(&bundle, "gfx1151:xnack-:sramecc+").expect("ordering");
+        assert_eq!(sel, elf.as_slice());
+    }
+
+    #[test]
+    fn bundle_refuses_different_architecture() {
+        let elf = synthetic_elf_with_metadata(&synthetic_metadata_msgpack(
+            "k",
+            "k.kd",
+            8,
+            &[("by_value", 0, 8)],
+        ));
+        let bundle = wrap_bundle_entries(&[(
+            b"hipv4-amdgcn-amd-amdhsa--gfx1100",
+            elf.as_slice(),
+        )]);
+        // gfx1100 entry must never serve gfx1151.
+        assert!(select_bundle_code_object(&bundle, "gfx1151").is_none());
+        assert!(select_bundle_code_object(&bundle, "gfx1151:xnack-").is_none());
+        let info = bundle_debug_info(&bundle, "gfx1151").unwrap();
+        assert_eq!(info.selected, None);
+        assert_eq!(info.device, "gfx1151");
+        assert_eq!(info.candidates[0].raw_target, "gfx1100");
+        assert_eq!(info.candidates[0].base, Some("gfx1100"));
+        // And gfx1151 entry must not serve gfx1100.
+        let bundle2 = wrap_bundle_entries(&[(
+            b"hipv4-amdgcn-amd-amdhsa--gfx1151",
+            elf.as_slice(),
+        )]);
+        assert!(select_bundle_code_object(&bundle2, "gfx1100").is_none());
+        // Also gfx11-generic must not serve gfx1151.
+        let bundle3 = wrap_bundle_entries(&[(
+            b"hipv4-amdgcn-amd-amdhsa--gfx11-generic",
+            elf.as_slice(),
+        )]);
+        assert!(select_bundle_code_object(&bundle3, "gfx1151").is_none());
+        assert!(select_bundle_code_object(&bundle3, "gfx1100").is_none());
+        let info3 = bundle_debug_info(&bundle3, "gfx1151").unwrap();
+        assert_eq!(info3.selected, None);
+        assert_eq!(info3.candidates[0].raw_target, "gfx11-generic");
+        assert_eq!(info3.candidates[0].base, Some("gfx11-generic"));
+    }
+
+    #[test]
+    fn bundle_refuses_when_no_entry_matches() {
+        let elf = synthetic_elf_with_metadata(&synthetic_metadata_msgpack(
+            "k",
+            "k.kd",
+            8,
+            &[("by_value", 0, 8)],
+        ));
+        let bundle = wrap_bundle_entries(&[
+            (b"hipv4-amdgcn-amd-amdhsa--gfx1100", elf.as_slice()),
+            (b"hipv4-amdgcn-amd-amdhsa--gfx1201", elf.as_slice()),
+        ]);
+        // No exact base match -> fallback.
+        assert!(select_bundle_code_object(&bundle, "gfx1151").is_none());
+        assert!(select_bundle_code_object(&bundle, "gfx942").is_none());
+        // Duplicate matching entries also refuse (ambiguous bundle).
+        let dup = wrap_bundle_entries(&[
+            (b"hipv4-amdgcn-amd-amdhsa--gfx1151", elf.as_slice()),
+            (b"hipv4-amdgcn-amd-amdhsa--gfx1151:xnack-", elf.as_slice()),
+        ]);
+        assert!(select_bundle_code_object(&dup, "gfx1151").is_none());
+        let dup_info = bundle_debug_info(&dup, "gfx1151").unwrap();
+        assert_eq!(dup_info.selected, None);
+        assert_eq!(dup_info.candidates.len(), 2);
+    }
+
+    #[test]
+    fn bundle_gfx1151_specifically_matches() {
+        let elf1151 = synthetic_elf_with_metadata(&synthetic_metadata_msgpack(
+            "k",
+            "k.kd",
+            8,
+            &[("by_value", 0, 8)],
+        ));
+        let elf1100 = synthetic_elf_with_metadata(&synthetic_metadata_msgpack(
+            "k",
+            "k.kd",
+            8,
+            &[("by_value", 0, 8)],
+        ));
+        // Bundle with both gfx1100 and gfx1151 entries.
+        let bundle = wrap_bundle_entries(&[
+            (b"hipv4-amdgcn-amd-amdhsa--gfx1100", elf1100.as_slice()),
+            (b"hipv4-amdgcn-amd-amdhsa--gfx1151", elf1151.as_slice()),
+            (b"host-x86_64-unknown-linux-gnu", b"host"),
+        ]);
+        // gfx1151 selects its own entry, not gfx1100.
+        let sel1151 = select_bundle_code_object(&bundle, "gfx1151").unwrap();
+        assert_eq!(sel1151, elf1151.as_slice());
+        let sel1100 = select_bundle_code_object(&bundle, "gfx1100").unwrap();
+        assert_eq!(sel1100, elf1100.as_slice());
+        // gfx1151 with feature suffix still selects gfx1151.
+        let sel1151_feat = select_bundle_code_object(&bundle, "gfx1151:sramecc+").unwrap();
+        assert_eq!(sel1151_feat, elf1151.as_slice());
+        // Debug info must show both candidates and correct selection.
+        let info = bundle_debug_info(&bundle, "gfx1151").unwrap();
+        assert_eq!(info.device, "gfx1151");
+        assert_eq!(info.candidates.len(), 2);
+        assert_eq!(info.selected, Some("gfx1151"));
+        // gfx1151-generic must NOT match gfx1151 (would be wrong object).
+        let generic_bundle = wrap_bundle_entries(&[(
+            b"hipv4-amdgcn-amd-amdhsa--gfx1151-generic",
+            elf1151.as_slice(),
+        )]);
+        assert!(select_bundle_code_object(&generic_bundle, "gfx1151").is_none());
     }
 }

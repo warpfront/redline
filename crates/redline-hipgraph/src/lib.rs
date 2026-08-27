@@ -1000,15 +1000,40 @@ fn resolve_static_function(registration: &StaticFunctionRecord) -> Option<Functi
         let runtime = runtime().ok()?;
         if hg_debug_enabled() {
             if let Some(info) = bundle_debug_info(&fatbin.bundle, runtime.device.name()) {
+                // One-run diagnosis: print the agent name we matched against and
+                // every parsed AMDGPU target in the bundle, so a future
+                // `selected=none` shows *why* (e.g. `device=gfx1151
+                // candidates=[gfx1150]` makes the mismatch obvious). This is the
+                // diagnostic that turns a silent `force_native` fallback into a
+                // 1-minute diagnosis.
+                let mut cand = String::new();
+                for (i, c) in info.candidates.iter().enumerate() {
+                    if i != 0 {
+                        cand.push_str(", ");
+                    }
+                    cand.push_str(c.raw_target);
+                    if let Some(base) = c.base {
+                        if base != c.raw_target {
+                            cand.push('(');
+                            cand.push_str(base);
+                            cand.push(')');
+                        }
+                    }
+                }
+                if cand.is_empty() {
+                    cand.push_str("none");
+                }
                 hgdbg!(
-                    "bundle magic={} version={} entries={} selected={}",
+                    "bundle magic={} version={} entries={} device={} candidates=[{}] selected={}",
                     info.magic,
                     info.version,
                     info.entries,
+                    info.device,
+                    cand,
                     info.selected.unwrap_or("none")
                 );
             } else {
-                hgdbg!("bundle magic=other version=0 entries=0 selected=none");
+                hgdbg!("bundle magic=other version=0 entries=0 device={} candidates=[none] selected=none", runtime.device.name());
             }
         }
         let image = select_bundle_code_object(&fatbin.bundle, runtime.device.name())?;
