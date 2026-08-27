@@ -172,6 +172,20 @@ impl FloorPm4 {
         }
     }
 
+    /// Flush completed shader writes to system scope.
+    ///
+    /// Required before a correctness gate reads a counter the kernel wrote. The
+    /// AMD vendor packet carrying the IB has no architected AQL release scope,
+    /// so ROCr can publish its completion signal while the atomic is still in a
+    /// GPU cache. RDNA3 happened to hide this; RDNA2 did not, which is exactly
+    /// how the missing flush was found.
+    fn acquire_system(&mut self) {
+        match self {
+            Self::Legacy(c) => c.acquire_system(),
+            Self::Gfx12(c) => c.acquire_system(),
+        }
+    }
+
     /// Build the retained IB through the constructor matching this encoding.
     /// Each constructor re-checks the device family itself, so a mismatch here
     /// is caught rather than submitted.
@@ -366,6 +380,11 @@ fn verify_pm4_execution(
             cmd.wait_compute_idle(); // serialize the atomic increments
         }
     }
+    // Retire the last wave and push its write to system scope before ROCr's
+    // completion signal lets the host read the counter. Without this the gate
+    // can read a stale value and report zero executions for work that ran.
+    cmd.wait_compute_idle();
+    cmd.acquire_system();
     let mut ib = cmd.create_ib(family, device, &pool)?;
     // SAFETY: kernarg points at `counter`, which outlives `ib`.
     unsafe { ib.replay_and_wait()? };
@@ -426,6 +445,11 @@ fn verify_pm4_multiqueue_execution(
                         c.wait_compute_idle();
                     }
                 }
+                // Per lane, not once globally: each lane is a separate queue
+                // whose last wave must retire and reach system scope before the
+                // host reads the shared counter.
+                c.wait_compute_idle();
+                c.acquire_system();
                 cmds.push(c);
             }
             if family == FloorFamily::Gfx10 {
@@ -446,6 +470,8 @@ fn verify_pm4_multiqueue_execution(
                         c.wait_compute_idle();
                     }
                 }
+                c.wait_compute_idle();
+                c.acquire_system();
                 cmds.push(c);
             }
             MultiQueuePm4Ib::create(device, &pool, &cmds)?
