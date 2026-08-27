@@ -22,6 +22,7 @@ pub use segment::{
     Segmentation, SegmentError, VerifyError, segment, segment_with_policy, verify_segmentation,
 };
 pub use redline_rocr::abi;
+pub use redline_rocr::selector;
 pub use redline_rocr::{
     AqlQueue, BARRIER_DEPENDENCY_CAPACITY, CompletionSignal, DeviceBuffer, DeviceIdentity,
     DevicePool, DeviceQuery, Executable, FenceScope, Gfx10KernelImage, Gfx10Pm4BuildError,
