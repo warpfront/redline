@@ -69,3 +69,35 @@ This is the session's sixth wrong attribution caught before posting, and the
 fastest kill yet (30 minutes, own experiment). The pattern remains "attribute
 first, measure second"; the countermeasure that worked was writing the
 discriminating experiment into the artifact at claim time.
+
+## Addendum: allocation-policy hypothesis also eliminated (same night)
+
+`bench/dispatch/apu_membw.cpp`, matched pairs on gfx1151:
+
+- Plain hipMalloc reads reach **868-877 GB/s** at 16 MiB (wave32 AND wave64,
+  7.14 AND 10.0) — the runtime, allocation path, and cache hierarchy are fine,
+  and there is no 7.14 -> 10.0 regression.
+- hipHostMalloc reads run at **57-62 GB/s** — the hipEngine signature — but the
+  harness verifiably calls plain hipMalloc.
+- XNACK is disabled in the recorded environment. The harness objects contain
+  zero cache-bypass modifiers (32x bare global_load_b32).
+
+Eliminated tonight: codegen (identical ISA), allocation policy (hipMalloc is
+fast), wave64 (877 GB/s), XNACK (off), cache-bypass bits (none), ROCm version
+(identical both ways).
+
+**Remaining leading hypothesis: dispatch geometry.** The family runs
+groups=16 x wg64 = 1,024 threads on the whole chip (~0.4 workgroups/CU on
+gfx1151). At that occupancy the loop is memory-latency-bound, and APU LPDDR
+latency is where it hurts; gfx1100's dGPU memory system tolerates it (807
+GB/s equivalent). The Vulkan shader is different code and may extract more
+parallelism per thread. If this holds, the 12x is substantially a
+benchmark-shape artifact at pathological occupancy — which matters upstream,
+because hipEngine feeds #6409's Vulkan-vs-HIP narrative and gfx1151 rows would
+overstate the HIP deficit on realistic workloads.
+
+Decisive probe, not yet run: replicate the exact geometry (16 x 64, b32
+dependent loads, 4 MiB set) in a dependency-free pair (HIP + trivial Vulkan
+twin), sweep workgroup count 16 -> 2048 on both parts. If the HIP/Vulkan gap
+collapses as occupancy rises, shape is the story; if it persists at full
+occupancy, something real remains.
