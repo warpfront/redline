@@ -1,0 +1,4813 @@
+{
+  "artifact_ref": "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1151/2026-08-29-rocm100-bench/independent_throughput/redline-dense-q8.raw.json",
+  "backend": "hip",
+  "bench": "q8_0_dense_real_slice",
+  "classification": "real_slice_probe",
+  "command": [
+    "python3",
+    "/home/kaden/redline-suite-20260829/.engines/hipEngine/benchmarks/micro/runners/q8_0_dense_real_slice.py",
+    "--backend",
+    "hip",
+    "--timing-mode",
+    "independent_throughput",
+    "--independent-streams",
+    "4",
+    "--reps",
+    "20",
+    "--warmup",
+    "3",
+    "--samples",
+    "7",
+    "--environment-json",
+    "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1151/2026-08-29-rocm100-bench/environment.json",
+    "--environment-ref",
+    "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1151/2026-08-29-rocm100-bench/environment.json",
+    "--gfx-arch",
+    "gfx1151",
+    "--hardware-gpu",
+    "AMD Radeon Graphics",
+    "--build-dir",
+    "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1151/2026-08-29-rocm100-bench/build/redline/dense-q8",
+    "--shapes",
+    "768x2048,2048x2048",
+    "--rows-list",
+    "1,4",
+    "--local-sizes",
+    "32,64,128",
+    "--row-tiles",
+    "1,4",
+    "--out",
+    "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1151/2026-08-29-rocm100-bench/independent_throughput/redline-dense-q8.raw.json",
+    "--pretty"
+  ],
+  "correctness": {
+    "all_pass": true,
+    "oracle": "CPU q8_1 quantize plus raw GGUF Q8_0 dense dp4a",
+    "rows": 20,
+    "status": "pass"
+  },
+  "environment_ref": "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1151/2026-08-29-rocm100-bench/environment.json",
+  "hardware": {
+    "gfx_arch": "gfx1151",
+    "gpu_name": "AMD Radeon Graphics"
+  },
+  "kind": "hipengine_micro_result",
+  "measurements": {
+    "rows": [
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 768,
+        "local_size": 32,
+        "median_us": 0.48492135056607555,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 2.862390963202815e-05,
+            "max_abs": 0.015611648559570312,
+            "mean_abs": 0.0024552212562412024,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 1.1279088939565726e-05,
+            "max_abs": 0.015120506286621094,
+            "mean_abs": 0.0016973668243736029,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_1_quantize",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 1671168,
+        "q8_blocks_per_row": 24,
+        "row_tile": 0,
+        "rows": 1,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 6.021440737401062,
+                "median": 0.48492135056607555,
+                "min": 0.46287947099489035,
+                "n": 7,
+                "p05": 0.46348061316501354,
+                "p95": 5.525498447049393,
+                "samples": 7,
+                "stdev": 2.176342881573864
+              },
+              "sequence_us": {
+                "max": 120.42881474802124,
+                "median": 9.698427011321511,
+                "min": 9.257589419897807,
+                "n": 7,
+                "p05": 9.26961226330027,
+                "p95": 110.50996894098785,
+                "samples": 7,
+                "stdev": 43.52685763147728
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 6.2707500000000005,
+                "median": 0.6928,
+                "min": 0.67225,
+                "n": 7,
+                "p05": 0.67255,
+                "p95": 5.953499999999999,
+                "samples": 7,
+                "stdev": 2.267441102828455
+              },
+              "sequence_us": {
+                "max": 125.415,
+                "median": 13.856,
+                "min": 13.445,
+                "n": 7,
+                "p05": 13.451,
+                "p95": 119.06999999999998,
+                "samples": 7,
+                "stdev": 45.34882205656909
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 3.5667768760645227,
+                "median": 2.6851016932171126,
+                "min": 2.5648732591924657,
+                "n": 7,
+                "p05": 2.5648732591924657,
+                "p95": 3.3142971646127637,
+                "samples": 7,
+                "stdev": 0.33007938638612394
+              },
+              "sequence_us": {
+                "max": 3.5667768760645227,
+                "median": 2.6851016932171126,
+                "min": 2.5648732591924657,
+                "n": 7,
+                "p05": 2.5648732591924657,
+                "p95": 3.3142971646127637,
+                "samples": 7,
+                "stdev": 0.33007938638612394
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 17.362,
+                "median": 6.492,
+                "min": 6.232,
+                "n": 7,
+                "p05": 6.277,
+                "p95": 14.506899999999993,
+                "samples": 7,
+                "stdev": 3.7680822654479917
+              },
+              "sequence_us": {
+                "max": 17.362,
+                "median": 6.492,
+                "min": 6.232,
+                "n": 7,
+                "p05": 6.277,
+                "p95": 14.506899999999993,
+                "samples": 7,
+                "stdev": 3.7680822654479917
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "quantize",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 768,
+        "local_size": 32,
+        "median_us": 1.9396854022643022,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 2.862390963202815e-05,
+            "max_abs": 0.015611648559570312,
+            "mean_abs": 0.0024552212562412024,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 1.1279088939565726e-05,
+            "max_abs": 0.015120506286621094,
+            "mean_abs": 0.0016973668243736029,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_dot_prequantized",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 1671168,
+        "q8_blocks_per_row": 24,
+        "row_tile": 1,
+        "rows": 1,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 15.974351267408077,
+                "median": 1.9396854022643022,
+                "min": 1.8956016431219318,
+                "n": 7,
+                "p05": 1.9040176335036572,
+                "p95": 15.64071736298968,
+                "samples": 7,
+                "stdev": 6.101352727652635
+              },
+              "sequence_us": {
+                "max": 319.4870253481615,
+                "median": 38.793708045286046,
+                "min": 37.912032862438636,
+                "n": 7,
+                "p05": 38.08035267007314,
+                "p95": 312.8143472597936,
+                "samples": 7,
+                "stdev": 122.02705455305272
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 16.194300000000002,
+                "median": 2.2973500000000002,
+                "min": 2.0994,
+                "n": 7,
+                "p05": 2.10753,
+                "p95": 16.05786,
+                "samples": 7,
+                "stdev": 6.199645361327089
+              },
+              "sequence_us": {
+                "max": 323.886,
+                "median": 45.947,
+                "min": 41.988,
+                "n": 7,
+                "p05": 42.1506,
+                "p95": 321.1572,
+                "samples": 7,
+                "stdev": 123.99290722654179
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 4.608756637611462,
+                "median": 4.167919046187757,
+                "min": 4.127842901512874,
+                "n": 7,
+                "p05": 4.127842901512874,
+                "p95": 4.47650536018435,
+                "samples": 7,
+                "stdev": 0.16233640349530196
+              },
+              "sequence_us": {
+                "max": 4.608756637611462,
+                "median": 4.167919046187757,
+                "min": 4.127842901512874,
+                "n": 7,
+                "p05": 4.127842901512874,
+                "p95": 4.47650536018435,
+                "samples": 7,
+                "stdev": 0.16233640349530196
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 131.115,
+                "median": 8.025,
+                "min": 7.875,
+                "n": 7,
+                "p05": 7.880999999999999,
+                "p95": 94.22729999999993,
+                "samples": 7,
+                "stdev": 43.0842283388135
+              },
+              "sequence_us": {
+                "max": 131.115,
+                "median": 8.025,
+                "min": 7.875,
+                "n": 7,
+                "p05": 7.880999999999999,
+                "p95": 94.22729999999993,
+                "samples": 7,
+                "stdev": 43.0842283388135
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "single",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 768,
+        "local_size": 32,
+        "median_us": 2.905520488928965,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 2.862390963202815e-05,
+            "max_abs": 0.015611648559570312,
+            "mean_abs": 0.0024552212562412024,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 1.1279088939565726e-05,
+            "max_abs": 0.015120506286621094,
+            "mean_abs": 0.0016973668243736029,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_quantize_plus_dot",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 1671168,
+        "q8_blocks_per_row": 24,
+        "row_tile": 1,
+        "rows": 1,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 19.378819757539326,
+                "median": 2.905520488928965,
+                "min": 2.6470293557759743,
+                "n": 7,
+                "p05": 2.6764853221120126,
+                "p95": 19.03075844103797,
+                "samples": 7,
+                "stdev": 7.230362384328115
+              },
+              "sequence_us": {
+                "max": 387.5763951507865,
+                "median": 58.1104097785793,
+                "min": 52.940587115519484,
+                "n": 7,
+                "p05": 53.529706442240254,
+                "p95": 380.61516882075944,
+                "samples": 7,
+                "stdev": 144.6072476865623
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 19.603749999999998,
+                "median": 3.1744499999999998,
+                "min": 2.85285,
+                "n": 7,
+                "p05": 2.88231,
+                "p95": 19.43272,
+                "samples": 7,
+                "stdev": 7.3279091285039994
+              },
+              "sequence_us": {
+                "max": 392.075,
+                "median": 63.489,
+                "min": 57.057,
+                "n": 7,
+                "p05": 57.64620000000001,
+                "p95": 388.65439999999995,
+                "samples": 7,
+                "stdev": 146.55818257008
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 7.093477607454163,
+                "median": 6.011421701232342,
+                "min": 5.971345556557459,
+                "n": 7,
+                "p05": 5.983368399959924,
+                "p95": 6.792906522392545,
+                "samples": 7,
+                "stdev": 0.37393689822795706
+              },
+              "sequence_us": {
+                "max": 7.093477607454163,
+                "median": 6.011421701232342,
+                "min": 5.971345556557459,
+                "n": 7,
+                "p05": 5.983368399959924,
+                "p95": 6.792906522392545,
+                "samples": 7,
+                "stdev": 0.37393689822795706
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 175.9,
+                "median": 9.888,
+                "min": 9.818,
+                "n": 7,
+                "p05": 9.821,
+                "p95": 126.12669999999989,
+                "samples": 7,
+                "stdev": 58.09323480336043
+              },
+              "sequence_us": {
+                "max": 175.9,
+                "median": 9.888,
+                "min": 9.818,
+                "n": 7,
+                "p05": 9.821,
+                "p95": 126.12669999999989,
+                "samples": 7,
+                "stdev": 58.09323480336043
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "single",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 768,
+        "local_size": 32,
+        "median_us": 2.3424506562468688,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 2.862390963202815e-05,
+            "max_abs": 0.015611648559570312,
+            "mean_abs": 0.0024552212562412024,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 1.1279088939565726e-05,
+            "max_abs": 0.015120506286621094,
+            "mean_abs": 0.0016973668243736029,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_dot_prequantized",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 1671168,
+        "q8_blocks_per_row": 24,
+        "row_tile": 4,
+        "rows": 1,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 14.637811842500753,
+                "median": 2.3424506562468688,
+                "min": 2.306382126039475,
+                "n": 7,
+                "p05": 2.3105901212303377,
+                "p95": 12.391343552750222,
+                "samples": 7,
+                "stdev": 4.355214153802231
+              },
+              "sequence_us": {
+                "max": 292.75623685001506,
+                "median": 46.84901312493738,
+                "min": 46.1276425207895,
+                "n": 7,
+                "p05": 46.21180242460675,
+                "p95": 247.82687105500443,
+                "samples": 7,
+                "stdev": 87.10428307604461
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 15.6293,
+                "median": 2.5588,
+                "min": 2.5122,
+                "n": 7,
+                "p05": 2.5183649999999997,
+                "p95": 13.153849999999995,
+                "samples": 7,
+                "stdev": 4.5791914110551915
+              },
+              "sequence_us": {
+                "max": 312.586,
+                "median": 51.176,
+                "min": 50.244,
+                "n": 7,
+                "p05": 50.3673,
+                "p95": 263.0769999999999,
+                "samples": 7,
+                "stdev": 91.58382822110383
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 5.6908125438332835,
+                "median": 4.528604348261697,
+                "min": 4.448452058911933,
+                "n": 7,
+                "p05": 4.460474902314397,
+                "p95": 5.354172928564271,
+                "samples": 7,
+                "stdev": 0.4109375457924655
+              },
+              "sequence_us": {
+                "max": 5.6908125438332835,
+                "median": 4.528604348261697,
+                "min": 4.448452058911933,
+                "n": 7,
+                "p05": 4.460474902314397,
+                "p95": 5.354172928564271,
+                "samples": 7,
+                "stdev": 0.4109375457924655
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 20.047,
+                "median": 8.375,
+                "min": 8.136,
+                "n": 7,
+                "p05": 8.184,
+                "p95": 16.608699999999992,
+                "samples": 7,
+                "stdev": 4.0902512122841355
+              },
+              "sequence_us": {
+                "max": 20.047,
+                "median": 8.375,
+                "min": 8.136,
+                "n": 7,
+                "p05": 8.184,
+                "p95": 16.608699999999992,
+                "samples": 7,
+                "stdev": 4.0902512122841355
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "rowtile4",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 768,
+        "local_size": 32,
+        "median_us": 3.348361887586414,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 2.862390963202815e-05,
+            "max_abs": 0.015611648559570312,
+            "mean_abs": 0.0024552212562412024,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 1.1279088939565726e-05,
+            "max_abs": 0.015120506286621094,
+            "mean_abs": 0.0016973668243736029,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_quantize_plus_dot",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 1671168,
+        "q8_blocks_per_row": 24,
+        "row_tile": 4,
+        "rows": 1,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 14.194970443843303,
+                "median": 3.348361887586414,
+                "min": 3.0457869952910532,
+                "n": 7,
+                "p05": 3.051197274822162,
+                "p95": 13.967738703536721,
+                "samples": 7,
+                "stdev": 4.813057227856766
+              },
+              "sequence_us": {
+                "max": 283.89940887686606,
+                "median": 66.96723775172828,
+                "min": 60.91573990582106,
+                "n": 7,
+                "p05": 61.02394549644325,
+                "p95": 279.3547740707344,
+                "samples": 7,
+                "stdev": 96.26114455713532
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 14.4185,
+                "median": 3.5662,
+                "min": 3.24805,
+                "n": 7,
+                "p05": 3.25498,
+                "p95": 14.366195,
+                "samples": 7,
+                "stdev": 4.891324080941265
+              },
+              "sequence_us": {
+                "max": 288.37,
+                "median": 71.324,
+                "min": 64.961,
+                "n": 7,
+                "p05": 65.0996,
+                "p95": 287.3239,
+                "samples": 7,
+                "stdev": 97.82648161882531
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 7.8950005009518085,
+                "median": 6.4923354373309285,
+                "min": 6.412183147981164,
+                "n": 7,
+                "p05": 6.424205991383629,
+                "p95": 7.510269512072938,
+                "samples": 7,
+                "stdev": 0.4940918948377098
+              },
+              "sequence_us": {
+                "max": 7.8950005009518085,
+                "median": 6.4923354373309285,
+                "min": 6.412183147981164,
+                "n": 7,
+                "p05": 6.424205991383629,
+                "p95": 7.510269512072938,
+                "samples": 7,
+                "stdev": 0.4940918948377098
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 117.62,
+                "median": 10.25,
+                "min": 10.059,
+                "n": 7,
+                "p05": 10.088999999999999,
+                "p95": 85.42969999999993,
+                "samples": 7,
+                "stdev": 37.58541164345767
+              },
+              "sequence_us": {
+                "max": 117.62,
+                "median": 10.25,
+                "min": 10.059,
+                "n": 7,
+                "p05": 10.088999999999999,
+                "p95": 85.42969999999993,
+                "samples": 7,
+                "stdev": 37.58541164345767
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "rowtile4",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 768,
+        "local_size": 32,
+        "median_us": 0.4909327722673079,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 7.65139182741464e-05,
+            "max_abs": 0.0220794677734375,
+            "mean_abs": 0.002200459595769644,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 1.1543760246709134e-05,
+            "max_abs": 0.015120506286621094,
+            "mean_abs": 0.0017210077494382858,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_1_quantize",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 1671168,
+        "q8_blocks_per_row": 24,
+        "row_tile": 0,
+        "rows": 4,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 10.203386434225028,
+                "median": 0.4909327722673079,
+                "min": 0.47690612163109913,
+                "n": 7,
+                "p05": 0.4799118324817153,
+                "p95": 9.874561667167619,
+                "samples": 7,
+                "stdev": 4.152038326432815
+              },
+              "sequence_us": {
+                "max": 204.06772868450054,
+                "median": 9.818655445346158,
+                "min": 9.538122432621982,
+                "n": 7,
+                "p05": 9.598236649634305,
+                "p95": 197.49123334335235,
+                "samples": 7,
+                "stdev": 83.0407665286563
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 10.44355,
+                "median": 0.71635,
+                "min": 0.68075,
+                "n": 7,
+                "p05": 0.68558,
+                "p95": 10.355935,
+                "samples": 7,
+                "stdev": 4.333192093960672
+              },
+              "sequence_us": {
+                "max": 208.871,
+                "median": 14.327,
+                "min": 13.615,
+                "n": 7,
+                "p05": 13.7116,
+                "p95": 207.1187,
+                "samples": 7,
+                "stdev": 86.66384187921342
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 3.606853020739405,
+                "median": 2.725177837891995,
+                "min": 2.604949403867348,
+                "n": 7,
+                "p05": 2.604949403867348,
+                "p95": 3.354373309287646,
+                "samples": 7,
+                "stdev": 0.33007938638612394
+              },
+              "sequence_us": {
+                "max": 3.606853020739405,
+                "median": 2.725177837891995,
+                "min": 2.604949403867348,
+                "n": 7,
+                "p05": 2.604949403867348,
+                "p95": 3.354373309287646,
+                "samples": 7,
+                "stdev": 0.33007938638612394
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 90.609,
+                "median": 6.592,
+                "min": 6.392,
+                "n": 7,
+                "p05": 6.428000000000001,
+                "p95": 65.42789999999994,
+                "samples": 7,
+                "stdev": 29.40974472545327
+              },
+              "sequence_us": {
+                "max": 90.609,
+                "median": 6.592,
+                "min": 6.392,
+                "n": 7,
+                "p05": 6.428000000000001,
+                "p95": 65.42789999999994,
+                "samples": 7,
+                "stdev": 29.40974472545327
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "quantize",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 768,
+        "local_size": 32,
+        "median_us": 5.786995291053001,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 7.65139182741464e-05,
+            "max_abs": 0.0220794677734375,
+            "mean_abs": 0.002200459595769644,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 1.1543760246709134e-05,
+            "max_abs": 0.015120506286621094,
+            "mean_abs": 0.0017210077494382858,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_dot_prequantized",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 1671168,
+        "q8_blocks_per_row": 24,
+        "row_tile": 1,
+        "rows": 4,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 17.356978258691516,
+                "median": 5.786995291053001,
+                "min": 5.6908125438332835,
+                "n": 7,
+                "p05": 5.691413686003407,
+                "p95": 17.133353371405672,
+                "samples": 7,
+                "stdev": 5.073188220256189
+              },
+              "sequence_us": {
+                "max": 347.1395651738303,
+                "median": 115.73990582106002,
+                "min": 113.81625087666566,
+                "n": 7,
+                "p05": 113.82827372006813,
+                "p95": 342.66706742811346,
+                "samples": 7,
+                "stdev": 101.4637644051238
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 17.59195,
+                "median": 6.4015,
+                "min": 6.319850000000001,
+                "n": 7,
+                "p05": 6.3263,
+                "p95": 17.589685,
+                "samples": 7,
+                "stdev": 5.035016053659834
+              },
+              "sequence_us": {
+                "max": 351.839,
+                "median": 128.03,
+                "min": 126.397,
+                "n": 7,
+                "p05": 126.52600000000001,
+                "p95": 351.7937,
+                "samples": 7,
+                "stdev": 100.70032107319666
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 9.177437130548041,
+                "median": 7.8950005009518085,
+                "min": 7.854924356276926,
+                "n": 7,
+                "p05": 7.854924356276926,
+                "p95": 8.79270614166917,
+                "samples": 7,
+                "stdev": 0.45614860891790604
+              },
+              "sequence_us": {
+                "max": 9.177437130548041,
+                "median": 7.8950005009518085,
+                "min": 7.854924356276926,
+                "n": 7,
+                "p05": 7.854924356276926,
+                "p95": 8.79270614166917,
+                "samples": 7,
+                "stdev": 0.45614860891790604
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 158.708,
+                "median": 11.692,
+                "min": 11.572,
+                "n": 7,
+                "p05": 11.578,
+                "p95": 114.6994999999999,
+                "samples": 7,
+                "stdev": 51.42922558353809
+              },
+              "sequence_us": {
+                "max": 158.708,
+                "median": 11.692,
+                "min": 11.572,
+                "n": 7,
+                "p05": 11.578,
+                "p95": 114.6994999999999,
+                "samples": 7,
+                "stdev": 51.42922558353809
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "single",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 768,
+        "local_size": 32,
+        "median_us": 6.712754233042782,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 7.65139182741464e-05,
+            "max_abs": 0.0220794677734375,
+            "mean_abs": 0.002200459595769644,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 1.1543760246709134e-05,
+            "max_abs": 0.015120506286621094,
+            "mean_abs": 0.0017210077494382858,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_quantize_plus_dot",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 1671168,
+        "q8_blocks_per_row": 24,
+        "row_tile": 1,
+        "rows": 4,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 20.40276525398257,
+                "median": 6.712754233042782,
+                "min": 6.696723775172828,
+                "n": 7,
+                "p05": 6.70093177036369,
+                "p95": 20.23564773068831,
+                "samples": 7,
+                "stdev": 6.0617885812974315
+              },
+              "sequence_us": {
+                "max": 408.05530507965136,
+                "median": 134.25508466085563,
+                "min": 133.93447550345655,
+                "n": 7,
+                "p05": 134.01863540727382,
+                "p95": 404.71295461376616,
+                "samples": 7,
+                "stdev": 121.23577162594863
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 20.6918,
+                "median": 7.3563,
+                "min": 7.34275,
+                "n": 7,
+                "p05": 7.3444,
+                "p95": 20.67482,
+                "samples": 7,
+                "stdev": 5.993506742521699
+              },
+              "sequence_us": {
+                "max": 413.836,
+                "median": 147.126,
+                "min": 146.855,
+                "n": 7,
+                "p05": 146.888,
+                "p95": 413.4964,
+                "samples": 7,
+                "stdev": 119.87013485043397
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 11.702234245065625,
+                "median": 9.778579300671275,
+                "min": 9.738503155996392,
+                "n": 7,
+                "p05": 9.738503155996392,
+                "p95": 11.12513776174732,
+                "samples": 7,
+                "stdev": 0.6804038309013681
+              },
+              "sequence_us": {
+                "max": 11.702234245065625,
+                "median": 9.778579300671275,
+                "min": 9.738503155996392,
+                "n": 7,
+                "p05": 9.738503155996392,
+                "p95": 11.12513776174732,
+                "samples": 7,
+                "stdev": 0.6804038309013681
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 197.621,
+                "median": 13.566,
+                "min": 13.455,
+                "n": 7,
+                "p05": 13.455300000000001,
+                "p95": 142.42249999999987,
+                "samples": 7,
+                "stdev": 64.41653698692406
+              },
+              "sequence_us": {
+                "max": 197.621,
+                "median": 13.566,
+                "min": 13.455,
+                "n": 7,
+                "p05": 13.455300000000001,
+                "p95": 142.42249999999987,
+                "samples": 7,
+                "stdev": 64.41653698692406
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "single",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 768,
+        "local_size": 32,
+        "median_us": 4.947400060114218,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 7.65139182741464e-05,
+            "max_abs": 0.0220794677734375,
+            "mean_abs": 0.002200459595769644,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 1.1543760246709134e-05,
+            "max_abs": 0.015120506286621094,
+            "mean_abs": 0.0017210077494382858,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_dot_prequantized",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 1671168,
+        "q8_blocks_per_row": 24,
+        "row_tile": 4,
+        "rows": 4,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 16.3751127141569,
+                "median": 4.947400060114218,
+                "min": 4.899308686504358,
+                "n": 7,
+                "p05": 4.906522392545837,
+                "p95": 13.825067628494132,
+                "samples": 7,
+                "stdev": 3.965415375587682
+              },
+              "sequence_us": {
+                "max": 327.502254283138,
+                "median": 98.94800120228435,
+                "min": 97.98617373008716,
+                "n": 7,
+                "p05": 98.13044785091674,
+                "p95": 276.50135256988267,
+                "samples": 7,
+                "stdev": 79.30830751175364
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 16.95025,
+                "median": 5.5429,
+                "min": 5.3525,
+                "n": 7,
+                "p05": 5.352964999999999,
+                "p95": 14.296284999999994,
+                "samples": 7,
+                "stdev": 3.9768492038680727
+              },
+              "sequence_us": {
+                "max": 339.005,
+                "median": 110.858,
+                "min": 107.05,
+                "n": 7,
+                "p05": 107.0593,
+                "p95": 285.9256999999999,
+                "samples": 7,
+                "stdev": 79.53698407736145
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 9.137360985873158,
+                "median": 8.295761947700631,
+                "min": 8.135457369001102,
+                "n": 7,
+                "p05": 8.15950305580603,
+                "p95": 8.896904117823865,
+                "samples": 7,
+                "stdev": 0.31316173486601306
+              },
+              "sequence_us": {
+                "max": 9.137360985873158,
+                "median": 8.295761947700631,
+                "min": 8.135457369001102,
+                "n": 7,
+                "p05": 8.15950305580603,
+                "p95": 8.896904117823865,
+                "samples": 7,
+                "stdev": 0.31316173486601306
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 94.367,
+                "median": 12.153,
+                "min": 11.983,
+                "n": 7,
+                "p05": 12.0187,
+                "p95": 69.83209999999995,
+                "samples": 7,
+                "stdev": 28.753706185251236
+              },
+              "sequence_us": {
+                "max": 94.367,
+                "median": 12.153,
+                "min": 11.983,
+                "n": 7,
+                "p05": 12.0187,
+                "p95": 69.83209999999995,
+                "samples": 7,
+                "stdev": 28.753706185251236
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "rowtile4",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 768,
+        "local_size": 32,
+        "median_us": 5.372207193667969,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 7.65139182741464e-05,
+            "max_abs": 0.0220794677734375,
+            "mean_abs": 0.002200459595769644,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 1.1543760246709134e-05,
+            "max_abs": 0.015120506286621094,
+            "mean_abs": 0.0017210077494382858,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_quantize_plus_dot",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 1671168,
+        "q8_blocks_per_row": 24,
+        "row_tile": 4,
+        "rows": 4,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 18.116421200280534,
+                "median": 5.372207193667969,
+                "min": 5.1898607353972555,
+                "n": 7,
+                "p05": 5.222923554754033,
+                "p95": 16.974251077046386,
+                "samples": 7,
+                "stdev": 5.018796149359939
+              },
+              "sequence_us": {
+                "max": 362.32842400561066,
+                "median": 107.44414387335938,
+                "min": 103.7972147079451,
+                "n": 7,
+                "p05": 104.45847109508065,
+                "p95": 339.48502154092773,
+                "samples": 7,
+                "stdev": 100.37592298719876
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 18.342850000000002,
+                "median": 6.029249999999999,
+                "min": 5.51485,
+                "n": 7,
+                "p05": 5.56534,
+                "p95": 17.378949999999996,
+                "samples": 7,
+                "stdev": 4.989644379285432
+              },
+              "sequence_us": {
+                "max": 366.857,
+                "median": 120.585,
+                "min": 110.297,
+                "n": 7,
+                "p05": 111.30680000000001,
+                "p95": 347.57899999999995,
+                "samples": 7,
+                "stdev": 99.79288758570863
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 11.62208195571586,
+                "median": 10.179340747420099,
+                "min": 10.099188458070333,
+                "n": 7,
+                "p05": 10.099188458070333,
+                "p95": 11.237350966836988,
+                "samples": 7,
+                "stdev": 0.508154626487914
+              },
+              "sequence_us": {
+                "max": 11.62208195571586,
+                "median": 10.179340747420099,
+                "min": 10.099188458070333,
+                "n": 7,
+                "p05": 10.099188458070333,
+                "p95": 11.237350966836988,
+                "samples": 7,
+                "stdev": 0.508154626487914
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 135.975,
+                "median": 14.206,
+                "min": 13.856,
+                "n": 7,
+                "p05": 13.876999999999999,
+                "p95": 99.45659999999991,
+                "samples": 7,
+                "stdev": 42.64655168010752
+              },
+              "sequence_us": {
+                "max": 135.975,
+                "median": 14.206,
+                "min": 13.856,
+                "n": 7,
+                "p05": 13.876999999999999,
+                "p95": 99.45659999999991,
+                "samples": 7,
+                "stdev": 42.64655168010752
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "rowtile4",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 2048,
+        "local_size": 32,
+        "median_us": 0.529005109708446,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 4.433439445784105e-05,
+            "max_abs": 0.030849456787109375,
+            "mean_abs": 0.0034960899502038956,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 2.433502797593441e-05,
+            "max_abs": 0.015345096588134766,
+            "mean_abs": 0.0030660531483590603,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_1_quantize",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 4456448,
+        "q8_blocks_per_row": 64,
+        "row_tile": 0,
+        "rows": 1,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 10.497946097585412,
+                "median": 0.529005109708446,
+                "min": 0.5169822663059814,
+                "n": 7,
+                "p05": 0.5175834084761046,
+                "p95": 10.34705941288448,
+                "samples": 7,
+                "stdev": 4.388249069222851
+              },
+              "sequence_us": {
+                "max": 209.95892195170825,
+                "median": 10.580102194168921,
+                "min": 10.339645326119628,
+                "n": 7,
+                "p05": 10.351668169522092,
+                "p95": 206.94118825768962,
+                "samples": 7,
+                "stdev": 87.764981384457
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 10.75565,
+                "median": 0.7494,
+                "min": 0.73185,
+                "n": 7,
+                "p05": 0.7345649999999999,
+                "p95": 10.711625,
+                "samples": 7,
+                "stdev": 4.464241327459338
+              },
+              "sequence_us": {
+                "max": 215.113,
+                "median": 14.988,
+                "min": 14.637,
+                "n": 7,
+                "p05": 14.691299999999998,
+                "p95": 214.2325,
+                "samples": 7,
+                "stdev": 89.28482654918677
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 4.007614467488228,
+                "median": 2.9255585612664063,
+                "min": 2.8053301272417595,
+                "n": 7,
+                "p05": 2.8053301272417595,
+                "p95": 3.6950205390241457,
+                "samples": 7,
+                "stdev": 0.3992865478503487
+              },
+              "sequence_us": {
+                "max": 4.007614467488228,
+                "median": 2.9255585612664063,
+                "min": 2.8053301272417595,
+                "n": 7,
+                "p05": 2.8053301272417595,
+                "p95": 3.6950205390241457,
+                "samples": 7,
+                "stdev": 0.3992865478503487
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 86.282,
+                "median": 6.923,
+                "min": 6.753,
+                "n": 7,
+                "p05": 6.783,
+                "p95": 62.53729999999994,
+                "samples": 7,
+                "stdev": 27.774742132567354
+              },
+              "sequence_us": {
+                "max": 86.282,
+                "median": 6.923,
+                "min": 6.753,
+                "n": 7,
+                "p05": 6.783,
+                "p95": 62.53729999999994,
+                "samples": 7,
+                "stdev": 27.774742132567354
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "quantize",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 2048,
+        "local_size": 32,
+        "median_us": 5.732892495741909,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 4.433439445784105e-05,
+            "max_abs": 0.030849456787109375,
+            "mean_abs": 0.0034960899502038956,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 2.433502797593441e-05,
+            "max_abs": 0.015345096588134766,
+            "mean_abs": 0.0030660531483590603,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_dot_prequantized",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 4456448,
+        "q8_blocks_per_row": 64,
+        "row_tile": 1,
+        "rows": 1,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 19.92786293958521,
+                "median": 5.732892495741909,
+                "min": 5.444344254082758,
+                "n": 7,
+                "p05": 5.5230938783689005,
+                "p95": 19.911632100991884,
+                "samples": 7,
+                "stdev": 6.430464371808066
+              },
+              "sequence_us": {
+                "max": 398.5572587917042,
+                "median": 114.6578499148382,
+                "min": 108.88688508165515,
+                "n": 7,
+                "p05": 110.46187756737802,
+                "p95": 398.2326420198377,
+                "samples": 7,
+                "stdev": 128.6092874361613
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 20.4939,
+                "median": 6.154999999999999,
+                "min": 5.909599999999999,
+                "n": 7,
+                "p05": 5.924765,
+                "p95": 20.39517,
+                "samples": 7,
+                "stdev": 6.442806617231407
+              },
+              "sequence_us": {
+                "max": 409.878,
+                "median": 123.1,
+                "min": 118.192,
+                "n": 7,
+                "p05": 118.4953,
+                "p95": 407.90340000000003,
+                "samples": 7,
+                "stdev": 128.85613234462815
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 9.177437130548041,
+                "median": 7.975152790301573,
+                "min": 7.854924356276926,
+                "n": 7,
+                "p05": 7.854924356276926,
+                "p95": 8.840797515279029,
+                "samples": 7,
+                "stdev": 0.4372915729355103
+              },
+              "sequence_us": {
+                "max": 9.177437130548041,
+                "median": 7.975152790301573,
+                "min": 7.854924356276926,
+                "n": 7,
+                "p05": 7.854924356276926,
+                "p95": 8.840797515279029,
+                "samples": 7,
+                "stdev": 0.4372915729355103
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 153.889,
+                "median": 11.983,
+                "min": 11.642,
+                "n": 7,
+                "p05": 11.6843,
+                "p95": 111.38619999999992,
+                "samples": 7,
+                "stdev": 49.676978622919904
+              },
+              "sequence_us": {
+                "max": 153.889,
+                "median": 11.983,
+                "min": 11.642,
+                "n": 7,
+                "p05": 11.6843,
+                "p95": 111.38619999999992,
+                "samples": 7,
+                "stdev": 49.676978622919904
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "single",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 2048,
+        "local_size": 32,
+        "median_us": 6.04949403867348,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 4.433439445784105e-05,
+            "max_abs": 0.030849456787109375,
+            "mean_abs": 0.0034960899502038956,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 2.433502797593441e-05,
+            "max_abs": 0.015345096588134766,
+            "mean_abs": 0.0030660531483590603,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_quantize_plus_dot",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 4456448,
+        "q8_blocks_per_row": 64,
+        "row_tile": 1,
+        "rows": 1,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 23.74110810540026,
+                "median": 6.04949403867348,
+                "min": 5.744915339144375,
+                "n": 7,
+                "p05": 5.7930067127542335,
+                "p95": 23.594429415890193,
+                "samples": 7,
+                "stdev": 7.916176473862466
+              },
+              "sequence_us": {
+                "max": 474.8221621080052,
+                "median": 120.9898807734696,
+                "min": 114.89830678288749,
+                "n": 7,
+                "p05": 115.86013425508466,
+                "p95": 471.88858831780385,
+                "samples": 7,
+                "stdev": 158.3235294772493
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 24.1402,
+                "median": 6.49265,
+                "min": 5.9607,
+                "n": 7,
+                "p05": 6.032085,
+                "p95": 23.94409,
+                "samples": 7,
+                "stdev": 7.866024655868725
+              },
+              "sequence_us": {
+                "max": 482.804,
+                "median": 129.853,
+                "min": 119.214,
+                "n": 7,
+                "p05": 120.6417,
+                "p95": 478.8818,
+                "samples": 7,
+                "stdev": 157.3204931173745
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 12.14307183648933,
+                "median": 10.139264602745216,
+                "min": 9.898807734695922,
+                "n": 7,
+                "p05": 9.934876264903316,
+                "p95": 11.782386534415389,
+                "samples": 7,
+                "stdev": 0.7469528502757691
+              },
+              "sequence_us": {
+                "max": 12.14307183648933,
+                "median": 10.139264602745216,
+                "min": 9.898807734695922,
+                "n": 7,
+                "p05": 9.934876264903316,
+                "p95": 11.782386534415389,
+                "samples": 7,
+                "stdev": 0.7469528502757691
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 210.504,
+                "median": 14.146,
+                "min": 13.946,
+                "n": 7,
+                "p05": 13.949000000000002,
+                "p95": 151.91519999999986,
+                "samples": 7,
+                "stdev": 68.6647608076771
+              },
+              "sequence_us": {
+                "max": 210.504,
+                "median": 14.146,
+                "min": 13.946,
+                "n": 7,
+                "p05": 13.949000000000002,
+                "p95": 151.91519999999986,
+                "samples": 7,
+                "stdev": 68.6647608076771
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "single",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 2048,
+        "local_size": 32,
+        "median_us": 5.863139965935277,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 4.433439445784105e-05,
+            "max_abs": 0.030849456787109375,
+            "mean_abs": 0.0034960899502038956,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 2.433502797593441e-05,
+            "max_abs": 0.015345096588134766,
+            "mean_abs": 0.0030660531483590603,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_dot_prequantized",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 4456448,
+        "q8_blocks_per_row": 64,
+        "row_tile": 4,
+        "rows": 1,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 19.450956817954115,
+                "median": 5.863139965935277,
+                "min": 3.757138563270213,
+                "n": 7,
+                "p05": 3.7757739705440336,
+                "p95": 16.738603346358076,
+                "samples": 7,
+                "stdev": 5.170243822663474
+              },
+              "sequence_us": {
+                "max": 389.01913635908227,
+                "median": 117.26279931870555,
+                "min": 75.14277126540426,
+                "n": 7,
+                "p05": 75.51547941088067,
+                "p95": 334.7720669271615,
+                "samples": 7,
+                "stdev": 103.40487645326947
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 20.0506,
+                "median": 6.44405,
+                "min": 4.2169,
+                "n": 7,
+                "p05": 4.36672,
+                "p95": 17.230704999999993,
+                "samples": 7,
+                "stdev": 5.139168839949725
+              },
+              "sequence_us": {
+                "max": 401.012,
+                "median": 128.881,
+                "min": 84.338,
+                "n": 7,
+                "p05": 87.33439999999999,
+                "p95": 344.61409999999984,
+                "samples": 7,
+                "stdev": 102.78337679899451
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 9.618274721971746,
+                "median": 8.496142671075043,
+                "min": 8.295761947700631,
+                "n": 7,
+                "p05": 8.331830477908026,
+                "p95": 9.401863540727382,
+                "samples": 7,
+                "stdev": 0.41640480446489864
+              },
+              "sequence_us": {
+                "max": 9.618274721971746,
+                "median": 8.496142671075043,
+                "min": 8.295761947700631,
+                "n": 7,
+                "p05": 8.331830477908026,
+                "p95": 9.401863540727382,
+                "samples": 7,
+                "stdev": 0.41640480446489864
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 98.444,
+                "median": 12.494,
+                "min": 12.253,
+                "n": 7,
+                "p05": 12.2863,
+                "p95": 72.84529999999995,
+                "samples": 7,
+                "stdev": 30.045347310017767
+              },
+              "sequence_us": {
+                "max": 98.444,
+                "median": 12.494,
+                "min": 12.253,
+                "n": 7,
+                "p05": 12.2863,
+                "p95": 72.84529999999995,
+                "samples": 7,
+                "stdev": 30.045347310017767
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "rowtile4",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 2048,
+        "local_size": 32,
+        "median_us": 6.235848111411682,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 4.433439445784105e-05,
+            "max_abs": 0.030849456787109375,
+            "mean_abs": 0.0034960899502038956,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 2.433502797593441e-05,
+            "max_abs": 0.015345096588134766,
+            "mean_abs": 0.0030660531483590603,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_quantize_plus_dot",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 4456448,
+        "q8_blocks_per_row": 64,
+        "row_tile": 4,
+        "rows": 1,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 17.918044284139864,
+                "median": 6.235848111411682,
+                "min": 5.616671676184751,
+                "n": 7,
+                "p05": 5.760344654844204,
+                "p95": 17.634906322011823,
+                "samples": 7,
+                "stdev": 5.1361334158423055
+              },
+              "sequence_us": {
+                "max": 358.3608856827973,
+                "median": 124.71696222823364,
+                "min": 112.33343352369502,
+                "n": 7,
+                "p05": 115.20689309688409,
+                "p95": 352.6981264402364,
+                "samples": 7,
+                "stdev": 102.72266831684612
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 18.53075,
+                "median": 6.767650000000001,
+                "min": 6.06285,
+                "n": 7,
+                "p05": 6.20817,
+                "p95": 18.134149999999998,
+                "samples": 7,
+                "stdev": 5.095702362665775
+              },
+              "sequence_us": {
+                "max": 370.615,
+                "median": 135.353,
+                "min": 121.257,
+                "n": 7,
+                "p05": 124.1634,
+                "p95": 362.683,
+                "samples": 7,
+                "stdev": 101.91404725331549
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 12.14307183648933,
+                "median": 10.74040677286845,
+                "min": 10.499949904819156,
+                "n": 7,
+                "p05": 10.53601843502655,
+                "p95": 11.818455064622782,
+                "samples": 7,
+                "stdev": 0.5209584228812952
+              },
+              "sequence_us": {
+                "max": 12.14307183648933,
+                "median": 10.74040677286845,
+                "min": 10.499949904819156,
+                "n": 7,
+                "p05": 10.53601843502655,
+                "p95": 11.818455064622782,
+                "samples": 7,
+                "stdev": 0.5209584228812952
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 139.421,
+                "median": 14.678,
+                "min": 14.517,
+                "n": 7,
+                "p05": 14.5173,
+                "p95": 102.1030999999999,
+                "samples": 7,
+                "stdev": 43.638094445760835
+              },
+              "sequence_us": {
+                "max": 139.421,
+                "median": 14.678,
+                "min": 14.517,
+                "n": 7,
+                "p05": 14.5173,
+                "p95": 102.1030999999999,
+                "samples": 7,
+                "stdev": 43.638094445760835
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "rowtile4",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 2048,
+        "local_size": 32,
+        "median_us": 0.7935076645626691,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 0.00017967943123879806,
+            "max_abs": 0.030849456787109375,
+            "mean_abs": 0.003383165691047907,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 4.218463729143969e-05,
+            "max_abs": 0.022086143493652344,
+            "mean_abs": 0.0026487447321414948,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_1_quantize",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 4456448,
+        "q8_blocks_per_row": 64,
+        "row_tile": 0,
+        "rows": 4,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 10.534014627792805,
+                "median": 0.7935076645626691,
+                "min": 0.6933173028754633,
+                "n": 7,
+                "p05": 0.6963230137260795,
+                "p95": 10.270113215108704,
+                "samples": 7,
+                "stdev": 4.2255447787123055
+              },
+              "sequence_us": {
+                "max": 210.6802925558561,
+                "median": 15.87015329125338,
+                "min": 13.866346057509267,
+                "n": 7,
+                "p05": 13.92646027452159,
+                "p95": 205.40226430217413,
+                "samples": 7,
+                "stdev": 84.5108955742461
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 10.7917,
+                "median": 1.0109,
+                "min": 0.9107,
+                "n": 7,
+                "p05": 0.9141649999999999,
+                "p95": 10.636015,
+                "samples": 7,
+                "stdev": 4.320274586735885
+              },
+              "sequence_us": {
+                "max": 215.834,
+                "median": 20.218,
+                "min": 18.214,
+                "n": 7,
+                "p05": 18.2833,
+                "p95": 212.7203,
+                "samples": 7,
+                "stdev": 86.4054917347177
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 3.967538322813345,
+                "median": 3.005710850616171,
+                "min": 2.885482416591524,
+                "n": 7,
+                "p05": 2.897505259993989,
+                "p95": 3.6910129245566567,
+                "samples": 7,
+                "stdev": 0.354498131144322
+              },
+              "sequence_us": {
+                "max": 3.967538322813345,
+                "median": 3.005710850616171,
+                "min": 2.885482416591524,
+                "n": 7,
+                "p05": 2.897505259993989,
+                "p95": 3.6910129245566567,
+                "samples": 7,
+                "stdev": 0.354498131144322
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 91.542,
+                "median": 7.023,
+                "min": 6.763,
+                "n": 7,
+                "p05": 6.829,
+                "p95": 66.23459999999994,
+                "samples": 7,
+                "stdev": 29.58208185399274
+              },
+              "sequence_us": {
+                "max": 91.542,
+                "median": 7.023,
+                "min": 6.763,
+                "n": 7,
+                "p05": 6.829,
+                "p95": 66.23459999999994,
+                "samples": 7,
+                "stdev": 29.58208185399274
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "quantize",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 2048,
+        "local_size": 32,
+        "median_us": 22.033864342250276,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 0.00017967943123879806,
+            "max_abs": 0.030849456787109375,
+            "mean_abs": 0.003383165691047907,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 4.218463729143969e-05,
+            "max_abs": 0.022086143493652344,
+            "mean_abs": 0.0026487447321414948,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_dot_prequantized",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 4456448,
+        "q8_blocks_per_row": 64,
+        "row_tile": 1,
+        "rows": 4,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 29.758541228333836,
+                "median": 22.033864342250276,
+                "min": 21.599038172527806,
+                "n": 7,
+                "p05": 21.69882777276826,
+                "p95": 29.640116220819557,
+                "samples": 7,
+                "stdev": 3.4523579154012127
+              },
+              "sequence_us": {
+                "max": 595.1708245666767,
+                "median": 440.6772868450055,
+                "min": 431.9807634505561,
+                "n": 7,
+                "p05": 433.9765554553652,
+                "p95": 592.8023244163912,
+                "samples": 7,
+                "stdev": 69.04715830802425
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 29.990699999999997,
+                "median": 22.9054,
+                "min": 22.4405,
+                "n": 7,
+                "p05": 22.463045,
+                "p95": 29.983634999999996,
+                "samples": 7,
+                "stdev": 3.285823326637867
+              },
+              "sequence_us": {
+                "max": 599.814,
+                "median": 458.108,
+                "min": 448.81,
+                "n": 7,
+                "p05": 449.2609,
+                "p95": 599.6727,
+                "samples": 7,
+                "stdev": 65.71646653275737
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 25.568580302574894,
+                "median": 24.32621981765354,
+                "min": 24.205991383628895,
+                "n": 7,
+                "p05": 24.230037070433823,
+                "p95": 25.20789500050095,
+                "samples": 7,
+                "stdev": 0.44648934938314827
+              },
+              "sequence_us": {
+                "max": 25.568580302574894,
+                "median": 24.32621981765354,
+                "min": 24.205991383628895,
+                "n": 7,
+                "p05": 24.230037070433823,
+                "p95": 25.20789500050095,
+                "samples": 7,
+                "stdev": 0.44648934938314827
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 177.843,
+                "median": 28.303,
+                "min": 28.193,
+                "n": 7,
+                "p05": 28.195999999999998,
+                "p95": 133.0892999999999,
+                "samples": 7,
+                "stdev": 52.30902162209903
+              },
+              "sequence_us": {
+                "max": 177.843,
+                "median": 28.303,
+                "min": 28.193,
+                "n": 7,
+                "p05": 28.195999999999998,
+                "p95": 133.0892999999999,
+                "samples": 7,
+                "stdev": 52.30902162209903
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "single",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 2048,
+        "local_size": 32,
+        "median_us": 14.758040276525398,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 0.00017967943123879806,
+            "max_abs": 0.030849456787109375,
+            "mean_abs": 0.003383165691047907,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 4.218463729143969e-05,
+            "max_abs": 0.022086143493652344,
+            "mean_abs": 0.0026487447321414948,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_quantize_plus_dot",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 4456448,
+        "q8_blocks_per_row": 64,
+        "row_tile": 1,
+        "rows": 4,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 40.040076144674885,
+                "median": 14.758040276525398,
+                "min": 12.970644224025648,
+                "n": 7,
+                "p05": 12.976054503556757,
+                "p95": 33.952910530007,
+                "samples": 7,
+                "stdev": 9.090145555054743
+              },
+              "sequence_us": {
+                "max": 800.8015228934977,
+                "median": 295.16080553050796,
+                "min": 259.41288448051296,
+                "n": 7,
+                "p05": 259.5210900711352,
+                "p95": 679.05821060014,
+                "samples": 7,
+                "stdev": 181.80291110109485
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 40.69425,
+                "median": 15.2861,
+                "min": 13.20875,
+                "n": 7,
+                "p05": 13.38473,
+                "p95": 34.68146999999998,
+                "samples": 7,
+                "stdev": 9.09855784025408
+              },
+              "sequence_us": {
+                "max": 813.885,
+                "median": 305.722,
+                "min": 264.175,
+                "n": 7,
+                "p05": 267.6946,
+                "p95": 693.6293999999998,
+                "samples": 7,
+                "stdev": 181.9711568050816
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 28.454062719166416,
+                "median": 26.490331630097185,
+                "min": 26.370103196072538,
+                "n": 7,
+                "p05": 26.370103196072538,
+                "p95": 27.87696623584811,
+                "samples": 7,
+                "stdev": 0.7034732799196938
+              },
+              "sequence_us": {
+                "max": 28.454062719166416,
+                "median": 26.490331630097185,
+                "min": 26.370103196072538,
+                "n": 7,
+                "p05": 26.370103196072538,
+                "p95": 27.87696623584811,
+                "samples": 7,
+                "stdev": 0.7034732799196938
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 228.197,
+                "median": 30.477,
+                "min": 30.297,
+                "n": 7,
+                "p05": 30.312,
+                "p95": 171.14149999999987,
+                "samples": 7,
+                "stdev": 68.43681621281735
+              },
+              "sequence_us": {
+                "max": 228.197,
+                "median": 30.477,
+                "min": 30.297,
+                "n": 7,
+                "p05": 30.312,
+                "p95": 171.14149999999987,
+                "samples": 7,
+                "stdev": 68.43681621281735
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "single",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 2048,
+        "local_size": 32,
+        "median_us": 10.153291253381424,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 0.00017967943123879806,
+            "max_abs": 0.030849456787109375,
+            "mean_abs": 0.003383165691047907,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 4.218463729143969e-05,
+            "max_abs": 0.022086143493652344,
+            "mean_abs": 0.0026487447321414948,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_dot_prequantized",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 4456448,
+        "q8_blocks_per_row": 64,
+        "row_tile": 4,
+        "rows": 4,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 20.280533012724174,
+                "median": 10.153291253381424,
+                "min": 10.089169421901612,
+                "n": 7,
+                "p05": 10.098186554453461,
+                "p95": 17.27181645125738,
+                "samples": 7,
+                "stdev": 3.541203995615738
+              },
+              "sequence_us": {
+                "max": 405.6106602544835,
+                "median": 203.06582506762848,
+                "min": 201.78338843803226,
+                "n": 7,
+                "p05": 201.96373108906923,
+                "p95": 345.43632902514764,
+                "samples": 7,
+                "stdev": 70.82407991231477
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 20.8761,
+                "median": 10.8894,
+                "min": 10.3664,
+                "n": 7,
+                "p05": 10.403675,
+                "p95": 17.921564999999994,
+                "samples": 7,
+                "stdev": 3.553996021123725
+              },
+              "sequence_us": {
+                "max": 417.522,
+                "median": 217.788,
+                "min": 207.328,
+                "n": 7,
+                "p05": 208.0735,
+                "p95": 358.43129999999985,
+                "samples": 7,
+                "stdev": 71.07992042247449
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 16.992285342150087,
+                "median": 15.429315699829676,
+                "min": 15.108706542430618,
+                "n": 7,
+                "p05": 15.120729385833082,
+                "p95": 16.547440136258892,
+                "samples": 7,
+                "stdev": 0.5950866170380316
+              },
+              "sequence_us": {
+                "max": 16.992285342150087,
+                "median": 15.429315699829676,
+                "min": 15.108706542430618,
+                "n": 7,
+                "p05": 15.120729385833082,
+                "p95": 16.547440136258892,
+                "samples": 7,
+                "stdev": 0.5950866170380316
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 105.668,
+                "median": 19.386,
+                "min": 19.105,
+                "n": 7,
+                "p05": 19.174300000000002,
+                "p95": 79.83169999999994,
+                "samples": 7,
+                "stdev": 30.195569353324483
+              },
+              "sequence_us": {
+                "max": 105.668,
+                "median": 19.386,
+                "min": 19.105,
+                "n": 7,
+                "p05": 19.174300000000002,
+                "p95": 79.83169999999994,
+                "samples": 7,
+                "stdev": 30.195569353324483
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "rowtile4",
+        "workgroup_match": "exact_hip_wave32"
+      },
+      {
+        "backend": "hip",
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 0,
+            "method": "disjoint_xq_and_output_slices",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "all_dispatches",
+            "logical_iterations": 20,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL <= 0.05 and top-1 >= 90%",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "none",
+          "output_partitioning": "disjoint",
+          "validation_status": "pass",
+          "work_dependency": "independent"
+        },
+        "execution": {
+          "actual_parallel_lanes": 4,
+          "calibrated_timestamp_domain": false,
+          "lane_assignment": "round_robin_streams",
+          "requested_parallel_lanes": 4,
+          "submission_strategy": "multi_stream"
+        },
+        "in_features": 2048,
+        "local_size": 32,
+        "median_us": 10.826570483919447,
+        "numeric_correctness": {
+          "burst": {
+            "expected_repetitions": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ],
+            "kl_divergence": 0.00017967943123879806,
+            "max_abs": 0.030849456787109375,
+            "mean_abs": 0.003383165691047907,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 20,
+            "pass": true,
+            "top1": 1.0
+          },
+          "single": {
+            "expected_repetitions": [
+              0
+            ],
+            "kl_divergence": 4.218463729143969e-05,
+            "max_abs": 0.022086143493652344,
+            "mean_abs": 0.0026487447321414948,
+            "oracle": "CPU Q8_0 dense q8_1+dp4a BF16 logits with KL/top-1 gate",
+            "outputs_checked": 1,
+            "pass": true,
+            "top1": 1.0
+          }
+        },
+        "operation": "q8_0_dense_dp4a_quantize_plus_dot",
+        "out_features": 2048,
+        "q8_0_weight_bytes": 4456448,
+        "q8_blocks_per_row": 64,
+        "row_tile": 4,
+        "rows": 4,
+        "sequence_validation": {
+          "burst_expected_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "input_repetition_pattern": "distinct_deterministic_salt",
+          "output_partitioning": "disjoint",
+          "single_expected_repetitions": [
+            0
+          ],
+          "xq_partitioning": "disjoint"
+        },
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 4,
+          "recording_in_timed_region": false,
+          "strategy": "multi_stream",
+          "submit_in_host_wall": true
+        },
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 22.540827572387535,
+                "median": 10.826570483919447,
+                "min": 10.624185953311292,
+                "n": 7,
+                "p05": 10.647630497946098,
+                "p95": 19.090271515880165,
+                "samples": 7,
+                "stdev": 4.109841186010219
+              },
+              "sequence_us": {
+                "max": 450.8165514477507,
+                "median": 216.53140967838894,
+                "min": 212.48371906622583,
+                "n": 7,
+                "p05": 212.95260995892195,
+                "p95": 381.8054303176033,
+                "samples": 7,
+                "stdev": 82.19682372020439
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 23.155350000000002,
+                "median": 11.3628,
+                "min": 11.1804,
+                "n": 7,
+                "p05": 11.208975,
+                "p95": 19.659509999999994,
+                "samples": 7,
+                "stdev": 4.13454252746644
+              },
+              "sequence_us": {
+                "max": 463.107,
+                "median": 227.256,
+                "min": 223.608,
+                "n": 7,
+                "p05": 224.17950000000002,
+                "p95": 393.1901999999999,
+                "samples": 7,
+                "stdev": 82.6908505493288
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 2,
+            "gpu_elapsed": {
+              "clock": "hip_event",
+              "per_iteration_us": {
+                "max": 19.35677787796814,
+                "median": 17.473199078248673,
+                "min": 17.43312293357379,
+                "n": 7,
+                "p05": 17.43312293357379,
+                "p95": 18.863841298467086,
+                "samples": 7,
+                "stdev": 0.6535719898815898
+              },
+              "sequence_us": {
+                "max": 19.35677787796814,
+                "median": 17.473199078248673,
+                "min": 17.43312293357379,
+                "n": 7,
+                "p05": 17.43312293357379,
+                "p95": 18.863841298467086,
+                "samples": 7,
+                "stdev": 0.6535719898815898
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 145.051,
+                "median": 21.741,
+                "min": 21.401,
+                "n": 7,
+                "p05": 21.4187,
+                "p95": 109.46769999999991,
+                "samples": 7,
+                "stdev": 42.94656859020834
+              },
+              "sequence_us": {
+                "max": 145.051,
+                "median": 21.741,
+                "min": 21.401,
+                "n": 7,
+                "p05": 21.4187,
+                "p95": 109.46769999999991,
+                "samples": 7,
+                "stdev": 42.94656859020834
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "independent_throughput",
+        "variant": "rowtile4",
+        "workgroup_match": "exact_hip_wave32"
+      }
+    ]
+  },
+  "notes": "HIP raw GGUF Q8_0 dense q8_1+dp4a production-shaped probe using single-row and rowtile4 kernels.",
+  "parameters": {
+    "actual_parallel_lanes": 4,
+    "exact_local_size": 32,
+    "independent_streams": 4,
+    "input_scale": 0.1,
+    "repetitions": 20,
+    "row_tiles": "1,4",
+    "rows_list": "1,4",
+    "samples": 7,
+    "shapes": "768x2048,2048x2048",
+    "timing_mode": "independent_throughput",
+    "warmup_sequences": 3
+  },
+  "schema_version": 2,
+  "source": {
+    "branch": "",
+    "commit": "6da470297c5e427d7e3a24a2330e73c9b67f60e6",
+    "dirty": false,
+    "repo": "/home/kaden/redline-suite-20260829/.engines/hipEngine",
+    "source_hash": "sha256:214f6025d39d0db222fdb915dba10e2000c598c23589a925a6147e97013926c6"
+  },
+  "timing_config": {
+    "actual_parallel_lanes": 4,
+    "independent_streams": 4,
+    "method": "HIP events plus host wall for one-dispatch and exact repeated sequences",
+    "reps": 20,
+    "samples": 7,
+    "timing_mode": "independent_throughput",
+    "warmup": 3
+  },
+  "wrapper": {
+    "build_dir": "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1151/2026-08-29-rocm100-bench/build/redline/dense-q8",
+    "command": [
+      "python3",
+      "/home/kaden/redline-suite-20260829/.engines/hipEngine/benchmarks/micro/runners/q8_0_dense_real_slice.py",
+      "--backend",
+      "hip",
+      "--timing-mode",
+      "independent_throughput",
+      "--independent-streams",
+      "4",
+      "--reps",
+      "20",
+      "--warmup",
+      "3",
+      "--samples",
+      "7",
+      "--environment-json",
+      "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1151/2026-08-29-rocm100-bench/environment.json",
+      "--environment-ref",
+      "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1151/2026-08-29-rocm100-bench/environment.json",
+      "--gfx-arch",
+      "gfx1151",
+      "--hardware-gpu",
+      "AMD Radeon Graphics",
+      "--build-dir",
+      "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1151/2026-08-29-rocm100-bench/build/redline/dense-q8",
+      "--shapes",
+      "768x2048,2048x2048",
+      "--rows-list",
+      "1,4",
+      "--local-sizes",
+      "32,64,128",
+      "--row-tiles",
+      "1,4",
+      "--out",
+      "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1151/2026-08-29-rocm100-bench/independent_throughput/redline-dense-q8.raw.json",
+      "--pretty"
+    ],
+    "commands": [],
+    "cwd": "/home/kaden/redline-suite-20260829/.engines/hipEngine",
+    "schema": "hipengine.micro.q8_0_dense_real_slice_runner.v2"
+  }
+}
