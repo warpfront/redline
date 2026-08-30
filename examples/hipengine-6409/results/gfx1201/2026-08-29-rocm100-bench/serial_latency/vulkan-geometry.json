@@ -1,0 +1,1884 @@
+{
+  "backend": "vulkan",
+  "bench": "f32_gemv_geometry_sweep",
+  "classification": "geometry",
+  "command": [
+    "/home/kaden/redline-suite-20260829/.engines/hipEngine/benchmarks/micro/runners/geometry_sweep.py",
+    "--backend",
+    "vulkan",
+    "--timing-mode",
+    "serial_latency",
+    "--independent-streams",
+    "4",
+    "--reps",
+    "20",
+    "--warmup",
+    "3",
+    "--samples",
+    "7",
+    "--environment-json",
+    "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1201/2026-08-29-rocm100-bench/environment.json",
+    "--environment-ref",
+    "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1201/2026-08-29-rocm100-bench/environment.json",
+    "--gfx-arch",
+    "gfx1201",
+    "--hardware-gpu",
+    "AMD Radeon Graphics",
+    "--build-dir",
+    "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1201/2026-08-29-rocm100-bench/build/vulkan/geometry",
+    "--k-list",
+    "512,2048",
+    "--rows-list",
+    "1,4",
+    "--workgroups",
+    "64,256",
+    "--body-repeats",
+    "32",
+    "--out",
+    "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1201/2026-08-29-rocm100-bench/serial_latency/vulkan-geometry.json",
+    "--pretty"
+  ],
+  "correctness": {
+    "max_abs": 0.0,
+    "max_rel": 0.0,
+    "oracle": "CPU f32 reference using the same per-workgroup reduction order",
+    "status": "pass"
+  },
+  "cwd": "/home/kaden/redline-suite-20260829/.engines/hipEngine",
+  "environment_ref": "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1201/2026-08-29-rocm100-bench/environment.json",
+  "hardware": {
+    "device_id": "0x7551",
+    "gfx_arch": "gfx1201",
+    "gpu_name": "AMD Radeon Graphics"
+  },
+  "isa": {
+    "lds_bytes": 256,
+    "stats_note": "This family isolates workgroup/reduction geometry first. Register, scratch, waitcnt, and VOPD extraction are handled by the later ISA-stat microbench families.",
+    "stats_status": "not_collected",
+    "workgroup_size": 64
+  },
+  "kind": "hipengine_micro_result",
+  "measurements": {
+    "rows": [
+      {
+        "body_repeats": 32,
+        "bytes_per_us": 77.05331277,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 19,
+            "method": "compute_waw_barriers_and_final_chain",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 20,
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "gflops": 0.6164265021,
+        "k": 512,
+        "max_abs": 0,
+        "max_rel": 0,
+        "max_us": 53.166,
+        "median_us": 53.158,
+        "min_us": 53.112,
+        "p05_us": 53.1198,
+        "p95_us": 53.166,
+        "rows": 1,
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timestamp_period_ns": 10,
+        "timestamp_valid_bits": 64,
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 53.166,
+                "median": 53.158,
+                "min": 53.112,
+                "n": 7,
+                "p05": 53.1198,
+                "p95": 53.166,
+                "samples": 7,
+                "stdev": 0.0183525564
+              },
+              "sequence_us": {
+                "max": 1063.32,
+                "median": 1063.16,
+                "min": 1062.24,
+                "n": 7,
+                "p05": 1062.396,
+                "p95": 1063.32,
+                "samples": 7,
+                "stdev": 0.3670511281
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 56.09445,
+                "median": 55.6117,
+                "min": 55.05585,
+                "n": 7,
+                "p05": 55.21569,
+                "p95": 56.074155,
+                "samples": 7,
+                "stdev": 0.3216003573
+              },
+              "sequence_us": {
+                "max": 1121.889,
+                "median": 1112.234,
+                "min": 1101.117,
+                "n": 7,
+                "p05": 1104.3138,
+                "p95": 1121.4831,
+                "samples": 7,
+                "stdev": 6.432007145
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 54.84,
+                "median": 53.36,
+                "min": 53.28,
+                "n": 7,
+                "p05": 53.292,
+                "p95": 54.408,
+                "samples": 7,
+                "stdev": 0.5217239868
+              },
+              "sequence_us": {
+                "max": 54.84,
+                "median": 53.36,
+                "min": 53.28,
+                "n": 7,
+                "p05": 53.292,
+                "p95": 54.408,
+                "samples": 7,
+                "stdev": 0.5217239868
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 99.15,
+                "median": 94.923,
+                "min": 94.323,
+                "n": 7,
+                "p05": 94.338,
+                "p95": 98.9337,
+                "samples": 7,
+                "stdev": 1.898133057
+              },
+              "sequence_us": {
+                "max": 99.15,
+                "median": 94.923,
+                "min": 94.323,
+                "n": 7,
+                "p05": 94.338,
+                "p95": 98.9337,
+                "samples": 7,
+                "stdev": 1.898133057
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "workgroup_size": 64,
+        "workgroup_specialization": "specialization_constant"
+      },
+      {
+        "body_repeats": 32,
+        "bytes_per_us": 259.5032945,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 19,
+            "method": "compute_waw_barriers_and_final_chain",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 20,
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "gflops": 2.076026356,
+        "k": 512,
+        "max_abs": 0,
+        "max_rel": 0,
+        "max_us": 15.802,
+        "median_us": 15.784,
+        "min_us": 15.776,
+        "p05_us": 15.7766,
+        "p95_us": 15.8014,
+        "rows": 1,
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timestamp_period_ns": 10,
+        "timestamp_valid_bits": 64,
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 15.802,
+                "median": 15.784,
+                "min": 15.776,
+                "n": 7,
+                "p05": 15.7766,
+                "p95": 15.8014,
+                "samples": 7,
+                "stdev": 0.009839528776
+              },
+              "sequence_us": {
+                "max": 316.04,
+                "median": 315.68,
+                "min": 315.52,
+                "n": 7,
+                "p05": 315.532,
+                "p95": 316.028,
+                "samples": 7,
+                "stdev": 0.1967905755
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 17.7098,
+                "median": 17.67175,
+                "min": 17.518,
+                "n": 7,
+                "p05": 17.520865,
+                "p95": 17.70515,
+                "samples": 7,
+                "stdev": 0.08145730445
+              },
+              "sequence_us": {
+                "max": 354.196,
+                "median": 353.435,
+                "min": 350.36,
+                "n": 7,
+                "p05": 350.4173,
+                "p95": 354.103,
+                "samples": 7,
+                "stdev": 1.629146089
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 15.8,
+                "median": 15.68,
+                "min": 15.56,
+                "n": 7,
+                "p05": 15.572,
+                "p95": 15.788,
+                "samples": 7,
+                "stdev": 0.07835033829
+              },
+              "sequence_us": {
+                "max": 15.8,
+                "median": 15.68,
+                "min": 15.56,
+                "n": 7,
+                "p05": 15.572,
+                "p95": 15.788,
+                "samples": 7,
+                "stdev": 0.07835033829
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 54.222,
+                "median": 52.329,
+                "min": 51.999,
+                "n": 7,
+                "p05": 52.029,
+                "p95": 53.9967,
+                "samples": 7,
+                "stdev": 0.7666910348
+              },
+              "sequence_us": {
+                "max": 54.222,
+                "median": 52.329,
+                "min": 51.999,
+                "n": 7,
+                "p05": 52.029,
+                "p95": 53.9967,
+                "samples": 7,
+                "stdev": 0.7666910348
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "workgroup_size": 256,
+        "workgroup_specialization": "specialization_constant"
+      },
+      {
+        "body_repeats": 32,
+        "bytes_per_us": 194.1453056,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 19,
+            "method": "compute_waw_barriers_and_final_chain",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 20,
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "gflops": 2.485059912,
+        "k": 512,
+        "max_abs": 0,
+        "max_rel": 0,
+        "max_us": 53.02,
+        "median_us": 52.744,
+        "min_us": 52.494,
+        "p05_us": 52.5192,
+        "p95_us": 52.9438,
+        "rows": 4,
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timestamp_period_ns": 10,
+        "timestamp_valid_bits": 64,
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 53.02,
+                "median": 52.744,
+                "min": 52.494,
+                "n": 7,
+                "p05": 52.5192,
+                "p95": 52.9438,
+                "samples": 7,
+                "stdev": 0.1581526
+              },
+              "sequence_us": {
+                "max": 1060.4,
+                "median": 1054.88,
+                "min": 1049.88,
+                "n": 7,
+                "p05": 1050.384,
+                "p95": 1058.876,
+                "samples": 7,
+                "stdev": 3.163052001
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 55.64125,
+                "median": 54.57615,
+                "min": 54.4304,
+                "n": 7,
+                "p05": 54.44678,
+                "p95": 55.34005,
+                "samples": 7,
+                "stdev": 0.3879557354
+              },
+              "sequence_us": {
+                "max": 1112.825,
+                "median": 1091.523,
+                "min": 1088.608,
+                "n": 7,
+                "p05": 1088.9356,
+                "p95": 1106.801,
+                "samples": 7,
+                "stdev": 7.759114709
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 53.44,
+                "median": 53.28,
+                "min": 53.2,
+                "n": 7,
+                "p05": 53.212,
+                "p95": 53.416,
+                "samples": 7,
+                "stdev": 0.0736234213
+              },
+              "sequence_us": {
+                "max": 53.44,
+                "median": 53.28,
+                "min": 53.2,
+                "n": 7,
+                "p05": 53.212,
+                "p95": 53.416,
+                "samples": 7,
+                "stdev": 0.0736234213
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 90.868,
+                "median": 89.575,
+                "min": 89.015,
+                "n": 7,
+                "p05": 89.036,
+                "p95": 90.5824,
+                "samples": 7,
+                "stdev": 0.5819869555
+              },
+              "sequence_us": {
+                "max": 90.868,
+                "median": 89.575,
+                "min": 89.015,
+                "n": 7,
+                "p05": 89.036,
+                "p95": 90.5824,
+                "samples": 7,
+                "stdev": 0.5819869555
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "workgroup_size": 64,
+        "workgroup_specialization": "specialization_constant"
+      },
+      {
+        "body_repeats": 32,
+        "bytes_per_us": 662.7831715,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 19,
+            "method": "compute_waw_barriers_and_final_chain",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 20,
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "gflops": 8.483624595,
+        "k": 512,
+        "max_abs": 0,
+        "max_rel": 0,
+        "max_us": 15.486,
+        "median_us": 15.45,
+        "min_us": 15.444,
+        "p05_us": 15.4446,
+        "p95_us": 15.486,
+        "rows": 4,
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timestamp_period_ns": 10,
+        "timestamp_valid_bits": 64,
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 15.486,
+                "median": 15.45,
+                "min": 15.444,
+                "n": 7,
+                "p05": 15.4446,
+                "p95": 15.486,
+                "samples": 7,
+                "stdev": 0.01711903106
+              },
+              "sequence_us": {
+                "max": 309.72,
+                "median": 309,
+                "min": 308.88,
+                "n": 7,
+                "p05": 308.892,
+                "p95": 309.72,
+                "samples": 7,
+                "stdev": 0.3423806212
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 17.4404,
+                "median": 17.30975,
+                "min": 17.22305,
+                "n": 7,
+                "p05": 17.24258,
+                "p95": 17.40284,
+                "samples": 7,
+                "stdev": 0.05977758607
+              },
+              "sequence_us": {
+                "max": 348.808,
+                "median": 346.195,
+                "min": 344.461,
+                "n": 7,
+                "p05": 344.8516,
+                "p95": 348.0568,
+                "samples": 7,
+                "stdev": 1.195551721
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 16.48,
+                "median": 15.56,
+                "min": 15.56,
+                "n": 7,
+                "p05": 15.56,
+                "p95": 16.228,
+                "samples": 7,
+                "stdev": 0.3162019505
+              },
+              "sequence_us": {
+                "max": 16.48,
+                "median": 15.56,
+                "min": 15.56,
+                "n": 7,
+                "p05": 15.56,
+                "p95": 16.228,
+                "samples": 7,
+                "stdev": 0.3162019505
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 62.014,
+                "median": 55.975,
+                "min": 51.678,
+                "n": 7,
+                "p05": 52.7628,
+                "p95": 60.6349,
+                "samples": 7,
+                "stdev": 2.844801159
+              },
+              "sequence_us": {
+                "max": 62.014,
+                "median": 55.975,
+                "min": 51.678,
+                "n": 7,
+                "p05": 52.7628,
+                "p95": 60.6349,
+                "samples": 7,
+                "stdev": 2.844801159
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "workgroup_size": 256,
+        "workgroup_specialization": "specialization_constant"
+      },
+      {
+        "body_repeats": 32,
+        "bytes_per_us": 83.54665334,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 19,
+            "method": "compute_waw_barriers_and_final_chain",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 20,
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "gflops": 0.6683732267,
+        "k": 2048,
+        "max_abs": 0,
+        "max_rel": 0,
+        "max_us": 200.364,
+        "median_us": 196.106,
+        "min_us": 192.56,
+        "p05_us": 192.902,
+        "p95_us": 199.7406,
+        "rows": 1,
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timestamp_period_ns": 10,
+        "timestamp_valid_bits": 64,
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 200.364,
+                "median": 196.106,
+                "min": 192.56,
+                "n": 7,
+                "p05": 192.902,
+                "p95": 199.7406,
+                "samples": 7,
+                "stdev": 2.519560927
+              },
+              "sequence_us": {
+                "max": 4007.28,
+                "median": 3922.12,
+                "min": 3851.2,
+                "n": 7,
+                "p05": 3858.04,
+                "p95": 3994.812,
+                "samples": 7,
+                "stdev": 50.39121854
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 202.80505,
+                "median": 198.8656,
+                "min": 195.2992,
+                "n": 7,
+                "p05": 195.650425,
+                "p95": 202.27519,
+                "samples": 7,
+                "stdev": 2.45449038
+              },
+              "sequence_us": {
+                "max": 4056.101,
+                "median": 3977.312,
+                "min": 3905.984,
+                "n": 7,
+                "p05": 3913.0085,
+                "p95": 4045.5038,
+                "samples": 7,
+                "stdev": 49.0898076
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 201,
+                "median": 200.96,
+                "min": 200.72,
+                "n": 7,
+                "p05": 200.756,
+                "p95": 201,
+                "samples": 7,
+                "stdev": 0.0942424143
+              },
+              "sequence_us": {
+                "max": 201,
+                "median": 200.96,
+                "min": 200.72,
+                "n": 7,
+                "p05": 200.756,
+                "p95": 201,
+                "samples": 7,
+                "stdev": 0.0942424143
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 266.483,
+                "median": 237.8,
+                "min": 236.999,
+                "n": 7,
+                "p05": 237.1823,
+                "p95": 259.7771,
+                "samples": 7,
+                "stdev": 9.966062953
+              },
+              "sequence_us": {
+                "max": 266.483,
+                "median": 237.8,
+                "min": 236.999,
+                "n": 7,
+                "p05": 237.1823,
+                "p95": 259.7771,
+                "samples": 7,
+                "stdev": 9.966062953
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "workgroup_size": 64,
+        "workgroup_specialization": "specialization_constant"
+      },
+      {
+        "body_repeats": 32,
+        "bytes_per_us": 317.35947,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 19,
+            "method": "compute_waw_barriers_and_final_chain",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 20,
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "gflops": 2.53887576,
+        "k": 2048,
+        "max_abs": 0,
+        "max_rel": 0,
+        "max_us": 51.71,
+        "median_us": 51.626,
+        "min_us": 51.398,
+        "p05_us": 51.4124,
+        "p95_us": 51.7088,
+        "rows": 1,
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timestamp_period_ns": 10,
+        "timestamp_valid_bits": 64,
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 51.71,
+                "median": 51.626,
+                "min": 51.398,
+                "n": 7,
+                "p05": 51.4124,
+                "p95": 51.7088,
+                "samples": 7,
+                "stdev": 0.1184994618
+              },
+              "sequence_us": {
+                "max": 1034.2,
+                "median": 1032.52,
+                "min": 1027.96,
+                "n": 7,
+                "p05": 1028.248,
+                "p95": 1034.176,
+                "samples": 7,
+                "stdev": 2.369989236
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 53.5506,
+                "median": 53.4755,
+                "min": 53.24865,
+                "n": 7,
+                "p05": 53.305125,
+                "p95": 53.548635,
+                "samples": 7,
+                "stdev": 0.09428842096
+              },
+              "sequence_us": {
+                "max": 1071.012,
+                "median": 1069.51,
+                "min": 1064.973,
+                "n": 7,
+                "p05": 1066.1025,
+                "p95": 1070.9727,
+                "samples": 7,
+                "stdev": 1.885768419
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 51.88,
+                "median": 51.8,
+                "min": 50.72,
+                "n": 7,
+                "p05": 50.768,
+                "p95": 51.88,
+                "samples": 7,
+                "stdev": 0.4792511165
+              },
+              "sequence_us": {
+                "max": 51.88,
+                "median": 51.8,
+                "min": 50.72,
+                "n": 7,
+                "p05": 50.768,
+                "p95": 51.88,
+                "samples": 7,
+                "stdev": 0.4792511165
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 118.179,
+                "median": 88.164,
+                "min": 86.24,
+                "n": 7,
+                "p05": 86.4386,
+                "p95": 109.4688,
+                "samples": 7,
+                "stdev": 10.69857496
+              },
+              "sequence_us": {
+                "max": 118.179,
+                "median": 88.164,
+                "min": 86.24,
+                "n": 7,
+                "p05": 86.4386,
+                "p95": 109.4688,
+                "samples": 7,
+                "stdev": 10.69857496
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "workgroup_size": 256,
+        "workgroup_specialization": "specialization_constant"
+      },
+      {
+        "body_repeats": 32,
+        "bytes_per_us": 222.9139909,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 19,
+            "method": "compute_waw_barriers_and_final_chain",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 20,
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "gflops": 2.853299084,
+        "k": 2048,
+        "max_abs": 0,
+        "max_rel": 0,
+        "max_us": 187.074,
+        "median_us": 183.748,
+        "min_us": 181.22,
+        "p05_us": 181.5044,
+        "p95_us": 186.7518,
+        "rows": 4,
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timestamp_period_ns": 10,
+        "timestamp_valid_bits": 64,
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 187.074,
+                "median": 183.748,
+                "min": 181.22,
+                "n": 7,
+                "p05": 181.5044,
+                "p95": 186.7518,
+                "samples": 7,
+                "stdev": 1.975664146
+              },
+              "sequence_us": {
+                "max": 3741.48,
+                "median": 3674.96,
+                "min": 3624.4,
+                "n": 7,
+                "p05": 3630.088,
+                "p95": 3735.036,
+                "samples": 7,
+                "stdev": 39.51328291
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 189.56,
+                "median": 188.27955,
+                "min": 184.34965,
+                "n": 7,
+                "p05": 184.5511,
+                "p95": 189.49736,
+                "samples": 7,
+                "stdev": 1.980901834
+              },
+              "sequence_us": {
+                "max": 3791.2,
+                "median": 3765.591,
+                "min": 3686.993,
+                "n": 7,
+                "p05": 3691.022,
+                "p95": 3789.9472,
+                "samples": 7,
+                "stdev": 39.61803669
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 189.36,
+                "median": 189,
+                "min": 188.72,
+                "n": 7,
+                "p05": 188.744,
+                "p95": 189.348,
+                "samples": 7,
+                "stdev": 0.2350510149
+              },
+              "sequence_us": {
+                "max": 189.36,
+                "median": 189,
+                "min": 188.72,
+                "n": 7,
+                "p05": 188.744,
+                "p95": 189.348,
+                "samples": 7,
+                "stdev": 0.2350510149
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 236.618,
+                "median": 232.472,
+                "min": 227.054,
+                "n": 7,
+                "p05": 227.3603,
+                "p95": 236.3327,
+                "samples": 7,
+                "stdev": 3.284008066
+              },
+              "sequence_us": {
+                "max": 236.618,
+                "median": 232.472,
+                "min": 227.054,
+                "n": 7,
+                "p05": 227.3603,
+                "p95": 236.3327,
+                "samples": 7,
+                "stdev": 3.284008066
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "workgroup_size": 64,
+        "workgroup_specialization": "specialization_constant"
+      },
+      {
+        "body_repeats": 32,
+        "bytes_per_us": 856.4021076,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 19,
+            "method": "compute_waw_barriers_and_final_chain",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 20,
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "gflops": 10.96194698,
+        "k": 2048,
+        "max_abs": 0,
+        "max_rel": 0,
+        "max_us": 48.02,
+        "median_us": 47.828,
+        "min_us": 47.6,
+        "p05_us": 47.618,
+        "p95_us": 48.017,
+        "rows": 4,
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timestamp_period_ns": 10,
+        "timestamp_valid_bits": 64,
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 48.02,
+                "median": 47.828,
+                "min": 47.6,
+                "n": 7,
+                "p05": 47.618,
+                "p95": 48.017,
+                "samples": 7,
+                "stdev": 0.1490481363
+              },
+              "sequence_us": {
+                "max": 960.4,
+                "median": 956.56,
+                "min": 952,
+                "n": 7,
+                "p05": 952.36,
+                "p95": 960.34,
+                "samples": 7,
+                "stdev": 2.980962726
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 49.88905,
+                "median": 49.7278,
+                "min": 49.47795,
+                "n": 7,
+                "p05": 49.49643,
+                "p95": 49.862155,
+                "samples": 7,
+                "stdev": 0.1350882727
+              },
+              "sequence_us": {
+                "max": 997.781,
+                "median": 994.556,
+                "min": 989.559,
+                "n": 7,
+                "p05": 989.9286,
+                "p95": 997.2431,
+                "samples": 7,
+                "stdev": 2.701765455
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 48.24,
+                "median": 48.2,
+                "min": 48,
+                "n": 7,
+                "p05": 48.036,
+                "p95": 48.24,
+                "samples": 7,
+                "stdev": 0.08
+              },
+              "sequence_us": {
+                "max": 48.24,
+                "median": 48.2,
+                "min": 48,
+                "n": 7,
+                "p05": 48.036,
+                "p95": 48.24,
+                "samples": 7,
+                "stdev": 0.08
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 89.545,
+                "median": 83.997,
+                "min": 81.142,
+                "n": 7,
+                "p05": 81.8062,
+                "p95": 88.9384,
+                "samples": 7,
+                "stdev": 2.596852215
+              },
+              "sequence_us": {
+                "max": 89.545,
+                "median": 83.997,
+                "min": 81.142,
+                "n": 7,
+                "p05": 81.8062,
+                "p95": 88.9384,
+                "samples": 7,
+                "stdev": 2.596852215
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "workgroup_size": 256,
+        "workgroup_specialization": "specialization_constant"
+      }
+    ]
+  },
+  "notes": "Matched repeat-shifted f32 GEMV/reduction geometry diagnostic. Uses the same data, K/rows/workgroup/body-repeat shape, and CPU oracle on both backends. Do not use this row alone as compiler_aco evidence until ISA stats are collected.",
+  "parameters": {
+    "algorithm": "repeat_shifted_f32_gemv_row_shared_tree_reduce",
+    "benchmark_family": "geometry_sweep",
+    "build_command": [
+      "/usr/bin/c++",
+      "-O2",
+      "-std=c++17",
+      "/home/kaden/redline-suite-20260829/.engines/hipEngine/benchmarks/micro/runners/vulkan_geometry_sweep.cpp",
+      "-o",
+      "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1201/2026-08-29-rocm100-bench/build/vulkan/geometry/vulkan/vulkan_geometry_sweep",
+      "-lvulkan"
+    ],
+    "expected_row_count": 8,
+    "hardware": {
+      "api_version": 4211023,
+      "device_id": 30033,
+      "device_name": "AMD Radeon AI PRO R9700 (RADV GFX1201)",
+      "device_type": 2,
+      "driver_version_raw": 109051907,
+      "queue_family": 0,
+      "vendor_id": 4098
+    },
+    "harness_command": [
+      "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1201/2026-08-29-rocm100-bench/build/vulkan/geometry/vulkan/vulkan_geometry_sweep",
+      "--spirv",
+      "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1201/2026-08-29-rocm100-bench/build/vulkan/geometry/vulkan/geometry_sweep.spv",
+      "--json",
+      "/tmp/hipengine-geometry-5bizy0er.json",
+      "--k-list",
+      "512,2048",
+      "--rows-list",
+      "1,4",
+      "--workgroups",
+      "64,256",
+      "--body-repeats",
+      "32",
+      "--reps",
+      "20",
+      "--warmup",
+      "3",
+      "--samples",
+      "7",
+      "--timing-mode",
+      "serial_latency",
+      "--device-index",
+      "0"
+    ],
+    "hip_fixed_workgroup_sizes": null,
+    "hip_wavefront_size_request": null,
+    "hip_workgroup_specialization": null,
+    "independent_streams": null,
+    "raw_config": {
+      "body_repeats": 32,
+      "k_list": [
+        512,
+        2048
+      ],
+      "method": "one workgroup per row; repeat-shifted strided f32 FMA inner loop; shared-memory tree reduction; device-local buffers",
+      "reps": 20,
+      "rows_list": [
+        1,
+        4
+      ],
+      "samples": 7,
+      "timing_mode": "serial_latency",
+      "warmup": 3,
+      "workgroups": [
+        64,
+        256
+      ]
+    },
+    "shader_command": [
+      "/usr/bin/glslc",
+      "-O",
+      "/home/kaden/redline-suite-20260829/.engines/hipEngine/benchmarks/micro/kernels/vulkan/geometry_sweep.comp",
+      "-o",
+      "/home/kaden/redline-suite-20260829/examples/hipengine-6409/results/gfx1201/2026-08-29-rocm100-bench/build/vulkan/geometry/vulkan/geometry_sweep.spv"
+    ],
+    "timing_method": "v2 single+burst GPU elapsed and host wall",
+    "timing_mode": "serial_latency"
+  },
+  "schema_version": 2,
+  "source": {
+    "branch": "",
+    "commit": "6da470297c5e427d7e3a24a2330e73c9b67f60e6",
+    "dirty": false,
+    "repo": "/home/kaden/redline-suite-20260829/.engines/hipEngine",
+    "source_hash": "sha256:4ced21718126c3dde16074da2994f78b201a058e3225f0594a6f0b1b9c33266a"
+  },
+  "timing": {
+    "measured_iters": 20,
+    "median": 196.106,
+    "p05": 192.902,
+    "p95": 199.7406,
+    "primary": {
+      "body_repeats": 32,
+      "bytes_per_us": 83.54665334,
+      "correctness": {
+        "single_dispatch": {
+          "oracle": "deterministic CPU f32 reference with sequence tag",
+          "status": "pass"
+        },
+        "synchronization": {
+          "barrier_count": 19,
+          "method": "compute_waw_barriers_and_final_chain",
+          "status": "pass"
+        },
+        "timed_sequence": {
+          "coverage": "chained_final_state",
+          "logical_iterations": 20,
+          "oracle": "deterministic CPU f32 reference with sequence tag",
+          "status": "pass"
+        }
+      },
+      "correctness_pass": true,
+      "dependency_contract": {
+        "inter_dispatch_ordering": "vulkan_compute_barrier",
+        "output_partitioning": "chained_shared",
+        "validation_status": "pass",
+        "work_dependency": "chained"
+      },
+      "gflops": 0.6683732267,
+      "k": 2048,
+      "max_abs": 0,
+      "max_rel": 0,
+      "max_us": 200.364,
+      "median_us": 196.106,
+      "min_us": 192.56,
+      "p05_us": 192.902,
+      "p95_us": 199.7406,
+      "rows": 1,
+      "submission": {
+        "completion_in_host_wall": true,
+        "queue_or_stream_count": 1,
+        "recording_in_timed_region": false,
+        "strategy": "vulkan_command_buffer",
+        "submit_in_host_wall": true
+      },
+      "timestamp_period_ns": 10,
+      "timestamp_valid_bits": 64,
+      "timing": {
+        "burst": {
+          "dispatches_per_iteration": 1,
+          "gpu_elapsed": {
+            "clock": "vulkan_timestamp",
+            "per_iteration_us": {
+              "max": 200.364,
+              "median": 196.106,
+              "min": 192.56,
+              "n": 7,
+              "p05": 192.902,
+              "p95": 199.7406,
+              "samples": 7,
+              "stdev": 2.519560927
+            },
+            "sequence_us": {
+              "max": 4007.28,
+              "median": 3922.12,
+              "min": 3851.2,
+              "n": 7,
+              "p05": 3858.04,
+              "p95": 3994.812,
+              "samples": 7,
+              "stdev": 50.39121854
+            },
+            "status": "ok"
+          },
+          "host_wall": {
+            "clock": "steady_clock",
+            "per_iteration_us": {
+              "max": 202.80505,
+              "median": 198.8656,
+              "min": 195.2992,
+              "n": 7,
+              "p05": 195.650425,
+              "p95": 202.27519,
+              "samples": 7,
+              "stdev": 2.45449038
+            },
+            "sequence_us": {
+              "max": 4056.101,
+              "median": 3977.312,
+              "min": 3905.984,
+              "n": 7,
+              "p05": 3913.0085,
+              "p95": 4045.5038,
+              "samples": 7,
+              "stdev": 49.0898076
+            },
+            "status": "ok"
+          },
+          "logical_iterations": 20
+        },
+        "single": {
+          "dispatches_per_iteration": 1,
+          "gpu_elapsed": {
+            "clock": "vulkan_timestamp",
+            "per_iteration_us": {
+              "max": 201,
+              "median": 200.96,
+              "min": 200.72,
+              "n": 7,
+              "p05": 200.756,
+              "p95": 201,
+              "samples": 7,
+              "stdev": 0.0942424143
+            },
+            "sequence_us": {
+              "max": 201,
+              "median": 200.96,
+              "min": 200.72,
+              "n": 7,
+              "p05": 200.756,
+              "p95": 201,
+              "samples": 7,
+              "stdev": 0.0942424143
+            },
+            "status": "ok"
+          },
+          "host_wall": {
+            "clock": "steady_clock",
+            "per_iteration_us": {
+              "max": 266.483,
+              "median": 237.8,
+              "min": 236.999,
+              "n": 7,
+              "p05": 237.1823,
+              "p95": 259.7771,
+              "samples": 7,
+              "stdev": 9.966062953
+            },
+            "sequence_us": {
+              "max": 266.483,
+              "median": 237.8,
+              "min": 236.999,
+              "n": 7,
+              "p05": 237.1823,
+              "p95": 259.7771,
+              "samples": 7,
+              "stdev": 9.966062953
+            },
+            "status": "ok"
+          },
+          "logical_iterations": 1
+        }
+      },
+      "timing_mode": "serial_latency",
+      "workgroup_size": 64,
+      "workgroup_specialization": "specialization_constant"
+    },
+    "primary_domain": "gpu_elapsed",
+    "samples": 7,
+    "summary": {
+      "best": {
+        "body_repeats": 32,
+        "bytes_per_us": 662.7831715,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 19,
+            "method": "compute_waw_barriers_and_final_chain",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 20,
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "gflops": 8.483624595,
+        "k": 512,
+        "max_abs": 0,
+        "max_rel": 0,
+        "max_us": 15.486,
+        "median_us": 15.45,
+        "min_us": 15.444,
+        "p05_us": 15.4446,
+        "p95_us": 15.486,
+        "rows": 4,
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timestamp_period_ns": 10,
+        "timestamp_valid_bits": 64,
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 15.486,
+                "median": 15.45,
+                "min": 15.444,
+                "n": 7,
+                "p05": 15.4446,
+                "p95": 15.486,
+                "samples": 7,
+                "stdev": 0.01711903106
+              },
+              "sequence_us": {
+                "max": 309.72,
+                "median": 309,
+                "min": 308.88,
+                "n": 7,
+                "p05": 308.892,
+                "p95": 309.72,
+                "samples": 7,
+                "stdev": 0.3423806212
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 17.4404,
+                "median": 17.30975,
+                "min": 17.22305,
+                "n": 7,
+                "p05": 17.24258,
+                "p95": 17.40284,
+                "samples": 7,
+                "stdev": 0.05977758607
+              },
+              "sequence_us": {
+                "max": 348.808,
+                "median": 346.195,
+                "min": 344.461,
+                "n": 7,
+                "p05": 344.8516,
+                "p95": 348.0568,
+                "samples": 7,
+                "stdev": 1.195551721
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 16.48,
+                "median": 15.56,
+                "min": 15.56,
+                "n": 7,
+                "p05": 15.56,
+                "p95": 16.228,
+                "samples": 7,
+                "stdev": 0.3162019505
+              },
+              "sequence_us": {
+                "max": 16.48,
+                "median": 15.56,
+                "min": 15.56,
+                "n": 7,
+                "p05": 15.56,
+                "p95": 16.228,
+                "samples": 7,
+                "stdev": 0.3162019505
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 62.014,
+                "median": 55.975,
+                "min": 51.678,
+                "n": 7,
+                "p05": 52.7628,
+                "p95": 60.6349,
+                "samples": 7,
+                "stdev": 2.844801159
+              },
+              "sequence_us": {
+                "max": 62.014,
+                "median": 55.975,
+                "min": 51.678,
+                "n": 7,
+                "p05": 52.7628,
+                "p95": 60.6349,
+                "samples": 7,
+                "stdev": 2.844801159
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "workgroup_size": 256,
+        "workgroup_specialization": "specialization_constant"
+      },
+      "best_worst_ratio": 12.692944983818771,
+      "worst": {
+        "body_repeats": 32,
+        "bytes_per_us": 83.54665334,
+        "correctness": {
+          "single_dispatch": {
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          },
+          "synchronization": {
+            "barrier_count": 19,
+            "method": "compute_waw_barriers_and_final_chain",
+            "status": "pass"
+          },
+          "timed_sequence": {
+            "coverage": "chained_final_state",
+            "logical_iterations": 20,
+            "oracle": "deterministic CPU f32 reference with sequence tag",
+            "status": "pass"
+          }
+        },
+        "correctness_pass": true,
+        "dependency_contract": {
+          "inter_dispatch_ordering": "vulkan_compute_barrier",
+          "output_partitioning": "chained_shared",
+          "validation_status": "pass",
+          "work_dependency": "chained"
+        },
+        "gflops": 0.6683732267,
+        "k": 2048,
+        "max_abs": 0,
+        "max_rel": 0,
+        "max_us": 200.364,
+        "median_us": 196.106,
+        "min_us": 192.56,
+        "p05_us": 192.902,
+        "p95_us": 199.7406,
+        "rows": 1,
+        "submission": {
+          "completion_in_host_wall": true,
+          "queue_or_stream_count": 1,
+          "recording_in_timed_region": false,
+          "strategy": "vulkan_command_buffer",
+          "submit_in_host_wall": true
+        },
+        "timestamp_period_ns": 10,
+        "timestamp_valid_bits": 64,
+        "timing": {
+          "burst": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 200.364,
+                "median": 196.106,
+                "min": 192.56,
+                "n": 7,
+                "p05": 192.902,
+                "p95": 199.7406,
+                "samples": 7,
+                "stdev": 2.519560927
+              },
+              "sequence_us": {
+                "max": 4007.28,
+                "median": 3922.12,
+                "min": 3851.2,
+                "n": 7,
+                "p05": 3858.04,
+                "p95": 3994.812,
+                "samples": 7,
+                "stdev": 50.39121854
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 202.80505,
+                "median": 198.8656,
+                "min": 195.2992,
+                "n": 7,
+                "p05": 195.650425,
+                "p95": 202.27519,
+                "samples": 7,
+                "stdev": 2.45449038
+              },
+              "sequence_us": {
+                "max": 4056.101,
+                "median": 3977.312,
+                "min": 3905.984,
+                "n": 7,
+                "p05": 3913.0085,
+                "p95": 4045.5038,
+                "samples": 7,
+                "stdev": 49.0898076
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 20
+          },
+          "single": {
+            "dispatches_per_iteration": 1,
+            "gpu_elapsed": {
+              "clock": "vulkan_timestamp",
+              "per_iteration_us": {
+                "max": 201,
+                "median": 200.96,
+                "min": 200.72,
+                "n": 7,
+                "p05": 200.756,
+                "p95": 201,
+                "samples": 7,
+                "stdev": 0.0942424143
+              },
+              "sequence_us": {
+                "max": 201,
+                "median": 200.96,
+                "min": 200.72,
+                "n": 7,
+                "p05": 200.756,
+                "p95": 201,
+                "samples": 7,
+                "stdev": 0.0942424143
+              },
+              "status": "ok"
+            },
+            "host_wall": {
+              "clock": "steady_clock",
+              "per_iteration_us": {
+                "max": 266.483,
+                "median": 237.8,
+                "min": 236.999,
+                "n": 7,
+                "p05": 237.1823,
+                "p95": 259.7771,
+                "samples": 7,
+                "stdev": 9.966062953
+              },
+              "sequence_us": {
+                "max": 266.483,
+                "median": 237.8,
+                "min": 236.999,
+                "n": 7,
+                "p05": 237.1823,
+                "p95": 259.7771,
+                "samples": 7,
+                "stdev": 9.966062953
+              },
+              "status": "ok"
+            },
+            "logical_iterations": 1
+          }
+        },
+        "timing_mode": "serial_latency",
+        "workgroup_size": 64,
+        "workgroup_specialization": "specialization_constant"
+      }
+    },
+    "unit": "us_per_dispatch",
+    "warmup_iters": 3
+  }
+}

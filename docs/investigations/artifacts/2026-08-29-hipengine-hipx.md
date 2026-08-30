@@ -54,3 +54,27 @@ result (88.4% wins vs hip, 0.601 median vs Vulkan).
 - The 13.3x gfx1151 vs-Vulkan outlier row is unexamined.
 - gfx1030 remains excluded end to end (PM4 refused by design; suite kernels
   also fail to compile there).
+
+## Addendum: gfx1201 rerun under ROCm 10.0 (hiptrx, R9700)
+
+The missing cell is filled. hipEngine, same pinned commit and parameters:
+
+| arch (runtime) | redline 1st | vs hip median | vs hip wins | vs vulkan median | vs vulkan wins |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| gfx1201 (10.0, hiptrx R9700) | 56.7% | 0.896 | 67.4% | **0.627** | 80.8% |
+
+Against the July 7.14 pin (0.480 median vs Vulkan, 87.9% wins) the margin is
+narrower — but host SKU (RX 9070 XT class vs R9700), Mesa, and ROCm all changed
+together, so no per-factor attribution is available from these two points.
+
+Rust suite on the same host/runtime (240 rows, join vs Vulkan reference):
+redline geomean **0.59** independent (87/120 wins; multi-queue worth +19% over
+single-lane) and **0.90** serial (82/120 wins). Stock hip/hipGraph: 1.8-3.9x
+slower than Vulkan by geomean, medians 1.17-3.11, tails to 93x.
+
+Third confirmation that empty-kernel queue optima do not transfer: the cliff
+sweep said Q2 is optimal on gfx1201, but on real kernels `--hip-queues auto`
+(Q2) is WORSE than legacy Q4 (hip geomean 3.29 -> 3.76 independent, worst row
+92x -> 168x). Together with gfx1151's Q5 regression this now holds on every
+part tested, in both directions. The tuned-width table in the suite should be
+treated as an empty-kernel artifact, not guidance.
