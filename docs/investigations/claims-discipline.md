@@ -9,8 +9,9 @@ language for the two figures that matter, and answers the standing objection.
 
 ## The two figures are different quantities. Both are true.
 
-**Figure 1 — per-dispatch submission cost. 3.5x to 11.6x.**
-PM4 conservative (retained IB), against *tuned* hipGraph, gate-verified:
+**Figure 1 — per-dispatch submission cost, single-lane. 3.5x to 11.6x.**
+PM4 conservative (retained IB, one queue), against *tuned* hipGraph,
+gate-verified:
 
 | part | PM4 | hipGraph default | hipGraph tuned | vs default | vs tuned |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -20,6 +21,19 @@ PM4 conservative (retained IB), against *tuned* hipGraph, gate-verified:
 
 gfx1030 is struck: `83889d6` proved PM4 executed nothing there (gate 0/512 with a
 success return). RDNA1/RDNA2 are now refused.
+
+**Figure 1b — multi-queue PM4, shape-gated. 8.2x to 12.9x.**
+Each part at its own best lane count (4/4/2), against hipGraph at its own best
+chains:queues ratio, both ROCm 10.0, gate 512/512 on every figure, three
+repeats (`artifacts/2026-08-27-multiqueue-pm4.md`): gfx1100 0.1012 vs 0.831 =
+**8.2x**; gfx1151 0.0678 vs 0.826 = **12.2x**; gfx1201 0.0920 vs 1.190 =
+**12.9x**. This tier applies ONLY to graphs with multiple weakly-connected
+components — `segment.rs` refuses to cut real edges, and a transformer decode
+chain is one component (`Unsplittable`), so llama-shaped decode collects
+Figure 1, never 1b. Quoting 1b without the shape gate is the same axis error
+this file exists to prevent. Lane overshoot is punishing (gfx1201 at 8 lanes is
+127x its 2-lane optimum, gate still 512/512), so 1b also requires naming the
+lane count.
 
 **Figure 2 — end-to-end token latency. +8% to +10.5%.**
 Measured independently by @Ilintar/@pwilkin (llama.cpp, Ornith 35B-A3B, 62 ->
