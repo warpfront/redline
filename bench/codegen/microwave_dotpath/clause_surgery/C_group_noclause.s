@@ -1,0 +1,500 @@
+	.amdgcn_target "amdgcn-amd-amdhsa--gfx1151"
+	.amdhsa_code_object_version 6
+	.text
+	.protected	_Z15dot_path_kernelPKjS0_Pijjjj ; -- Begin function _Z15dot_path_kernelPKjS0_Pijjjj
+	.globl	_Z15dot_path_kernelPKjS0_Pijjjj
+	.p2align	8
+	.type	_Z15dot_path_kernelPKjS0_Pijjjj,@function
+_Z15dot_path_kernelPKjS0_Pijjjj:        ; @_Z15dot_path_kernelPKjS0_Pijjjj
+	.cfi_startproc
+; %bb.0:
+	.cfi_escape 0x0f, 0x04, 0x30, 0x36, 0xe9, 0x02 ; CFA is 0 in private_wave aspace
+	.cfi_undefined 16
+	s_clause 0x1
+	s_load_b32 s3, s[0:1], 0x34
+	s_load_b128 s[4:7], s[0:1], 0x18
+	s_waitcnt lgkmcnt(0)
+	s_and_b32 s3, s3, 0xffff
+	s_delay_alu instid0(SALU_CYCLE_1)
+	v_mad_u64_u32 v[0:1], null, s2, s3, v[0:1]
+	s_mov_b32 s2, exec_lo
+	v_cmpx_gt_u32_e64 s4, v0
+	s_cbranch_execz .LBB0_6
+; %bb.1:
+	s_clause 0x1
+	s_load_b128 s[8:11], s[0:1], 0x0
+	s_load_b64 s[0:1], s[0:1], 0x10
+	s_cmp_eq_u32 s5, 0
+	s_cbranch_scc1 .LBB0_4
+; %bb.2:                                ; %.lr.ph.i.preheader
+	v_lshl_or_b32 v3, v0, 4, 15
+	v_mov_b32_e32 v2, 0
+	v_mov_b32_e32 v4, 0
+	s_lshl_b32 s2, s4, 4
+.LBB0_3:                                ; %.lr.ph.i
+                                        ; =>This Inner Loop Header: Depth=1
+	s_delay_alu instid0(VALU_DEP_3)
+	v_add_nc_u32_e32 v1, -15, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_waitcnt lgkmcnt(0)
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v32, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v33, null, s9, v6, vcc_lo
+	v_add_co_u32 v34, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v35, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -14, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v36, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v37, null, s9, v6, vcc_lo
+	v_add_co_u32 v38, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v39, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -13, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v40, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v41, null, s9, v6, vcc_lo
+	v_add_co_u32 v42, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v43, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -12, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v44, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v45, null, s9, v6, vcc_lo
+	v_add_co_u32 v46, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v47, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -11, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v48, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v49, null, s9, v6, vcc_lo
+	v_add_co_u32 v50, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v51, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -10, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v52, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v53, null, s9, v6, vcc_lo
+	v_add_co_u32 v54, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v55, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -9, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v56, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v57, null, s9, v6, vcc_lo
+	v_add_co_u32 v58, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v59, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -8, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v60, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v61, null, s9, v6, vcc_lo
+	v_add_co_u32 v62, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v63, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -7, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v64, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v65, null, s9, v6, vcc_lo
+	v_add_co_u32 v66, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v67, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -6, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v68, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v69, null, s9, v6, vcc_lo
+	v_add_co_u32 v70, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v71, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -5, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v72, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v73, null, s9, v6, vcc_lo
+	v_add_co_u32 v74, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v75, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -4, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v76, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v77, null, s9, v6, vcc_lo
+	v_add_co_u32 v78, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v79, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -3, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v80, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v81, null, s9, v6, vcc_lo
+	v_add_co_u32 v82, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v83, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -2, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v84, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v85, null, s9, v6, vcc_lo
+	v_add_co_u32 v86, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v87, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, -1, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v88, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v89, null, s9, v6, vcc_lo
+	v_add_co_u32 v90, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v91, null, s11, v6, vcc_lo
+	v_add_nc_u32_e32 v1, 0, v3
+	s_delay_alu instid0(VALU_DEP_1)
+	v_and_b32_e32 v1, s6, v1
+	s_delay_alu instid0(VALU_DEP_1)
+	v_lshlrev_b64 v[5:6], 2, v[1:2]
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_u32 v92, vcc_lo, s8, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v93, null, s9, v6, vcc_lo
+	v_add_co_u32 v94, vcc_lo, s10, v5
+	s_delay_alu instid0(VALU_DEP_1)
+	v_add_co_ci_u32_e64 v95, null, s11, v6, vcc_lo
+	global_load_b32 v25, v[32:33], off
+	global_load_b32 v26, v[34:35], off
+	global_load_b32 v27, v[36:37], off
+	global_load_b32 v28, v[38:39], off
+	global_load_b32 v15, v[40:41], off
+	global_load_b32 v29, v[42:43], off
+	global_load_b32 v16, v[44:45], off
+	global_load_b32 v30, v[46:47], off
+	global_load_b32 v17, v[48:49], off
+	global_load_b32 v31, v[50:51], off
+	global_load_b32 v18, v[52:53], off
+	global_load_b32 v32, v[54:55], off
+	global_load_b32 v19, v[56:57], off
+	global_load_b32 v33, v[58:59], off
+	global_load_b32 v20, v[60:61], off
+	global_load_b32 v34, v[62:63], off
+	global_load_b32 v21, v[64:65], off
+	global_load_b32 v35, v[66:67], off
+	global_load_b32 v22, v[68:69], off
+	global_load_b32 v36, v[70:71], off
+	global_load_b32 v23, v[72:73], off
+	global_load_b32 v37, v[74:75], off
+	global_load_b32 v24, v[76:77], off
+	global_load_b32 v38, v[78:79], off
+	global_load_b32 v39, v[80:81], off
+	global_load_b32 v40, v[82:83], off
+	global_load_b32 v1, v[84:85], off
+	global_load_b32 v41, v[86:87], off
+	global_load_b32 v13, v[88:89], off
+	global_load_b32 v9, v[90:91], off
+	global_load_b32 v5, v[92:93], off
+	global_load_b32 v6, v[94:95], off
+	v_add_nc_u32_e32 v3, s2, v3
+	s_add_i32 s5, s5, -1
+	s_delay_alu instid0(SALU_CYCLE_1) | instskip(SKIP_3) | instid1(VALU_DEP_1)
+	s_cmp_lg_u32 s5, 0
+	s_waitcnt vmcnt(30)
+	v_dot4_i32_iu8 v4, v25, v26, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(28)
+	v_dot4_i32_iu8 v4, v27, v28, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(26)
+	s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_1) | instid1(VALU_DEP_1)
+	v_dot4_i32_iu8 v4, v15, v29, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(24)
+	v_dot4_i32_iu8 v4, v16, v30, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(22)
+	s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_1) | instid1(VALU_DEP_1)
+	v_dot4_i32_iu8 v4, v17, v31, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(20)
+	v_dot4_i32_iu8 v4, v18, v32, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(18)
+	s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_1) | instid1(VALU_DEP_1)
+	v_dot4_i32_iu8 v4, v19, v33, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(16)
+	v_dot4_i32_iu8 v4, v20, v34, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(14)
+	s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_1) | instid1(VALU_DEP_1)
+	v_dot4_i32_iu8 v4, v21, v35, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(12)
+	v_dot4_i32_iu8 v4, v22, v36, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(10)
+	s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_1) | instid1(VALU_DEP_1)
+	v_dot4_i32_iu8 v4, v23, v37, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(8)
+	v_dot4_i32_iu8 v4, v24, v38, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(6)
+	s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_1) | instid1(VALU_DEP_1)
+	v_dot4_i32_iu8 v4, v39, v40, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(4)
+	v_dot4_i32_iu8 v1, v1, v41, v4 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(2)
+	s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_1) | instid1(VALU_DEP_1)
+	v_dot4_i32_iu8 v1, v13, v9, v1 neg_lo:[1,1,0]
+	s_waitcnt vmcnt(0)
+	v_dot4_i32_iu8 v4, v5, v6, v1 neg_lo:[1,1,0]
+	s_cbranch_scc1 .LBB0_3
+	s_branch .LBB0_5
+.LBB0_4:
+	v_mov_b32_e32 v4, 0
+.LBB0_5:                                ; %_Z9run_valuePKjS0_jjjj.exit
+	s_delay_alu instid0(VALU_DEP_1) | instskip(NEXT) | instid1(VALU_DEP_1)
+	v_dual_mov_b32 v1, 0 :: v_dual_add_nc_u32 v2, s7, v4
+	v_lshlrev_b64 v[0:1], 2, v[0:1]
+	s_waitcnt lgkmcnt(0)
+	s_delay_alu instid0(VALU_DEP_1) | instskip(NEXT) | instid1(VALU_DEP_1)
+	v_add_co_u32 v0, vcc_lo, s0, v0
+	v_add_co_ci_u32_e64 v1, null, s1, v1, vcc_lo
+	global_store_b32 v[0:1], v2, off
+.LBB0_6:
+	s_endpgm
+.Lfunc_end0:
+	.size	_Z15dot_path_kernelPKjS0_Pijjjj, .Lfunc_end0-_Z15dot_path_kernelPKjS0_Pijjjj
+	.cfi_endproc
+	.section	.rodata,"a",@progbits
+	.p2align	6, 0x0
+	.amdhsa_kernel _Z15dot_path_kernelPKjS0_Pijjjj
+		.amdhsa_group_segment_fixed_size 0
+		.amdhsa_private_segment_fixed_size 0
+		.amdhsa_kernarg_size 296
+		.amdhsa_user_sgpr_count 2
+		.amdhsa_user_sgpr_dispatch_ptr 0
+		.amdhsa_user_sgpr_queue_ptr 0
+		.amdhsa_user_sgpr_kernarg_segment_ptr 1
+		.amdhsa_user_sgpr_dispatch_id 0
+		.amdhsa_user_sgpr_private_segment_size 0
+		.amdhsa_wavefront_size32 1
+		.amdhsa_uses_dynamic_stack 0
+		.amdhsa_enable_private_segment 0
+		.amdhsa_system_sgpr_workgroup_id_x 1
+		.amdhsa_system_sgpr_workgroup_id_y 0
+		.amdhsa_system_sgpr_workgroup_id_z 0
+		.amdhsa_system_sgpr_workgroup_info 0
+		.amdhsa_system_vgpr_workitem_id 0
+		.amdhsa_next_free_vgpr 96
+		.amdhsa_next_free_sgpr 12
+		.amdhsa_reserve_vcc 1
+		.amdhsa_float_round_mode_32 0
+		.amdhsa_float_round_mode_16_64 0
+		.amdhsa_float_denorm_mode_32 3
+		.amdhsa_float_denorm_mode_16_64 3
+		.amdhsa_dx10_clamp 1
+		.amdhsa_ieee_mode 1
+		.amdhsa_fp16_overflow 0
+		.amdhsa_workgroup_processor_mode 1
+		.amdhsa_memory_ordered 1
+		.amdhsa_forward_progress 1
+		.amdhsa_shared_vgpr_count 0
+		.amdhsa_inst_pref_size ((instprefsize(.Lfunc_end0-_Z15dot_path_kernelPKjS0_Pijjjj)<<4)&1008)>>4
+		.amdhsa_exception_fp_ieee_invalid_op 0
+		.amdhsa_exception_fp_denorm_src 0
+		.amdhsa_exception_fp_ieee_div_zero 0
+		.amdhsa_exception_fp_ieee_overflow 0
+		.amdhsa_exception_fp_ieee_underflow 0
+		.amdhsa_exception_fp_ieee_inexact 0
+		.amdhsa_exception_int_div_zero 0
+	.end_amdhsa_kernel
+	.text
+                                        ; -- End function
+	.set .L_Z15dot_path_kernelPKjS0_Pijjjj.num_vgpr, 96
+	.set .L_Z15dot_path_kernelPKjS0_Pijjjj.num_agpr, 0
+	.set .L_Z15dot_path_kernelPKjS0_Pijjjj.numbered_sgpr, 12
+	.set .L_Z15dot_path_kernelPKjS0_Pijjjj.num_named_barrier, 0
+	.set .L_Z15dot_path_kernelPKjS0_Pijjjj.private_seg_size, 0
+	.set .L_Z15dot_path_kernelPKjS0_Pijjjj.uses_vcc, 1
+	.set .L_Z15dot_path_kernelPKjS0_Pijjjj.uses_flat_scratch, 0
+	.set .L_Z15dot_path_kernelPKjS0_Pijjjj.has_dyn_sized_stack, 0
+	.set .L_Z15dot_path_kernelPKjS0_Pijjjj.has_recursion, 0
+	.set .L_Z15dot_path_kernelPKjS0_Pijjjj.has_indirect_call, 0
+	.section	.AMDGPU.csdata,"",@progbits
+; Kernel info:
+; codeLenInByte = 1500
+; TotalNumSgprs: 14
+; NumVgprs: 96
+; ScratchSize: 0
+; MemoryBound: 0
+; FloatMode: 240
+; IeeeMode: 1
+; LDSByteSize: 0 bytes/workgroup (compile time only)
+; SGPRBlocks: 0
+; VGPRBlocks: 11
+; NumSGPRsForWavesPerEU: 14
+; NumVGPRsForWavesPerEU: 96
+; Occupancy: 16
+; WaveLimiterHint : 0
+; COMPUTE_PGM_RSRC2:SCRATCH_EN: 0
+; COMPUTE_PGM_RSRC2:USER_SGPR: 2
+; COMPUTE_PGM_RSRC2:TRAP_HANDLER: 0
+; COMPUTE_PGM_RSRC2:TGID_X_EN: 1
+; COMPUTE_PGM_RSRC2:TGID_Y_EN: 0
+; COMPUTE_PGM_RSRC2:TGID_Z_EN: 0
+; COMPUTE_PGM_RSRC2:TIDIG_COMP_CNT: 0
+
+	.ident	"AMD clang version 23.0.0git (https://github.com/ROCm/llvm-project.git 8f497e0992fb7513f7f78a6f6b6f1056c375e961)"
+	.section	".note.GNU-stack","",@progbits
+	.amdgpu_metadata
+---
+amdhsa.kernels:
+  - .args:
+      - .actual_access:  read_only
+        .address_space:  global
+        .offset:         0
+        .size:           8
+        .value_kind:     global_buffer
+      - .actual_access:  read_only
+        .address_space:  global
+        .offset:         8
+        .size:           8
+        .value_kind:     global_buffer
+      - .actual_access:  write_only
+        .address_space:  global
+        .offset:         16
+        .size:           8
+        .value_kind:     global_buffer
+      - .offset:         24
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         28
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         32
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         36
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         44
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         56
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         58
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         104
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .gfx1250_revision: B0
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 296
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 1024
+    .name:           _Z15dot_path_kernelPKjS0_Pijjjj
+    .private_segment_fixed_size: 0
+    .sgpr_count:     14
+    .sgpr_spill_count: 0
+    .symbol:         _Z15dot_path_kernelPKjS0_Pijjjj.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     96
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+amdhsa.target:   amdgcn-amd-amdhsa--gfx1151
+amdhsa.version:
+  - 1
+  - 2
+...
+
+	.end_amdgpu_metadata
