@@ -70,3 +70,32 @@ Second gfx1100 incident with the sq_intr -> vmid:8 page-fault signature from
 a redline-lineage PM4 path (July campaign binaries were the first, at address
 zero). Today's is firmly ours. Hold further #6529 upstream motion until our
 own stack is exonerated or convicted.
+
+## Confirmation (independent, same day)
+
+The hipfire-side session reproduced and bounded the failure independently:
+retained PM4 fails reproducibly on **turn 4** of the medium coding session
+under BOTH Resource and conservative Allowlist wait policies, coinciding with
+incremental VMM KV growth; the identical session on direct HIP completed all
+8 turns / 36,978 context tokens with no HSA fault. Wild-VA GPU WRITE fault ->
+MES queue removal -> GPU reset failures; continuing after the fault yields
+hipError 700 (context poisoned). Not MQ4R math, not reasoning effort.
+
+Their fix design converges with this document's: (1) segment-only access
+grants where the runtime supports it — now a measured yes on 7.14 and 10.0
+via the whole-handle rule, with attempt-and-fallback covering 7.2; (2) full
+retirement of retained PM4 queues before any remaining whole-prefix remap —
+their observation that the current quiesce path is insufficient sharpens
+layer 2; (3) a process-wide poisoned-context latch after any
+uncertain-completion PM4 submission, held on GPU/process state rather than a
+swappable replay controller (speculative paths swap controllers).
+
+Precedent supporting layer 3 as designed: rocm-systems#10713/#10714 territory
+— after CP executes a malformed packet, even AMD's own recovery leaked 25.7 GB
+and required a host reboot. And this incident's reset loop returned -19
+repeatedly, so the latch should escalate to device-level (not just process)
+unusability when reset fails.
+
+Useful datum for layer 2 from July: rocr_queue_retire.cpp ran 2000
+create/destroy cycles at depth 16 cleanly on this hardware — queue
+destruction itself is safe; the hazard is submission lifetime, not teardown.
