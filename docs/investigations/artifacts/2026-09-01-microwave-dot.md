@@ -177,26 +177,40 @@ q8/q4/q6. ACO's extra static instruction count is mostly address math +
   between the two IBs. gfx1151 and gfx1201 do not show it; independent-mode
   redline on gfx1100 does not show it. Not a Microwave blocker, a Redline bug
   to file internally.
-- **What this says about the gfx1151 "12×".** Nothing directly, and the
-  earlier draft of this section got that wrong: the 12× (`3535 vs 289 us`,
-  76 vs 928 GB/s, `2026-08-29-gfx1151-packed-dot-codegen.md`) is the
-  **hipEngine Python harness** (`hip_dot_path.hip`, 16 groups × wg64 = 1,024
-  threads, 4 MiB working set). This Rust suite is a different workload
-  (32,768 threads, Vulkan ~1121 us), and it never showed 12× — the 08-29 Rust
-  run had stock HIP at 1210 vs Vulkan 1122 on gfx1151, same as today. So
-  "did not reproduce" is the wrong verb; the two harnesses measure different
-  shapes. What Microwave adds is sharper than that: on gfx1151 the **same ACO
-  body** runs at 1207 us under HIP dispatch, 1198 us under Redline PM4, and
-  ~1121 us under Vulkan. Identical code, ~7% slower on the HSA-side paths on
-  both dispatchers — that residual cannot be codegen or launch overhead; the
-  remaining variable is the memory the buffers live in (hipMalloc pools and
-  page-table attributes vs RADV's heap). That is the same direction the 08-29
-  artifact pointed (uncached-mapping-like bandwidth under HIP on the APU), now
-  with codegen removed from the comparison by construction. The decisive
-  probe is unchanged and now easier: replicate hipEngine's exact 16×64
-  geometry in this harness with the Microwave body so HIP and Vulkan execute
-  the same ISA, and then swap the memory (VMM handle exported as dma-buf and
-  imported by Vulkan) so they also share the same pages.
+- **What this says about the gfx1151 "12×".** Two corrections first, both
+  from reading the hipEngine sources at the pinned commit
+  (`hip_dot_path.hip:171-174,285-337`, `vulkan_dot_path.cpp:177-179,818`)
+  rather than from memory. (1) The hipEngine packed-dot workload is the SAME
+  shape as this suite's rows: n=32768 work-items in 512 workgroups of 64,
+  body_iters=64, 16 groups per iteration, `data_mask = 2^25−1`, i.e. 128 MiB
+  per buffer and 256 MiB streamed per dispatch. The "16 groups × wg64 =
+  1,024 threads / 4 MiB working set" geometry stated in
+  `2026-08-29-gfx1151-packed-dot-codegen.md` and in the previous revision of
+  this paragraph was a misreading of `groups=16` (packed groups per
+  iteration, not workgroups). (2) The 08-29 hipEngine gfx1151 Vulkan datum,
+  289 us = 928 GB/s for 256 MiB, is physically impossible on Strix Halo
+  (256-bit LPDDR5X, ~256 GB/s peak) and must be a runner/timing artifact on
+  that box; lhl's own Vulkan figure for the identical row is 1122 us
+  (#6409 table), and this suite's Vulkan is 1121 us — both at DRAM peak. So
+  the real hipEngine-shaped gap is lhl's **3.2×** (HIP 3581 us = 75 GB/s vs
+  Vulkan 1122 us = 239 GB/s), not 12×.
+  With the geometry identical, the one thing that differs between the two
+  HIP kernels is load width: hipEngine's kernel indexes `(base+group) & mask`
+  per element and LLVM emits 32 bare `global_load_b32` per iteration; this
+  suite's `dot_body` uses Radiowave `buffer_load_b128` (8 per iteration) and
+  reaches DRAM peak on gfx1151 (1210 us). Vulkan/ACO reaches DRAM peak with
+  the per-element form. That is a codegen question after all — for narrow
+  loads on the APU — and exactly the shader llvm#219248 is about. Microwave
+  turns it into a one-process experiment: hipEngine's shader through ACO,
+  wrapped, run under HIP beside LLVM's kernel on the same buffers. If the ACO
+  b32 body runs at ~1120 us under HIP, the 3.2× is LLVM's scheduling of
+  narrow loads (clauses, `s_waitcnt` placement, loads in flight) and the ISA
+  diff is the patch spec; if it runs at ~3500 us, it is environment.
+  Secondary: on gfx1151 the same ACO b128 body runs 1207 us under HIP,
+  1198 under Redline, ~1121 under Vulkan — a 7% residual with codegen and
+  launch removed, which points at memory placement (hipMalloc pools and page
+  attributes vs RADV's heap); the VMM-handle → dma-buf → Vulkan import swap
+  is the discriminator for that one.
 
 What Microwave *does* prove: an ACO-emitted CS with a 3-dword inlined push
 constant ABI can be constraint-pinned into an LLVM-built HSACO (`s[2:3]`, `s4`,

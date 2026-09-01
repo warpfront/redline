@@ -101,3 +101,33 @@ dependent loads, 4 MiB set) in a dependency-free pair (HIP + trivial Vulkan
 twin), sweep workgroup count 16 -> 2048 on both parts. If the HIP/Vulkan gap
 collapses as occupancy rises, shape is the story; if it persists at full
 occupancy, something real remains.
+
+## Correction (2026-09-01): geometry misread, Vulkan datum impossible
+
+Read against the pinned hipEngine sources (`hip_dot_path.hip:171-174,285-337`,
+`vulkan_dot_path.cpp:177-179,818`):
+
+- `groups=16` is packed groups per iteration, not workgroups. The family runs
+  n=32768 work-items in 512 workgroups of 64, body_iters=64, `data_mask =
+  2^25-1`: 128 MiB per buffer, 256 MiB streamed per dispatch, no re-reading.
+  The "16 x wg64 = 1,024 threads / 4 MiB working set" geometry hypothesis
+  above is withdrawn; the shape is identical to the Rust suite's rows.
+- The gfx1151 Vulkan row (289 us, 928 GB/s for 256 MiB) is physically
+  impossible on Strix Halo (~256 GB/s LPDDR5X peak) and is a runner/timing
+  artifact on hipx, not a measurement. lhl's figure for the same row is
+  1122 us (#6409 table) and the Rust suite's Vulkan is 1121 us, both at DRAM
+  peak. The real hipEngine-shaped gap is lhl's 3.2x, not 12x.
+- What remains, and is now the leading hypothesis again: LLVM's lowering of
+  the per-element `(base+group) & mask` indexing to 32 bare `global_load_b32`
+  per iteration streams at 75 GB/s on gfx1151, while ACO's code for the same
+  shader and the Rust suite's `buffer_load_b128` LLVM code both reach DRAM
+  peak. That is a narrow-load scheduling/codegen question on the APU, the
+  subject of llvm#219248. Discriminator (Microwave, in flight): hipEngine's
+  shader compiled by ACO, wrapped into an HSACO, run under HIP on the same
+  buffers beside LLVM's kernel. See `2026-09-01-microwave-dot.md`.
+
+Error ledger: seventh wrong attribution; this one survived three days because
+the impossible bandwidth figure was accepted as data rather than checked
+against the part's DRAM peak. New rule: any bandwidth figure above the
+device's DRAM peak on a streaming workload is a measurement bug until proven
+cache-resident.
