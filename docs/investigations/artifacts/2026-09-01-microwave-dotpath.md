@@ -123,3 +123,34 @@ flight before the first wait. [INFERENCE] the clause packing plus the
 drip-feed `s_waitcnt vmcnt` around each dot is the scheduling difference
 to inspect for llvm-project#219248. gfx1100 does not show the gap (LLVM
 already 808–829 GB/s; ACO 873–880).
+
+## Addendum: LLVM scheduler strategies do not close it (2026-09-01, later)
+
+Correction to the paragraph above: the wait/consume tail is NOT a difference.
+Both compilers emit the identical `s_waitcnt vmcnt(30)` dot, `vmcnt(28)` dot
+... `vmcnt(0)` dot sequence after the 32 loads, and both use 64-bit VGPR-pair
+addressing (`global_load_b32 v, v[..], off`). The only structural difference
+in the load stream is issue grouping: ACO hoists a batch of addresses and
+issues the loads back-to-back inside `s_clause` (0x11 = 18, 0x9 = 10, 0x3 =
+4 loads); LLVM interleaves 2-4 address VALU ops between every 1-3 loads and
+never forms a clause.
+
+Tested whether an existing LLVM scheduling strategy produces the grouping.
+Same probe, `llvm32` arm only, gfx1151, HIP ordinal 1, ROCm 10.0, flags
+passed device-only as `-Xarch_device -mllvm=<flag>` (the plain `-mllvm` form
+also reaches the x86 host compile and crashes it with `-misched=gcn-*`).
+Two builds x two runs each, median us per dispatch, all gates PASS:
+
+| flags | s_clause in loop | loads | vgprs | median us |
+| --- | --- | ---: | ---: | ---: |
+| none (baseline) | 2x `0x1` | 32 | 42 | 3533-3535 |
+| `-misched=gcn-max-memory-clause` | 2x `0x1` | 32 | 41 | 3654-3656 |
+| same + `-amdgpu-max-memory-clause=32` | 2x `0x1` | 32 | 41 | 3654-3657 |
+| `-misched=gcn-max-ilp` | 2x `0x1` | 32 | 41 | 3653-3655 |
+| `-misched=gcn-iterative-ilp` | 2x `0x1` | 32 | 43 | 3627-3630 |
+| `-amdgpu-max-memory-clause=32` alone | 2x `0x1` | 32 | 42 | 3533-3535 |
+
+None of the strategies groups the loads; three of them are 3% slower. So the
+fix for llvm-project#219248 is not a flag AMD already ships. Next
+discriminator (in flight): hand-reorder LLVM's own `.s` into ACO's grouping,
+with and without the `s_clause` directive, reassemble, and rerun.
