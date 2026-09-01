@@ -155,15 +155,28 @@ q8/q4/q6. ACO's extra static instruction count is mostly address math +
   gfx1151 mixed **0.72–1.10**. That is consistent with a different memory
   instruction mix (GLOBAL B128 vs MUBUF) under multi-queue traffic, not with
   a better dot instruction — both already use `v_dot4*`.
-- gfx1100 microwave **Redline serial** is the one clear regression: **1.56×**
+- gfx1100 microwave **Redline serial** is the one clear anomaly: **1.56×**
   vs stock redline on q8/q4/q6 (452 vs 290 us) while HIP stays at parity.
-  **Unexplained.** Seven of eight rows sit at 452.4–455.3 us with p95−min
-  under 0.4 us, the eighth (scalar wg64) at 292 us, and the same kernel at
-  wg256 is back at 452 — so it is not kernel content, and the dependency
-  cache policy, wave size and scheduler profile are identical to stock. A
-  reproducibility rerun is in flight; until it lands treat the 1.56× as a
-  run observation, not a property of the ACO body. Independent redline does
-  not show it.
+  **A Redline-side artifact on this arch, not a property of the ACO body.**
+  Three back-to-back reruns (same build, same box, redline pci 0000:66:00.0,
+  HIP ordinal 0; raw JSON on hipx `/tmp/mw1100/run{1,2,3}.json`) give a
+  bimodal, quantised picture: 21 of 24 serial row×run cells sit at
+  452.37–452.54 us with p95−min under 0.3 us; the exceptions are q8 wg64 run 1
+  at 294.8 (runs 2–3 back at 452.4), q4 wg256 run 3 at 442.3, and scalar wg64
+  at 296.8–297.2 in all three runs. HIP medians for the same rows are
+  300.3–309.4 us in every run. The plateau is independent of kernel, wg and
+  run, and 452−300 ≈ 150 us over a 10-dispatch serial chain is a fixed
+  ~15 us per dependency edge — the size of a full L2/MALL writeback+invalidate
+  on this dGPU. `redline_dependency_cache_policies` reports the same
+  `certified_vector_l1_0x00300` for stock and microwave, so if that is the
+  mechanism the certification string and the emitted fence disagree for a
+  code object whose loads/stores are FLAT-global rather than MUBUF.
+  [INFERENCE] until the retained IB is dumped. Discriminator: replay the stock
+  and microwave HSACOs through Redline with per-dispatch timestamps and read
+  the inter-dispatch gap; then diff the emitted ACQUIRE_MEM/RELEASE_MEM
+  between the two IBs. gfx1151 and gfx1201 do not show it; independent-mode
+  redline on gfx1100 does not show it. Not a Microwave blocker, a Redline bug
+  to file internally.
 - **What this says about the gfx1151 "12×".** Nothing directly, and the
   earlier draft of this section got that wrong: the 12× (`3535 vs 289 us`,
   76 vs 928 GB/s, `2026-08-29-gfx1151-packed-dot-codegen.md`) is the
