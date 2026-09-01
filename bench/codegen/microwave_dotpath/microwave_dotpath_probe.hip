@@ -216,6 +216,7 @@ extern "C" __global__ __launch_bounds__(64) void aco_dot_path(
   (void)body_iters;
   (void)data_mask;
   (void)sequence_id;
+#if defined(__HIP_DEVICE_COMPILE__)
 #if defined(__gfx1151__)
 #ifdef WAVE64
   MICROWAVE_DOTPATH_INVOKE_GFX1151_W64;
@@ -236,6 +237,7 @@ extern "C" __global__ __launch_bounds__(64) void aco_dot_path(
 #endif
 #else
 #error "aco_dot_path: unsupported arch"
+#endif
 #endif
 }
 
