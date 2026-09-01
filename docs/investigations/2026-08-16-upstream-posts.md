@@ -16,6 +16,19 @@
 > could not be reproduced. The posted comment leads with that, and adds the
 > hypothesis that the real blocker is descriptor exhaustion at minimum
 > granularity, which caps a 4 KiB-handle pool at roughly 4 MiB.
+>
+> **Tracker note, 2026-09-01.** `ROCm/ROCm` (now `ROCm/legacy-rocm-build`) carries
+> a README banner: "This repository will be deprecated soon. Use ROCm/TheRock
+> moving forward, including for issues and discussions." Its `.github/ISSUE_TEMPLATE`
+> is already gone. `#6409`, `#6529` and `#6603` live there; no migration policy is
+> stated. AMD's own 2026-08-27 split of `#6409` went to `rocm-systems`
+> (`#10834`, `#10836`) and `llvm-project` (`#219248`), so component-level reports
+> still belong in `rocm-systems`; TheRock is the user-facing umbrella. Observed
+> triage there: a HIP-runtime report (`TheRock#7625`, 08-25) got `status: triage`,
+> an assignee and an AMD engineer reply within 7 days, while `#6529` has been
+> silent in the legacy repo since 08-04 and `rocm-systems#10604` is unlabelled
+> after 9 days. Nothing of ours has been mirrored to TheRock; searches for
+> redline / 6409 / 6529 / hipMemCreate / graph replay there return zero.
 
 
 Five drafts, each supported by measurements taken on this fleet. Numeric
