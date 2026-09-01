@@ -471,19 +471,27 @@ void dot_q8(BENCH_ARGS) {
 #endif
 #elif defined(__gfx1151__)
 #ifdef HIPFIRE_BENCH_WAVE64
-#warning "microwave body missing for dot_q8 gfx1151 wave64, falling back to stock"
-    dot_body<0>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_Q8_GFX1151_W64_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "s0", "s1", "s6", "s7", "s8", "vcc", "scc", "exec", "m0", "memory");
 #else
-#warning "microwave body missing for dot_q8 gfx1151 wave32, falling back to stock"
-    dot_body<0>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_Q8_GFX1151_W32_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "s0", "s1", "s6", "s7", "s8", "vcc", "scc", "exec", "m0", "memory");
 #endif
 #elif defined(__gfx1100__)
 #ifdef HIPFIRE_BENCH_WAVE64
-#warning "microwave body missing for dot_q8 gfx1100 wave64, falling back to stock"
-    dot_body<0>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_Q8_GFX1100_W64_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "s0", "s1", "s6", "s7", "s8", "vcc", "scc", "exec", "m0", "memory");
 #else
-#warning "microwave body missing for dot_q8 gfx1100 wave32, falling back to stock"
-    dot_body<0>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_Q8_GFX1100_W32_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "s0", "s1", "s6", "s7", "s8", "vcc", "scc", "exec", "m0", "memory");
 #endif
 #else
 #warning "microwave body missing for dot_q8 arch, falling back to stock"
@@ -507,19 +515,27 @@ void dot_q4(BENCH_ARGS) {
 #endif
 #elif defined(__gfx1151__)
 #ifdef HIPFIRE_BENCH_WAVE64
-#warning "microwave body missing for dot_q4 gfx1151 wave64, falling back to stock"
-    dot_body<1>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_Q4_GFX1151_W64_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "s0", "s1", "s6", "s7", "s8", "vcc", "scc", "exec", "m0", "memory");
 #else
-#warning "microwave body missing for dot_q4 gfx1151 wave32, falling back to stock"
-    dot_body<1>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_Q4_GFX1151_W32_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "s0", "s1", "s6", "s7", "s8", "vcc", "scc", "exec", "m0", "memory");
 #endif
 #elif defined(__gfx1100__)
 #ifdef HIPFIRE_BENCH_WAVE64
-#warning "microwave body missing for dot_q4 gfx1100 wave64, falling back to stock"
-    dot_body<1>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_Q4_GFX1100_W64_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "s0", "s1", "s6", "s7", "s8", "vcc", "scc", "exec", "m0", "memory");
 #else
-#warning "microwave body missing for dot_q4 gfx1100 wave32, falling back to stock"
-    dot_body<1>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_Q4_GFX1100_W32_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "s0", "s1", "s6", "s7", "s8", "vcc", "scc", "exec", "m0", "memory");
 #endif
 #else
 #warning "microwave body missing for dot_q4 arch, falling back to stock"
@@ -543,19 +559,27 @@ void dot_q6(BENCH_ARGS) {
 #endif
 #elif defined(__gfx1151__)
 #ifdef HIPFIRE_BENCH_WAVE64
-#warning "microwave body missing for dot_q6 gfx1151 wave64, falling back to stock"
-    dot_body<2>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_Q6_GFX1151_W64_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "s0", "s1", "s6", "s7", "s8", "s9", "vcc", "scc", "exec", "m0", "memory");
 #else
-#warning "microwave body missing for dot_q6 gfx1151 wave32, falling back to stock"
-    dot_body<2>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_Q6_GFX1151_W32_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "s0", "s1", "s6", "s7", "s8", "s9", "vcc", "scc", "exec", "m0", "memory");
 #endif
 #elif defined(__gfx1100__)
 #ifdef HIPFIRE_BENCH_WAVE64
-#warning "microwave body missing for dot_q6 gfx1100 wave64, falling back to stock"
-    dot_body<2>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_Q6_GFX1100_W64_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "s0", "s1", "s6", "s7", "s8", "s9", "vcc", "scc", "exec", "m0", "memory");
 #else
-#warning "microwave body missing for dot_q6 gfx1100 wave32, falling back to stock"
-    dot_body<2>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_Q6_GFX1100_W32_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "s0", "s1", "s6", "s7", "s8", "s9", "vcc", "scc", "exec", "m0", "memory");
 #endif
 #else
 #warning "microwave body missing for dot_q6 arch, falling back to stock"
@@ -579,19 +603,27 @@ void dot_scalar(BENCH_ARGS) {
 #endif
 #elif defined(__gfx1151__)
 #ifdef HIPFIRE_BENCH_WAVE64
-#warning "microwave body missing for dot_scalar gfx1151 wave64, falling back to stock"
-    dot_body<3>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_SCALAR_GFX1151_W64_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45", "v46", "v47", "s0", "s1", "s6", "s7", "s8", "s9", "s10", "vcc", "scc", "exec", "m0", "memory");
 #else
-#warning "microwave body missing for dot_scalar gfx1151 wave32, falling back to stock"
-    dot_body<3>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_SCALAR_GFX1151_W32_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45", "v46", "v47", "v48", "v49", "v50", "v51", "v52", "v53", "v54", "v55", "v56", "v57", "v58", "v59", "v60", "v61", "v62", "v63", "v64", "v65", "v66", "v67", "v68", "v69", "v70", "v71", "v72", "v73", "v74", "v75", "v76", "v77", "v78", "v79", "v80", "v81", "v82", "v83", "v84", "v85", "v86", "v87", "v88", "v89", "v90", "v91", "v92", "v93", "v94", "v95", "s0", "s1", "s6", "s7", "s8", "s9", "s10", "vcc", "scc", "exec", "m0", "memory");
 #endif
 #elif defined(__gfx1100__)
 #ifdef HIPFIRE_BENCH_WAVE64
-#warning "microwave body missing for dot_scalar gfx1100 wave64, falling back to stock"
-    dot_body<3>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_SCALAR_GFX1100_W64_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45", "v46", "v47", "s0", "s1", "s6", "s7", "s8", "s9", "s10", "vcc", "scc", "exec", "m0", "memory");
 #else
-#warning "microwave body missing for dot_scalar gfx1100 wave32, falling back to stock"
-    dot_body<3>(a, b, out, n0, n1, output_offset, aux);
+    asm volatile(MICROWAVE_DOT_SCALAR_GFX1100_W32_BODY
+        :
+        : "{s[2:3]}"(__builtin_amdgcn_kernarg_segment_ptr()), "{s4}"((u32)blockDim.x), "{s5}"(__builtin_amdgcn_workgroup_id_x()), "{v0}"(__builtin_amdgcn_workitem_id_x())
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45", "v46", "v47", "v48", "v49", "v50", "v51", "v52", "v53", "v54", "v55", "v56", "v57", "v58", "v59", "v60", "v61", "v62", "v63", "v64", "v65", "v66", "v67", "v68", "v69", "v70", "v71", "v72", "v73", "v74", "v75", "v76", "v77", "v78", "v79", "v80", "v81", "v82", "v83", "v84", "v85", "v86", "v87", "v88", "v89", "v90", "v91", "v92", "v93", "v94", "v95", "s0", "s1", "s6", "s7", "s8", "s9", "s10", "vcc", "scc", "exec", "m0", "memory");
 #endif
 #else
 #warning "microwave body missing for dot_scalar arch, falling back to stock"

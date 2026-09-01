@@ -73,7 +73,11 @@ fn main() -> Result<()> {
     let device_str=device_name_str.clone();
     let arch={
         let lower=device_str.to_ascii_lowercase();
-        if lower.contains("gfx1201"){"gfx1201".to_string()} else if lower.contains("gfx1151"){"gfx1151".to_string()} else if lower.contains("gfx1100"){"gfx1100".to_string()} else if lower.contains("gfx1030"){"gfx1030".to_string()} else {"unknown".to_string()}
+        if lower.contains("gfx1201") || lower.contains("navi48") || lower.contains("9070") {"gfx1201".to_string()}
+        else if lower.contains("gfx1151") || lower.contains("strix_halo") || lower.contains("8060s") || lower.contains("8050s") {"gfx1151".to_string()}
+        else if lower.contains("gfx1100") || lower.contains("navi31") || lower.contains("7900 xtx") {"gfx1100".to_string()}
+        else if lower.contains("gfx1030") || lower.contains("navi21") {"gfx1030".to_string()}
+        else {"unknown".to_string()}
     };
     let exts=unsafe{instance.enumerate_device_extension_properties(physical)}.context("enumerate device ext")?;
     let ext_names: std::collections::HashSet<String>=exts.iter().map(|e| unsafe{CStr::from_ptr(e.extension_name.as_ptr()).to_string_lossy().into_owned()}).collect();

@@ -1,0 +1,202 @@
+shader: MESA_SHADER_COMPUTE
+source_blake3: {0xbefb6b5d, 0x8ce4ac18, 0x825c3327, 0xc2395fed, 0x98f64dd6, 0xecf8f8cd, 0x211d2355, 0x61ba3b75}
+workgroup_size: 64, 1, 1
+system_values_read: 0x00000000'00000000'00002100'00000000
+api_subgroup_size: 32
+max_subgroup_size: 32
+min_subgroup_size: 32
+bit_sizes_int: 0x61
+separate_shader: true
+flrp_lowered: true
+writes_memory: true
+uniforms: 12
+decl_var push_const INTERP_MODE_NONE none PC pc
+decl_function main () (entrypoint)
+
+impl main {
+    con block b0:        // preds:
+    con 32      %0 = @load_scalar_arg_amd (base=1, arg_upper_bound_u32_amd=0)
+    con 32      %1 = @load_scalar_arg_amd (base=2, arg_upper_bound_u32_amd=0)
+    con 64      %2 = pack_64_2x32_split %0, %1
+    con 32      %3 = load_const (0x00000000)
+    con 64x2    %4 = @load_global_amd (%2, %3 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+    con 32x3    %5 = @load_global_amd (%2, %3 (0x0)) (base=16, access=none, align_mul=16, align_offset=0)
+    con 64      %6 = pack_64_2x32_split %5.x, %5.y
+    con 32x3    %7 = @load_workgroup_id
+    con 32      %8 = @load_scalar_arg_amd (base=3, arg_upper_bound_u32_amd=0)
+    con 32      %9 = imul %7.x, %8
+    div 32     %10 = @load_vector_arg_amd (base=5, arg_upper_bound_u32_amd=63)
+    div 32     %11 = iadd %9, %10
+    div 1      %12 = ult %11, %5.z
+                     // succs: b1 b7
+    if %12 {
+        div block b1:        // preds: b0
+        con 32     %13 = load_const (0x00000008)
+                         // succs: b2
+        con loop {
+            con block b2:        // preds: b1 b5
+            con 32     %14 = phi b1: %3 (0x0), b5: %145
+            div 32     %15 = phi b1: %3 (0x0), b5: %143
+            con 32     %16 = @load_global_amd (%2, %3 (0x0)) (base=28, access=none, align_mul=4, align_offset=0)
+            con 1      %17 = uge %14, %16
+                             // succs: b3 b4
+            if %17 {
+                con block b3:// preds: b2
+                break
+                // succs: b6
+            } else {
+                con block b4:  // preds: b2, succs: b5
+            }
+            con block b5:        // preds: b4
+            con 32     %18 = imul %14, %5.z
+            div 32     %19 = iadd %18, %11
+            con 32     %20 = @load_global_amd (%2, %3 (0x0)) (base=36, access=none, align_mul=4, align_offset=0)
+            con 32     %21 = load_const (0x00000004)
+            div 32     %22 = ishl %19, %21 (0x4)
+            div 32     %23 = iand %22, %20
+            con 32     %24 = load_const (0x0000001f = 31)
+            con 32     %25 = load_const (0x00000002)
+            div 32     %26 = ushr %23, %25 (0x2)
+            div 32     %27 = ishr %26, %24 (0x1f)
+            div 64     %28 = pack_64_2x32_split %26, %27
+            div 64     %29 = ishl %28, %21 (0x4)
+            div 64     %30 = iadd %4.x, %29
+            div 32x4   %31 = @load_global_amd (%30, %3 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            div 64     %32 = iadd %4.y, %29
+            div 32x4   %33 = @load_global_amd (%32, %3 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            div 32     %34 = iadd %23, %21 (0x4)
+            div 32     %35 = ushr %34, %25 (0x2)
+            div 32     %36 = ishr %35, %24 (0x1f)
+            div 64     %37 = pack_64_2x32_split %35, %36
+            div 64     %38 = ishl %37, %21 (0x4)
+            div 64     %39 = iadd %4.x, %38
+            div 32x4   %40 = @load_global_amd (%39, %3 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            div 64     %41 = iadd %4.y, %38
+            div 32x4   %42 = @load_global_amd (%41, %3 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            div 32     %43 = iadd %23, %13 (0x8)
+            div 32     %44 = ushr %43, %25 (0x2)
+            div 32     %45 = ishr %44, %24 (0x1f)
+            div 64     %46 = pack_64_2x32_split %44, %45
+            div 64     %47 = ishl %46, %21 (0x4)
+            div 64     %48 = iadd %4.x, %47
+            div 32x4   %49 = @load_global_amd (%48, %3 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            div 64     %50 = iadd %4.y, %47
+            div 32x4   %51 = @load_global_amd (%50, %3 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            con 32     %52 = load_const (0x0000000c = 12)
+            div 32     %53 = iadd %23, %52 (0xc)
+            div 32     %54 = ushr %53, %25 (0x2)
+            div 32     %55 = ishr %54, %24 (0x1f)
+            div 64     %56 = pack_64_2x32_split %54, %55
+            div 64     %57 = ishl %56, %21 (0x4)
+            div 64     %58 = iadd %4.x, %57
+            div 32x4   %59 = @load_global_amd (%58, %3 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            div 64     %60 = iadd %4.y, %57
+            div 32x4   %61 = @load_global_amd (%60, %3 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            con 32     %62 = load_const (0x00000005)
+            con 32     %63 = load_const (0x01010101 = 16843009)
+            div 32     %64 = sudot_4x8_iadd %33.x, %63 (0x1010101), %3 (0x0)
+            div 32     %65 = ishl %64, %62 (0x5)
+            div 32     %66 = isub %3 (0x0), %65
+            div 32     %67 = sudot_4x8_iadd %33.x, %31.x, %66
+            div 32     %68 = iadd %15, %67
+            div 32     %69 = sudot_4x8_iadd %33.y, %63 (0x1010101), %3 (0x0)
+            div 32     %70 = ishl %69, %62 (0x5)
+            div 32     %71 = isub %3 (0x0), %70
+            div 32     %72 = sudot_4x8_iadd %33.y, %31.y, %71
+            div 32     %73 = iadd %68, %72
+            div 32     %74 = sudot_4x8_iadd %33.z, %63 (0x1010101), %3 (0x0)
+            div 32     %75 = ishl %74, %62 (0x5)
+            div 32     %76 = isub %3 (0x0), %75
+            div 32     %77 = sudot_4x8_iadd %33.z, %31.z, %76
+            div 32     %78 = iadd %73, %77
+            div 32     %79 = sudot_4x8_iadd %33.w, %63 (0x1010101), %3 (0x0)
+            div 32     %80 = ishl %79, %62 (0x5)
+            div 32     %81 = isub %3 (0x0), %80
+            div 32     %82 = sudot_4x8_iadd %33.w, %31.w, %81
+            div 32     %83 = iadd %78, %82
+            div 32     %84 = sudot_4x8_iadd %42.x, %63 (0x1010101), %3 (0x0)
+            div 32     %85 = ishl %84, %62 (0x5)
+            div 32     %86 = isub %3 (0x0), %85
+            div 32     %87 = sudot_4x8_iadd %42.x, %40.x, %86
+            div 32     %88 = iadd %83, %87
+            div 32     %89 = sudot_4x8_iadd %42.y, %63 (0x1010101), %3 (0x0)
+            div 32     %90 = ishl %89, %62 (0x5)
+            div 32     %91 = isub %3 (0x0), %90
+            div 32     %92 = sudot_4x8_iadd %42.y, %40.y, %91
+            div 32     %93 = iadd %88, %92
+            div 32     %94 = sudot_4x8_iadd %42.z, %63 (0x1010101), %3 (0x0)
+            div 32     %95 = ishl %94, %62 (0x5)
+            div 32     %96 = isub %3 (0x0), %95
+            div 32     %97 = sudot_4x8_iadd %42.z, %40.z, %96
+            div 32     %98 = iadd %93, %97
+            div 32     %99 = sudot_4x8_iadd %42.w, %63 (0x1010101), %3 (0x0)
+            div 32    %100 = ishl %99, %62 (0x5)
+            div 32    %101 = isub %3 (0x0), %100
+            div 32    %102 = sudot_4x8_iadd %42.w, %40.w, %101
+            div 32    %103 = iadd %98, %102
+            div 32    %104 = sudot_4x8_iadd %51.x, %63 (0x1010101), %3 (0x0)
+            div 32    %105 = ishl %104, %62 (0x5)
+            div 32    %106 = isub %3 (0x0), %105
+            div 32    %107 = sudot_4x8_iadd %51.x, %49.x, %106
+            div 32    %108 = iadd %103, %107
+            div 32    %109 = sudot_4x8_iadd %51.y, %63 (0x1010101), %3 (0x0)
+            div 32    %110 = ishl %109, %62 (0x5)
+            div 32    %111 = isub %3 (0x0), %110
+            div 32    %112 = sudot_4x8_iadd %51.y, %49.y, %111
+            div 32    %113 = iadd %108, %112
+            div 32    %114 = sudot_4x8_iadd %51.z, %63 (0x1010101), %3 (0x0)
+            div 32    %115 = ishl %114, %62 (0x5)
+            div 32    %116 = isub %3 (0x0), %115
+            div 32    %117 = sudot_4x8_iadd %51.z, %49.z, %116
+            div 32    %118 = iadd %113, %117
+            div 32    %119 = sudot_4x8_iadd %51.w, %63 (0x1010101), %3 (0x0)
+            div 32    %120 = ishl %119, %62 (0x5)
+            div 32    %121 = isub %3 (0x0), %120
+            div 32    %122 = sudot_4x8_iadd %51.w, %49.w, %121
+            div 32    %123 = iadd %118, %122
+            div 32    %124 = sudot_4x8_iadd %61.x, %63 (0x1010101), %3 (0x0)
+            div 32    %125 = ishl %124, %62 (0x5)
+            div 32    %126 = isub %3 (0x0), %125
+            div 32    %127 = sudot_4x8_iadd %61.x, %59.x, %126
+            div 32    %128 = iadd %123, %127
+            div 32    %129 = sudot_4x8_iadd %61.y, %63 (0x1010101), %3 (0x0)
+            div 32    %130 = ishl %129, %62 (0x5)
+            div 32    %131 = isub %3 (0x0), %130
+            div 32    %132 = sudot_4x8_iadd %61.y, %59.y, %131
+            div 32    %133 = iadd %128, %132
+            div 32    %134 = sudot_4x8_iadd %61.z, %63 (0x1010101), %3 (0x0)
+            div 32    %135 = ishl %134, %62 (0x5)
+            div 32    %136 = isub %3 (0x0), %135
+            div 32    %137 = sudot_4x8_iadd %61.z, %59.z, %136
+            div 32    %138 = iadd %133, %137
+            div 32    %139 = sudot_4x8_iadd %61.w, %63 (0x1010101), %3 (0x0)
+            div 32    %140 = ishl %139, %62 (0x5)
+            div 32    %141 = isub %3 (0x0), %140
+            div 32    %142 = sudot_4x8_iadd %61.w, %59.w, %141
+            div 32    %143 = iadd %138, %142
+            con 32    %144 = load_const (0x00000001)
+            con 32    %145 = iadd %14, %144 (0x1)
+                             // succs: b2
+        }
+        div block b6:        // preds: b3
+        div 32    %146 = phi b3: %15
+        con 32    %147 = @load_global_amd (%2, %3 (0x0)) (base=32, access=none, align_mul=16, align_offset=0)
+        div 32    %148 = iadd %147, %11
+        con 32    %149 = load_const (0x0000001f = 31)
+        div 32    %150 = ishr %148, %149 (0x1f)
+        div 64    %151 = pack_64_2x32_split %148, %150
+        con 32    %152 = load_const (0x00000002)
+        div 64    %153 = ishl %151, %152 (0x2)
+        div 64    %154 = iadd %6, %153
+        div 32    %155 = @load_global_amd (%154, %3 (0x0)) (base=0, access=none, align_mul=4, align_offset=0)
+        div 32    %156 = iadd %155, %146
+                         @store_global_amd (%156, %154, %3 (0x0)) (base=0, access=none, align_mul=4, align_offset=0, wrmask=x)
+                         // succs: b8
+    } else {
+        div block b7:  // preds: b0, succs: b8
+    }
+    con block b8:  // preds: b6 b7, succs: b9
+    block b9:
+}
+
+ 
