@@ -145,9 +145,11 @@ q8/q4/q6. ACO's extra static instruction count is mostly address math +
 
 **No, not as a packed-dot codegen story.**
 
-- Serial rows are occupancy-starved (16 groups × wg64 = 1024 threads) and
-  sit on the memory system. Microwave/stock HIP ratios cluster at **1.00±0.05**
-  on gfx1201 and gfx1151 serial, and **~0.99** on gfx1100 serial HIP.
+- Serial rows: this harness launches n=32768 work-items (512 workgroups of
+  64, or 128 of 256) and runs ~1200 us on gfx1151 for every backend, so the
+  family is bandwidth/latency-bound at full occupancy, not occupancy-starved.
+  Microwave/stock HIP ratios cluster at **1.00±0.05** on gfx1201 and gfx1151
+  serial, and **~0.99** on gfx1100 serial HIP.
 - Independent throughput is where Microwave HIP can win: gfx1100 mw/st hip
   **0.63–0.81** on the packed q8/q4/q6 wg256 rows; gfx1201 **0.83–0.99**;
   gfx1151 mixed **0.72–1.10**. That is consistent with a different memory
@@ -155,16 +157,33 @@ q8/q4/q6. ACO's extra static instruction count is mostly address math +
   a better dot instruction — both already use `v_dot4*`.
 - gfx1100 microwave **Redline serial** is the one clear regression: **1.56×**
   vs stock redline on q8/q4/q6 (452 vs 290 us) while HIP stays at parity.
-  [INFERENCE] the ACO body (GLOBAL + `s_waitcnt vmcnt` / extra VALU addr math)
-  is a worse fit for Redline's gfx11 serial RMW tape than LLVM's MUBUF body.
-  Independent redline does not show that 1.56×.
-- **gfx1151 12× packed-dot gap did not reproduce.** Stock HIP serial is
-  ~1200 us vs vulkan ~1122 us (~1.08×), not 3535 vs 289. Independent vulkan
-  still leads (~650–790 vs hip ~730–1050) but that is ~1.2–1.5×, not 12×.
-  Feeding ACO ISA into HIP/Redline did not create a 12× win, because the 08-29
-  gap was never codegen (see `2026-08-29-gfx1151-packed-dot-codegen.md`).
-  Microwave on gfx1151 is a packaging proof plus a small independent-throughput
-  HIP improvement, not a packed-dot codegen rescue.
+  **Unexplained.** Seven of eight rows sit at 452.4–455.3 us with p95−min
+  under 0.4 us, the eighth (scalar wg64) at 292 us, and the same kernel at
+  wg256 is back at 452 — so it is not kernel content, and the dependency
+  cache policy, wave size and scheduler profile are identical to stock. A
+  reproducibility rerun is in flight; until it lands treat the 1.56× as a
+  run observation, not a property of the ACO body. Independent redline does
+  not show it.
+- **What this says about the gfx1151 "12×".** Nothing directly, and the
+  earlier draft of this section got that wrong: the 12× (`3535 vs 289 us`,
+  76 vs 928 GB/s, `2026-08-29-gfx1151-packed-dot-codegen.md`) is the
+  **hipEngine Python harness** (`hip_dot_path.hip`, 16 groups × wg64 = 1,024
+  threads, 4 MiB working set). This Rust suite is a different workload
+  (32,768 threads, Vulkan ~1121 us), and it never showed 12× — the 08-29 Rust
+  run had stock HIP at 1210 vs Vulkan 1122 on gfx1151, same as today. So
+  "did not reproduce" is the wrong verb; the two harnesses measure different
+  shapes. What Microwave adds is sharper than that: on gfx1151 the **same ACO
+  body** runs at 1207 us under HIP dispatch, 1198 us under Redline PM4, and
+  ~1121 us under Vulkan. Identical code, ~7% slower on the HSA-side paths on
+  both dispatchers — that residual cannot be codegen or launch overhead; the
+  remaining variable is the memory the buffers live in (hipMalloc pools and
+  page-table attributes vs RADV's heap). That is the same direction the 08-29
+  artifact pointed (uncached-mapping-like bandwidth under HIP on the APU), now
+  with codegen removed from the comparison by construction. The decisive
+  probe is unchanged and now easier: replicate hipEngine's exact 16×64
+  geometry in this harness with the Microwave body so HIP and Vulkan execute
+  the same ISA, and then swap the memory (VMM handle exported as dma-buf and
+  imported by Vulkan) so they also share the same pages.
 
 What Microwave *does* prove: an ACO-emitted CS with a 3-dword inlined push
 constant ABI can be constraint-pinned into an LLVM-built HSACO (`s[2:3]`, `s4`,
