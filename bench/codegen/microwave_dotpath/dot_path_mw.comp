@@ -1,0 +1,61 @@
+#version 460
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
+//
+// Pointer-ABI port of hipEngine dot_path.comp mode 0 (q8 signed). Push
+// constants are the HSA kernarg pointer plus workgroup size; Args matches
+// the HIP kernarg layout byte for byte (weights@0 activations@8 out@16 n@24
+// body_iters@28 data_mask@32 sequence_id@36). Per-element loads are kept
+// scalar on purpose: ACO must schedule 32 global_load_b32 per iteration.
+
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_integer_dot_product : require
+
+layout(local_size_x = 64, local_size_x_id = 0) in;
+
+layout(push_constant) uniform PC {
+    uint64_t args;
+    uint wg_size;
+} pc;
+
+layout(buffer_reference, std430) buffer Args {
+    uint64_t weights;
+    uint64_t activations;
+    uint64_t out_;
+    uint n;
+    uint body_iters;
+    uint data_mask;
+    uint sequence_id;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32 {
+    uint v[];
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer I32 {
+    int v[];
+};
+
+void main() {
+    Args args_ = Args(pc.args);
+    U32 W = U32(args_.weights);
+    U32 A = U32(args_.activations);
+    I32 O = I32(args_.out_);
+    uint idx = gl_WorkGroupID.x * pc.wg_size + gl_LocalInvocationID.x;
+    if (idx >= args_.n)
+        return;
+    int sum = 0;
+    for (uint iter = 0u; iter < args_.body_iters; ++iter) {
+        uint base = ((iter * args_.n + idx) * 16u) & args_.data_mask;
+        for (uint group = 0u; group < 16u; ++group) {
+            uint offset = (base + group) & args_.data_mask;
+            uint a = W.v[offset];
+            uint b = A.v[offset];
+            sum = dotPacked4x8EXT(int(a), int(b)) + sum;
+        }
+    }
+    O.v[idx] = sum + int(args_.sequence_id);
+}
