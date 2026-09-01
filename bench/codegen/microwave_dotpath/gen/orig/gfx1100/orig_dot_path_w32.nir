@@ -1,0 +1,192 @@
+shader: MESA_SHADER_COMPUTE
+source_blake3: {0x15d794b8, 0x88f240e7, 0x4055549b, 0x43942b6b, 0x02cde867, 0x3e213bdc, 0x4cc03672, 0x3c9ab280}
+workgroup_size: 64, 1, 1
+num_ssbos: 3
+system_values_read: 0x00000000'00000000'00002100'00000000
+api_subgroup_size: 32
+max_subgroup_size: 32
+min_subgroup_size: 32
+bit_sizes_int: 0x21
+separate_shader: true
+flrp_lowered: true
+writes_memory: true
+uniforms: 20
+decl_var push_const INTERP_MODE_NONE none block #0
+decl_var ssbo INTERP_MODE_NONE restrict readonly block#2 #1 (~0, 0, 0)
+decl_var ssbo INTERP_MODE_NONE restrict readonly block#2 #3 (~0, 0, 1)
+decl_var ssbo INTERP_MODE_NONE restrict writeonly block#5 #4 (~0, 0, 2)
+decl_function main () (entrypoint)
+
+impl main {
+    con block b0:        // preds:
+    con 32x3    %0 = @load_workgroup_id
+    div 32      %1 = @load_vector_arg_amd (base=8, arg_upper_bound_u32_amd=63)
+    con 32      %2 = load_const (0x00000006)
+    con 32      %3 = ishl %0.x, %2 (0x6)
+    div 32      %4 = iadd %3, %1
+    con 32      %5 = @load_scalar_arg_amd (base=2, arg_upper_bound_u32_amd=0)
+    div 1       %6 = ult %4, %5
+                     // succs: b1 b7
+    if %6 {
+        div block b1:        // preds: b0
+        con 32      %7 = @load_scalar_arg_amd (base=5, arg_upper_bound_u32_amd=0)
+        div 32      %8 = iadd %7, %4
+        con 32      %9 = @load_scalar_arg_amd (base=3, arg_upper_bound_u32_amd=0)
+        con 32     %10 = load_const (0x00000004)
+        con 32     %11 = load_const (0x00000000)
+        con 32     %12 = load_const (0x0000000c = 12)
+                         // succs: b2
+        con loop {
+            con block b2:        // preds: b1 b5
+            div 32     %13 = phi b1: %11 (0x0), b5: %132
+            con 32     %14 = phi b1: %11 (0x0), b5: %133
+            con 1      %15 = uge %14, %9
+                             // succs: b3 b4
+            if %15 {
+                con block b3:// preds: b2
+                break
+                // succs: b6
+            } else {
+                con block b4:  // preds: b2, succs: b5
+            }
+            con block b5:        // preds: b4
+            con 32     %16 = imul %14, %5
+            div 32     %17 = iadd %16, %4
+            con 32     %18 = @load_scalar_arg_amd (base=4, arg_upper_bound_u32_amd=0)
+            div 32     %19 = ishl %17, %10 (0x4)
+            div 32     %20 = iand %19, %18
+            con 32     %21 = @load_scalar_arg_amd (base=1, arg_upper_bound_u32_amd=0)
+            con 32     %22 = load_const (0xffff8000 = -32768 = 4294934528)
+            con 64     %23 = pack_64_2x32_split %21, %22 (0xffff8000)
+            con 32x8   %24 = @load_global_amd (%23, %11 (0x0)) (base=0, access=readonly|reorderable|speculatable|smem-amd, align_mul=4, align_offset=0)
+            con 32x4   %25 = vec4 %24.a, %24.b, %24.c, %24.d
+            con 32     %26 = load_const (0x00000002)
+            div 32     %27 = ishl %20, %26 (0x2)
+            div 32     %28 = @load_ssbo (%25, %27) (access=readonly|reorderable, align_mul=64, align_offset=0, offset_shift=0)
+            con 32x4   %29 = vec4 %24.e, %24.f, %24.g, %24.h
+            div 32     %30 = @load_ssbo (%29, %27) (access=readonly|reorderable, align_mul=64, align_offset=0, offset_shift=0)
+            div 32     %31 = sdot_4x8_iadd %28, %30, %13
+            con 32     %32 = load_const (0x00000001)
+            div 32     %33 = iadd %20, %32 (0x1)
+            div 32     %34 = iand %33, %18
+            div 32     %35 = ishl %34, %26 (0x2)
+            div 32     %36 = @load_ssbo (%25, %35) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32     %37 = @load_ssbo (%29, %35) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32     %38 = sdot_4x8_iadd %36, %37, %31
+            div 32     %39 = iadd %20, %26 (0x2)
+            div 32     %40 = iand %39, %18
+            div 32     %41 = ishl %40, %26 (0x2)
+            div 32     %42 = @load_ssbo (%25, %41) (access=readonly|reorderable, align_mul=8, align_offset=0, offset_shift=0)
+            div 32     %43 = @load_ssbo (%29, %41) (access=readonly|reorderable, align_mul=8, align_offset=0, offset_shift=0)
+            div 32     %44 = sdot_4x8_iadd %42, %43, %38
+            con 32     %45 = load_const (0x00000003)
+            div 32     %46 = iadd %20, %45 (0x3)
+            div 32     %47 = iand %46, %18
+            div 32     %48 = ishl %47, %26 (0x2)
+            div 32     %49 = @load_ssbo (%25, %48) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32     %50 = @load_ssbo (%29, %48) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32     %51 = sdot_4x8_iadd %49, %50, %44
+            div 32     %52 = iadd %20, %10 (0x4)
+            div 32     %53 = iand %52, %18
+            div 32     %54 = ishl %53, %26 (0x2)
+            div 32     %55 = @load_ssbo (%25, %54) (access=readonly|reorderable, align_mul=16, align_offset=0, offset_shift=0)
+            div 32     %56 = @load_ssbo (%29, %54) (access=readonly|reorderable, align_mul=16, align_offset=0, offset_shift=0)
+            div 32     %57 = sdot_4x8_iadd %55, %56, %51
+            con 32     %58 = load_const (0x00000005)
+            div 32     %59 = iadd %20, %58 (0x5)
+            div 32     %60 = iand %59, %18
+            div 32     %61 = ishl %60, %26 (0x2)
+            div 32     %62 = @load_ssbo (%25, %61) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32     %63 = @load_ssbo (%29, %61) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32     %64 = sdot_4x8_iadd %62, %63, %57
+            div 32     %65 = iadd %20, %2 (0x6)
+            div 32     %66 = iand %65, %18
+            div 32     %67 = ishl %66, %26 (0x2)
+            div 32     %68 = @load_ssbo (%25, %67) (access=readonly|reorderable, align_mul=8, align_offset=0, offset_shift=0)
+            div 32     %69 = @load_ssbo (%29, %67) (access=readonly|reorderable, align_mul=8, align_offset=0, offset_shift=0)
+            div 32     %70 = sdot_4x8_iadd %68, %69, %64
+            con 32     %71 = load_const (0x00000007)
+            div 32     %72 = iadd %20, %71 (0x7)
+            div 32     %73 = iand %72, %18
+            div 32     %74 = ishl %73, %26 (0x2)
+            div 32     %75 = @load_ssbo (%25, %74) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32     %76 = @load_ssbo (%29, %74) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32     %77 = sdot_4x8_iadd %75, %76, %70
+            con 32     %78 = load_const (0x00000008)
+            div 32     %79 = iadd %20, %78 (0x8)
+            div 32     %80 = iand %79, %18
+            div 32     %81 = ishl %80, %26 (0x2)
+            div 32     %82 = @load_ssbo (%25, %81) (access=readonly|reorderable, align_mul=32, align_offset=0, offset_shift=0)
+            div 32     %83 = @load_ssbo (%29, %81) (access=readonly|reorderable, align_mul=32, align_offset=0, offset_shift=0)
+            div 32     %84 = sdot_4x8_iadd %82, %83, %77
+            con 32     %85 = load_const (0x00000009)
+            div 32     %86 = iadd %20, %85 (0x9)
+            div 32     %87 = iand %86, %18
+            div 32     %88 = ishl %87, %26 (0x2)
+            div 32     %89 = @load_ssbo (%25, %88) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32     %90 = @load_ssbo (%29, %88) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32     %91 = sdot_4x8_iadd %89, %90, %84
+            con 32     %92 = load_const (0x0000000a = 10)
+            div 32     %93 = iadd %20, %92 (0xa)
+            div 32     %94 = iand %93, %18
+            div 32     %95 = ishl %94, %26 (0x2)
+            div 32     %96 = @load_ssbo (%25, %95) (access=readonly|reorderable, align_mul=8, align_offset=0, offset_shift=0)
+            div 32     %97 = @load_ssbo (%29, %95) (access=readonly|reorderable, align_mul=8, align_offset=0, offset_shift=0)
+            div 32     %98 = sdot_4x8_iadd %96, %97, %91
+            con 32     %99 = load_const (0x0000000b = 11)
+            div 32    %100 = iadd %20, %99 (0xb)
+            div 32    %101 = iand %100, %18
+            div 32    %102 = ishl %101, %26 (0x2)
+            div 32    %103 = @load_ssbo (%25, %102) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32    %104 = @load_ssbo (%29, %102) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32    %105 = sdot_4x8_iadd %103, %104, %98
+            div 32    %106 = iadd %20, %12 (0xc)
+            div 32    %107 = iand %106, %18
+            div 32    %108 = ishl %107, %26 (0x2)
+            div 32    %109 = @load_ssbo (%25, %108) (access=readonly|reorderable, align_mul=16, align_offset=0, offset_shift=0)
+            div 32    %110 = @load_ssbo (%29, %108) (access=readonly|reorderable, align_mul=16, align_offset=0, offset_shift=0)
+            div 32    %111 = sdot_4x8_iadd %109, %110, %105
+            con 32    %112 = load_const (0x0000000d = 13)
+            div 32    %113 = iadd %20, %112 (0xd)
+            div 32    %114 = iand %113, %18
+            div 32    %115 = ishl %114, %26 (0x2)
+            div 32    %116 = @load_ssbo (%25, %115) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32    %117 = @load_ssbo (%29, %115) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32    %118 = sdot_4x8_iadd %116, %117, %111
+            con 32    %119 = load_const (0x0000000e = 14)
+            div 32    %120 = iadd %20, %119 (0xe)
+            div 32    %121 = iand %120, %18
+            div 32    %122 = ishl %121, %26 (0x2)
+            div 32    %123 = @load_ssbo (%25, %122) (access=readonly|reorderable, align_mul=8, align_offset=0, offset_shift=0)
+            div 32    %124 = @load_ssbo (%29, %122) (access=readonly|reorderable, align_mul=8, align_offset=0, offset_shift=0)
+            div 32    %125 = sdot_4x8_iadd %123, %124, %118
+            con 32    %126 = load_const (0x0000000f = 15)
+            div 32    %127 = iadd %20, %126 (0xf)
+            div 32    %128 = iand %127, %18
+            div 32    %129 = ishl %128, %26 (0x2)
+            div 32    %130 = @load_ssbo (%25, %129) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32    %131 = @load_ssbo (%29, %129) (access=readonly|reorderable, align_mul=4, align_offset=0, offset_shift=0)
+            div 32    %132 = sdot_4x8_iadd %130, %131, %125
+            con 32    %133 = iadd %14, %32 (0x1)
+                             // succs: b2
+        }
+        div block b6:        // preds: b3
+        div 32    %134 = phi b3: %13
+        con 32    %135 = @load_scalar_arg_amd (base=6, arg_upper_bound_u32_amd=0)
+        div 32    %136 = iadd %134, %135
+        con 32    %137 = @load_scalar_arg_amd (base=1, arg_upper_bound_u32_amd=0)
+        con 32    %138 = load_const (0xffff8000 = -32768 = 4294934528)
+        con 64    %139 = pack_64_2x32_split %137, %138 (0xffff8000)
+        con 32x4  %140 = @load_global_amd (%139, %11 (0x0)) (base=32, access=readonly|reorderable|smem-amd, align_mul=4, align_offset=0)
+        con 32    %141 = load_const (0x00000002)
+        div 32    %142 = ishl %8, %141 (0x2)
+                         @store_ssbo (%136, %140, %142) (wrmask=x, access=writeonly, align_mul=4, align_offset=0, offset_shift=0)
+                         // succs: b8
+    } else {
+        div block b7:  // preds: b0, succs: b8
+    }
+    con block b8:  // preds: b6 b7, succs: b9
+    block b9:
+}
+
+ 
