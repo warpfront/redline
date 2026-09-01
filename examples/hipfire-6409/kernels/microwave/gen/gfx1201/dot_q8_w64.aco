@@ -1,0 +1,188 @@
+After Spilling:
+ACO shader stage: SW (CS), HW (COMPUTE_SHADER)
+BB0
+/* logical preds: / linear preds: / kind: top-level, branch, */
+	 s2: (kill)%92:s[0-1],  s1: %93:s[2],  s1: %94:s[3],  s1: %95:s[4],  v1: %96:v[0],  s1: %97:s[117],  s1: (kill)%99:s[116],  s1: (kill)%98:s[115] = p_startpgm
+	p_logical_start
+	 s2: %4 = p_create_vector (kill)%93, (kill)%94
+	 v1: %101 = p_parallelcopy 0
+	 v4: %102 = global_load_dwordx4 %101, %4 storage:buffer
+	 v2: %103,  v2: %104 = p_split_vector (kill)%102
+	 v1: %106,  v1: %107 = p_split_vector (kill)%103
+	 s1: %108 = p_as_uniform %106
+	 s1: %109 = p_as_uniform (kill)%107
+	 s2: (kill)%105 = p_create_vector (kill)%108, %109
+	 v1: %111,  v1: %112 = p_split_vector (kill)%104
+	 s1: %113 = p_as_uniform %111
+	 s1: %114 = p_as_uniform (kill)%112
+	 s2: (kill)%110 = p_create_vector (kill)%113, %114
+	 v3: %117 = global_load_dwordx3 (kill)%101, %4 offset:16 storage:buffer
+	 v1: %118,  v1: %119,  v1: %120 = p_split_vector (kill)%117
+	 s1: %121 = p_as_uniform %118
+	 s1: %122 = p_as_uniform (kill)%119
+	 s1: %123 = p_as_uniform %120
+	 s2: (kill)%8 = p_create_vector (kill)%121, %122
+	 s1: %10 = s_mul_i32 (kill)%97, (kill)%95
+	 v1: %12 = v_add_u32 (kill)%10, (kill)%96
+	 s2: %13 = v_cmp_gt_u32 (kill)%120, %12
+	p_logical_end
+	 s2: %0:exec = p_parallelcopy (kill)%13
+	p_cbranch_z %0:exec BB7, BB1
+BB1
+/* logical preds: BB0, / linear preds: BB0, / kind: uniform, loop-preheader, */
+	p_logical_start
+	p_logical_end
+	p_branch BB2
+BB2
+/* logical preds: BB1, BB5, / linear preds: BB1, BB5, / kind: uniform, loop-header, */
+	 v1: %16 = p_phi 0, (kill)%78
+	 s1: %15 = p_linear_phi 0, (kill)%80
+	p_logical_start
+	 v1: %247 = p_parallelcopy 0
+	 v1: %129 = global_load_dword (kill)%247, %4 offset:28 storage:buffer
+	 s1: %130 = p_as_uniform (kill)%129
+	 s1: %131:scc = s_cmp_ge_u32 %15, (kill)%130
+	p_logical_end
+	p_cbranch_z (kill)%131:scc BB4, BB3
+BB3
+/* logical preds: BB2, / linear preds: BB2, / kind: uniform, break, */
+	p_logical_start
+	p_logical_end
+	p_branch BB6
+BB4
+/* logical preds: BB2, / linear preds: BB2, / kind: uniform, */
+	p_logical_start
+	p_logical_end
+	p_branch BB5
+BB5
+/* logical preds: BB4, / linear preds: BB4, / kind: uniform, continue, */
+	p_logical_start
+	 s1: %19 = s_mul_i32 %15, %123
+	 v1: %248 = p_parallelcopy 0
+	 v1: %136 = global_load_dword (kill)%248, %4 offset:36 storage:buffer
+	 v1: %23 = v_add_lshl_u32 (kill)%19, %12, 4
+	 v1: %24 = v_and_b32 (kill)%136, (kill)%23
+	 v1: %27 = v_lshrrev_b32 2, %24
+	 v1: %28 = v_ashrrev_i32 31, %27
+	 v2: %29 = p_create_vector (kill)%27, (kill)%28
+	 v2: %30 = v_lshlrev_b64_e64 4, (kill)%29
+	 v1: %140,  v1: %141 = p_split_vector (kill)%30
+	 v1: %142,  s2: %143 = v_add_co_u32_e64 %106, %140
+	 v1: %144,  s2: (kill)%145 = v_addc_co_u32 %109, %141, (kill)%143
+	 v2: %31 = p_create_vector (kill)%142, (kill)%144
+	 v4: %32 = global_load_dwordx4 (kill)%31,  s1: undef storage:buffer
+	 v1: %146,  v1: %147,  v1: %148,  v1: %149 = p_split_vector (kill)%32
+	 v1: %154,  s2: %155 = v_add_co_u32_e64 %111, (kill)%140
+	 v1: %156,  s2: (kill)%157 = v_addc_co_u32 %114, (kill)%141, (kill)%155
+	 v2: %33 = p_create_vector (kill)%154, (kill)%156
+	 v4: %34 = global_load_dwordx4 (kill)%33,  s1: undef storage:buffer
+	 v1: %158,  v1: %159,  v1: %160,  v1: %161 = p_split_vector (kill)%34
+	 v1: %35 = v_add_u32 4, %24
+	 v1: %36 = v_lshrrev_b32 2, (kill)%35
+	 v1: %37 = v_ashrrev_i32 31, %36
+	 v2: %38 = p_create_vector (kill)%36, (kill)%37
+	 v2: %39 = v_lshlrev_b64_e64 4, (kill)%38
+	 v1: %164,  v1: %165 = p_split_vector (kill)%39
+	 v1: %166,  s2: %167 = v_add_co_u32_e64 %106, %164
+	 v1: %168,  s2: (kill)%169 = v_addc_co_u32 %109, %165, (kill)%167
+	 v2: %40 = p_create_vector (kill)%166, (kill)%168
+	 v4: %41 = global_load_dwordx4 (kill)%40,  s1: undef storage:buffer
+	 v1: %170,  v1: %171,  v1: %172,  v1: %173 = p_split_vector (kill)%41
+	 v1: %178,  s2: %179 = v_add_co_u32_e64 %111, (kill)%164
+	 v1: %180,  s2: (kill)%181 = v_addc_co_u32 %114, (kill)%165, (kill)%179
+	 v2: %42 = p_create_vector (kill)%178, (kill)%180
+	 v4: %43 = global_load_dwordx4 (kill)%42,  s1: undef storage:buffer
+	 v1: %182,  v1: %183,  v1: %184,  v1: %185 = p_split_vector (kill)%43
+	 v1: %44 = v_add_u32 8, %24
+	 v1: %45 = v_lshrrev_b32 2, (kill)%44
+	 v1: %46 = v_ashrrev_i32 31, %45
+	 v2: %47 = p_create_vector (kill)%45, (kill)%46
+	 v2: %48 = v_lshlrev_b64_e64 4, (kill)%47
+	 v1: %188,  v1: %189 = p_split_vector (kill)%48
+	 v1: %190,  s2: %191 = v_add_co_u32_e64 %106, %188
+	 v1: %192,  s2: (kill)%193 = v_addc_co_u32 %109, %189, (kill)%191
+	 v2: %49 = p_create_vector (kill)%190, (kill)%192
+	 v4: %50 = global_load_dwordx4 (kill)%49,  s1: undef storage:buffer
+	 v1: %194,  v1: %195,  v1: %196,  v1: %197 = p_split_vector (kill)%50
+	 v1: %202,  s2: %203 = v_add_co_u32_e64 %111, (kill)%188
+	 v1: %204,  s2: (kill)%205 = v_addc_co_u32 %114, (kill)%189, (kill)%203
+	 v2: %51 = p_create_vector (kill)%202, (kill)%204
+	 v4: %52 = global_load_dwordx4 (kill)%51,  s1: undef storage:buffer
+	 v1: %206,  v1: %207,  v1: %208,  v1: %209 = p_split_vector (kill)%52
+	 v1: %54 = v_add_u32 12, (kill)%24
+	 v1: %55 = v_lshrrev_b32 2, (kill)%54
+	 v1: %56 = v_ashrrev_i32 31, %55
+	 v2: %57 = p_create_vector (kill)%55, (kill)%56
+	 v2: %58 = v_lshlrev_b64_e64 4, (kill)%57
+	 v1: %212,  v1: %213 = p_split_vector (kill)%58
+	 v1: %214,  s2: %215 = v_add_co_u32_e64 %106, %212
+	 v1: %216,  s2: (kill)%217 = v_addc_co_u32 %109, %213, (kill)%215
+	 v2: %59 = p_create_vector (kill)%214, (kill)%216
+	 v4: %60 = global_load_dwordx4 (kill)%59,  s1: undef storage:buffer
+	 v1: %218,  v1: %219,  v1: %220,  v1: %221 = p_split_vector (kill)%60
+	 v1: %226,  s2: %227 = v_add_co_u32_e64 %111, (kill)%212
+	 v1: %228,  s2: (kill)%229 = v_addc_co_u32 %114, (kill)%213, (kill)%227
+	 v2: %61 = p_create_vector (kill)%226, (kill)%228
+	 v4: %62 = global_load_dwordx4 (kill)%61,  s1: undef storage:buffer
+	 v1: %230,  v1: %231,  v1: %232,  v1: %233 = p_split_vector (kill)%62
+	 v1: %63 = v_dot4_i32_iu8 (kill)%146*[-1,1], (kill)%158*[-1,1], (kill)%16
+	 v1: %64 = v_dot4_i32_iu8 (kill)%147*[-1,1], (kill)%159*[-1,1], (kill)%63
+	 v1: %65 = v_dot4_i32_iu8 (kill)%148*[-1,1], (kill)%160*[-1,1], (kill)%64
+	 v1: %66 = v_dot4_i32_iu8 (kill)%149*[-1,1], (kill)%161*[-1,1], (kill)%65
+	 v1: %67 = v_dot4_i32_iu8 (kill)%170*[-1,1], (kill)%182*[-1,1], (kill)%66
+	 v1: %68 = v_dot4_i32_iu8 (kill)%171*[-1,1], (kill)%183*[-1,1], (kill)%67
+	 v1: %69 = v_dot4_i32_iu8 (kill)%172*[-1,1], (kill)%184*[-1,1], (kill)%68
+	 v1: %70 = v_dot4_i32_iu8 (kill)%173*[-1,1], (kill)%185*[-1,1], (kill)%69
+	 v1: %71 = v_dot4_i32_iu8 (kill)%194*[-1,1], (kill)%206*[-1,1], (kill)%70
+	 v1: %72 = v_dot4_i32_iu8 (kill)%195*[-1,1], (kill)%207*[-1,1], (kill)%71
+	 v1: %73 = v_dot4_i32_iu8 (kill)%196*[-1,1], (kill)%208*[-1,1], (kill)%72
+	 v1: %74 = v_dot4_i32_iu8 (kill)%197*[-1,1], (kill)%209*[-1,1], (kill)%73
+	 v1: %75 = v_dot4_i32_iu8 (kill)%218*[-1,1], (kill)%230*[-1,1], (kill)%74
+	 v1: %76 = v_dot4_i32_iu8 (kill)%219*[-1,1], (kill)%231*[-1,1], (kill)%75
+	 v1: %77 = v_dot4_i32_iu8 (kill)%220*[-1,1], (kill)%232*[-1,1], (kill)%76
+	 v1: %78 = v_dot4_i32_iu8 (kill)%221*[-1,1], (kill)%233*[-1,1], (kill)%77
+	 s1: %80,  s1: (kill)%234:scc = s_add_u32 (kill)%15, 1
+	p_logical_end
+	p_branch BB2
+BB6
+/* logical preds: BB3, / linear preds: BB3, / kind: uniform, loop-exit, */
+	 v1: %81 = p_phi (kill)%16
+	p_logical_start
+	 v1: %249 = p_parallelcopy 0
+	 v1: %237 = global_load_dword (kill)%249, (kill)%4 offset:32 storage:buffer
+	 v1: %83 = v_add_u32 (kill)%237, (kill)%12
+	 v1: %85 = v_ashrrev_i32 31, %83
+	 v2: %86 = p_create_vector (kill)%83, (kill)%85
+	 v2: %88 = v_lshlrev_b64_e64 2, (kill)%86
+	 v1: %241,  v1: %242 = p_split_vector (kill)%88
+	 v1: %243,  s2: %244 = v_add_co_u32_e64 (kill)%118, (kill)%241
+	 v1: %245,  s2: (kill)%246 = v_addc_co_u32 (lateKill)%122, (kill)%242, (kill)%244
+	 v2: %89 = p_create_vector (kill)%243, (kill)%245
+	 v1: %90 = global_load_dword %89,  s1: undef storage:buffer
+	 v1: %91 = v_add_u32 (kill)%90, (kill)%81
+	global_store_dword (kill)%89,  s1: undef, (kill)%91 disable_wqm storage:buffer
+	p_logical_end
+	p_branch BB8
+BB7
+/* logical preds: / linear preds: BB0, / kind: uniform, */
+	p_branch BB8
+BB8
+/* logical preds: / linear preds: BB6, BB7, / kind: invert, */
+	 s2: %0:exec,  s1: (kill)%250:scc = s_andn2_b64 -1, %0:exec
+	p_cbranch_z %0:exec BB10, BB9
+BB9
+/* logical preds: BB0, / linear preds: BB8, / kind: uniform, */
+	p_logical_start
+	p_logical_end
+	p_branch BB11
+BB10
+/* logical preds: / linear preds: BB8, / kind: uniform, */
+	p_branch BB11
+BB11
+/* logical preds: BB6, BB9, / linear preds: BB9, BB10, / kind: uniform, top-level, merge, */
+	 s2: %0:exec = p_parallelcopy -1
+	p_logical_start
+	p_logical_end
+	s_endpgm
+
+ 

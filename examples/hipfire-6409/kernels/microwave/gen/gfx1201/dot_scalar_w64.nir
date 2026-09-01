@@ -1,0 +1,636 @@
+shader: MESA_SHADER_COMPUTE
+source_blake3: {0xb46c47c9, 0x75304508, 0x784f97d2, 0x20801d7f, 0xe2435a24, 0xc6f709cb, 0xe0ba7fe5, 0xed7419a7}
+workgroup_size: 64, 1, 1
+system_values_read: 0x00000000'00000000'00008400'00000000
+subgroup_size: 0
+bit_sizes_int: 0x61
+separate_shader: true
+writes_memory: true
+uniforms: 12
+decl_var push_const INTERP_MODE_NONE none PC pc
+decl_function main () (entrypoint)
+
+impl main {
+    con block b0:        // preds:
+    con 32      %0 = @load_scalar_arg_amd (base=1, arg_upper_bound_u32_amd=0)
+    con 32      %1 = @load_scalar_arg_amd (base=2, arg_upper_bound_u32_amd=0)
+    con 32      %2 = @load_scalar_arg_amd (base=3, arg_upper_bound_u32_amd=0)
+    con 64      %3 = pack_64_2x32_split %0, %1
+    con 32      %4 = load_const (0x00000000)
+    con 64x2    %5 = @load_global_amd (%3, %4 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+    con 32x3    %6 = @load_global_amd (%3, %4 (0x0)) (base=16, access=none, align_mul=16, align_offset=0)
+    con 64      %7 = pack_64_2x32_split %6.x, %6.y
+    con 32x3    %8 = @load_workgroup_id
+    con 32      %9 = imul %8.x, %2
+    div 32     %10 = @load_vector_arg_amd (base=4, arg_upper_bound_u32_amd=63)
+    div 32     %11 = iadd %9, %10
+    div 1      %12 = ult %11, %6.z
+                     // succs: b1 b7
+    if %12 {
+        div block b1:        // preds: b0
+        con 32     %13 = load_const (0x00000008)
+                         // succs: b2
+        con loop {
+            con block b2:        // preds: b1 b5
+            con 32     %14 = phi b1: %4 (0x0), b5: %582
+            div 32     %15 = phi b1: %4 (0x0), b5: %581
+            con 32     %16 = @load_global_amd (%3, %4 (0x0)) (base=28, access=none, align_mul=4, align_offset=0)
+            con 1      %17 = uge %14, %16
+                             // succs: b3 b4
+            if %17 {
+                con block b3:// preds: b2
+                break
+                // succs: b6
+            } else {
+                con block b4:  // preds: b2, succs: b5
+            }
+            con block b5:        // preds: b4
+            con 32     %18 = imul %14, %6.z
+            div 32     %19 = iadd %18, %11
+            con 32     %20 = @load_global_amd (%3, %4 (0x0)) (base=36, access=none, align_mul=4, align_offset=0)
+            con 32     %21 = load_const (0x00000004)
+            div 32     %22 = ishl %19, %21 (0x4)
+            div 32     %23 = iand %22, %20
+            con 32     %24 = load_const (0x0000001f = 31)
+            con 32     %25 = load_const (0x00000002)
+            div 32     %26 = ushr %23, %25 (0x2)
+            div 32     %27 = ishr %26, %24 (0x1f)
+            div 64     %28 = pack_64_2x32_split %26, %27
+            div 64     %29 = ishl %28, %21 (0x4)
+            div 64     %30 = iadd %5.x, %29
+            div 32x4   %31 = @load_global_amd (%30, %4 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            div 64     %32 = iadd %5.y, %29
+            div 32x4   %33 = @load_global_amd (%32, %4 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            div 32     %34 = iadd %23, %21 (0x4)
+            div 32     %35 = ushr %34, %25 (0x2)
+            div 32     %36 = ishr %35, %24 (0x1f)
+            div 64     %37 = pack_64_2x32_split %35, %36
+            div 64     %38 = ishl %37, %21 (0x4)
+            div 64     %39 = iadd %5.x, %38
+            div 32x4   %40 = @load_global_amd (%39, %4 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            div 64     %41 = iadd %5.y, %38
+            div 32x4   %42 = @load_global_amd (%41, %4 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            div 32     %43 = iadd %23, %13 (0x8)
+            div 32     %44 = ushr %43, %25 (0x2)
+            div 32     %45 = ishr %44, %24 (0x1f)
+            div 64     %46 = pack_64_2x32_split %44, %45
+            div 64     %47 = ishl %46, %21 (0x4)
+            div 64     %48 = iadd %5.x, %47
+            div 32x4   %49 = @load_global_amd (%48, %4 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            div 64     %50 = iadd %5.y, %47
+            div 32x4   %51 = @load_global_amd (%50, %4 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            con 32     %52 = load_const (0x0000000c = 12)
+            div 32     %53 = iadd %23, %52 (0xc)
+            div 32     %54 = ushr %53, %25 (0x2)
+            div 32     %55 = ishr %54, %24 (0x1f)
+            div 64     %56 = pack_64_2x32_split %54, %55
+            div 64     %57 = ishl %56, %21 (0x4)
+            div 64     %58 = iadd %5.x, %57
+            div 32x4   %59 = @load_global_amd (%58, %4 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            div 64     %60 = iadd %5.y, %57
+            div 32x4   %61 = @load_global_amd (%60, %4 (0x0)) (base=0, access=none, align_mul=16, align_offset=0)
+            con 32     %62 = load_const (0xffffff00 = -256 = 4294967040)
+            div 32     %63 = extract_u8 %33.x, %4 (0x0)
+            div 32     %64 = iadd %63, %62 (0xffffff00)
+            con 32     %65 = load_const (0x00000080 = 128)
+            div 1      %66 = ige %63, %65 (0x80)
+            div 32     %67 = bcsel %66, %64, %63
+            con 32     %68 = load_const (0x0000000f = 15)
+            div 32     %69 = iand %31.x, %68 (0xf)
+            con 32     %70 = load_const (0xfffffff8 = -8 = 4294967288)
+            div 32     %71 = iadd %69, %70 (0xfffffff8)
+            div 32     %72 = imul %71, %67
+            con 32     %73 = load_const (0x00000001)
+            div 32     %74 = extract_u8 %33.x, %73 (0x1)
+            div 32     %75 = iadd %74, %62 (0xffffff00)
+            div 1      %76 = ige %74, %65 (0x80)
+            div 32     %77 = bcsel %76, %75, %74
+            div 32     %78 = ubfe %31.x, %13 (0x8), %21 (0x4)
+            div 32     %79 = iadd %78, %70 (0xfffffff8)
+            div 32     %80 = imul %79, %77
+            div 32     %81 = iadd %72, %80
+            div 32     %82 = extract_u8 %33.x, %25 (0x2)
+            div 32     %83 = iadd %82, %62 (0xffffff00)
+            div 1      %84 = ige %82, %65 (0x80)
+            div 32     %85 = bcsel %84, %83, %82
+            con 32     %86 = load_const (0x00000010 = 16)
+            div 32     %87 = ubfe %31.x, %86 (0x10), %21 (0x4)
+            div 32     %88 = iadd %87, %70 (0xfffffff8)
+            div 32     %89 = imul %88, %85
+            div 32     %90 = iadd %81, %89
+            con 32     %91 = load_const (0x00000003)
+            div 32     %92 = extract_u8 %33.x, %91 (0x3)
+            div 32     %93 = iadd %92, %62 (0xffffff00)
+            div 1      %94 = ige %92, %65 (0x80)
+            div 32     %95 = bcsel %94, %93, %92
+            con 32     %96 = load_const (0x00000018 = 24)
+            div 32     %97 = ubfe %31.x, %96 (0x18), %21 (0x4)
+            div 32     %98 = iadd %97, %70 (0xfffffff8)
+            div 32     %99 = imul %98, %95
+            div 32    %100 = iadd %90, %99
+            div 32    %101 = iadd %15, %100
+            div 32    %102 = extract_u8 %33.y, %4 (0x0)
+            div 32    %103 = iadd %102, %62 (0xffffff00)
+            div 1     %104 = ige %102, %65 (0x80)
+            div 32    %105 = bcsel %104, %103, %102
+            div 32    %106 = iand %31.y, %68 (0xf)
+            div 32    %107 = iadd %106, %70 (0xfffffff8)
+            div 32    %108 = imul %107, %105
+            div 32    %109 = extract_u8 %33.y, %73 (0x1)
+            div 32    %110 = iadd %109, %62 (0xffffff00)
+            div 1     %111 = ige %109, %65 (0x80)
+            div 32    %112 = bcsel %111, %110, %109
+            div 32    %113 = ubfe %31.y, %13 (0x8), %21 (0x4)
+            div 32    %114 = iadd %113, %70 (0xfffffff8)
+            div 32    %115 = imul %114, %112
+            div 32    %116 = iadd %108, %115
+            div 32    %117 = extract_u8 %33.y, %25 (0x2)
+            div 32    %118 = iadd %117, %62 (0xffffff00)
+            div 1     %119 = ige %117, %65 (0x80)
+            div 32    %120 = bcsel %119, %118, %117
+            div 32    %121 = ubfe %31.y, %86 (0x10), %21 (0x4)
+            div 32    %122 = iadd %121, %70 (0xfffffff8)
+            div 32    %123 = imul %122, %120
+            div 32    %124 = iadd %116, %123
+            div 32    %125 = extract_u8 %33.y, %91 (0x3)
+            div 32    %126 = iadd %125, %62 (0xffffff00)
+            div 1     %127 = ige %125, %65 (0x80)
+            div 32    %128 = bcsel %127, %126, %125
+            div 32    %129 = ubfe %31.y, %96 (0x18), %21 (0x4)
+            div 32    %130 = iadd %129, %70 (0xfffffff8)
+            div 32    %131 = imul %130, %128
+            div 32    %132 = iadd %124, %131
+            div 32    %133 = iadd %101, %132
+            div 32    %134 = extract_u8 %33.z, %4 (0x0)
+            div 32    %135 = iadd %134, %62 (0xffffff00)
+            div 1     %136 = ige %134, %65 (0x80)
+            div 32    %137 = bcsel %136, %135, %134
+            div 32    %138 = iand %31.z, %68 (0xf)
+            div 32    %139 = iadd %138, %70 (0xfffffff8)
+            div 32    %140 = imul %139, %137
+            div 32    %141 = extract_u8 %33.z, %73 (0x1)
+            div 32    %142 = iadd %141, %62 (0xffffff00)
+            div 1     %143 = ige %141, %65 (0x80)
+            div 32    %144 = bcsel %143, %142, %141
+            div 32    %145 = ubfe %31.z, %13 (0x8), %21 (0x4)
+            div 32    %146 = iadd %145, %70 (0xfffffff8)
+            div 32    %147 = imul %146, %144
+            div 32    %148 = iadd %140, %147
+            div 32    %149 = extract_u8 %33.z, %25 (0x2)
+            div 32    %150 = iadd %149, %62 (0xffffff00)
+            div 1     %151 = ige %149, %65 (0x80)
+            div 32    %152 = bcsel %151, %150, %149
+            div 32    %153 = ubfe %31.z, %86 (0x10), %21 (0x4)
+            div 32    %154 = iadd %153, %70 (0xfffffff8)
+            div 32    %155 = imul %154, %152
+            div 32    %156 = iadd %148, %155
+            div 32    %157 = extract_u8 %33.z, %91 (0x3)
+            div 32    %158 = iadd %157, %62 (0xffffff00)
+            div 1     %159 = ige %157, %65 (0x80)
+            div 32    %160 = bcsel %159, %158, %157
+            div 32    %161 = ubfe %31.z, %96 (0x18), %21 (0x4)
+            div 32    %162 = iadd %161, %70 (0xfffffff8)
+            div 32    %163 = imul %162, %160
+            div 32    %164 = iadd %156, %163
+            div 32    %165 = iadd %133, %164
+            div 32    %166 = extract_u8 %33.w, %4 (0x0)
+            div 32    %167 = iadd %166, %62 (0xffffff00)
+            div 1     %168 = ige %166, %65 (0x80)
+            div 32    %169 = bcsel %168, %167, %166
+            div 32    %170 = iand %31.w, %68 (0xf)
+            div 32    %171 = iadd %170, %70 (0xfffffff8)
+            div 32    %172 = imul %171, %169
+            div 32    %173 = extract_u8 %33.w, %73 (0x1)
+            div 32    %174 = iadd %173, %62 (0xffffff00)
+            div 1     %175 = ige %173, %65 (0x80)
+            div 32    %176 = bcsel %175, %174, %173
+            div 32    %177 = ubfe %31.w, %13 (0x8), %21 (0x4)
+            div 32    %178 = iadd %177, %70 (0xfffffff8)
+            div 32    %179 = imul %178, %176
+            div 32    %180 = iadd %172, %179
+            div 32    %181 = extract_u8 %33.w, %25 (0x2)
+            div 32    %182 = iadd %181, %62 (0xffffff00)
+            div 1     %183 = ige %181, %65 (0x80)
+            div 32    %184 = bcsel %183, %182, %181
+            div 32    %185 = ubfe %31.w, %86 (0x10), %21 (0x4)
+            div 32    %186 = iadd %185, %70 (0xfffffff8)
+            div 32    %187 = imul %186, %184
+            div 32    %188 = iadd %180, %187
+            div 32    %189 = extract_u8 %33.w, %91 (0x3)
+            div 32    %190 = iadd %189, %62 (0xffffff00)
+            div 1     %191 = ige %189, %65 (0x80)
+            div 32    %192 = bcsel %191, %190, %189
+            div 32    %193 = ubfe %31.w, %96 (0x18), %21 (0x4)
+            div 32    %194 = iadd %193, %70 (0xfffffff8)
+            div 32    %195 = imul %194, %192
+            div 32    %196 = iadd %188, %195
+            div 32    %197 = iadd %165, %196
+            div 32    %198 = extract_u8 %42.x, %4 (0x0)
+            div 32    %199 = iadd %198, %62 (0xffffff00)
+            div 1     %200 = ige %198, %65 (0x80)
+            div 32    %201 = bcsel %200, %199, %198
+            div 32    %202 = iand %40.x, %68 (0xf)
+            div 32    %203 = iadd %202, %70 (0xfffffff8)
+            div 32    %204 = imul %203, %201
+            div 32    %205 = extract_u8 %42.x, %73 (0x1)
+            div 32    %206 = iadd %205, %62 (0xffffff00)
+            div 1     %207 = ige %205, %65 (0x80)
+            div 32    %208 = bcsel %207, %206, %205
+            div 32    %209 = ubfe %40.x, %13 (0x8), %21 (0x4)
+            div 32    %210 = iadd %209, %70 (0xfffffff8)
+            div 32    %211 = imul %210, %208
+            div 32    %212 = iadd %204, %211
+            div 32    %213 = extract_u8 %42.x, %25 (0x2)
+            div 32    %214 = iadd %213, %62 (0xffffff00)
+            div 1     %215 = ige %213, %65 (0x80)
+            div 32    %216 = bcsel %215, %214, %213
+            div 32    %217 = ubfe %40.x, %86 (0x10), %21 (0x4)
+            div 32    %218 = iadd %217, %70 (0xfffffff8)
+            div 32    %219 = imul %218, %216
+            div 32    %220 = iadd %212, %219
+            div 32    %221 = extract_u8 %42.x, %91 (0x3)
+            div 32    %222 = iadd %221, %62 (0xffffff00)
+            div 1     %223 = ige %221, %65 (0x80)
+            div 32    %224 = bcsel %223, %222, %221
+            div 32    %225 = ubfe %40.x, %96 (0x18), %21 (0x4)
+            div 32    %226 = iadd %225, %70 (0xfffffff8)
+            div 32    %227 = imul %226, %224
+            div 32    %228 = iadd %220, %227
+            div 32    %229 = iadd %197, %228
+            div 32    %230 = extract_u8 %42.y, %4 (0x0)
+            div 32    %231 = iadd %230, %62 (0xffffff00)
+            div 1     %232 = ige %230, %65 (0x80)
+            div 32    %233 = bcsel %232, %231, %230
+            div 32    %234 = iand %40.y, %68 (0xf)
+            div 32    %235 = iadd %234, %70 (0xfffffff8)
+            div 32    %236 = imul %235, %233
+            div 32    %237 = extract_u8 %42.y, %73 (0x1)
+            div 32    %238 = iadd %237, %62 (0xffffff00)
+            div 1     %239 = ige %237, %65 (0x80)
+            div 32    %240 = bcsel %239, %238, %237
+            div 32    %241 = ubfe %40.y, %13 (0x8), %21 (0x4)
+            div 32    %242 = iadd %241, %70 (0xfffffff8)
+            div 32    %243 = imul %242, %240
+            div 32    %244 = iadd %236, %243
+            div 32    %245 = extract_u8 %42.y, %25 (0x2)
+            div 32    %246 = iadd %245, %62 (0xffffff00)
+            div 1     %247 = ige %245, %65 (0x80)
+            div 32    %248 = bcsel %247, %246, %245
+            div 32    %249 = ubfe %40.y, %86 (0x10), %21 (0x4)
+            div 32    %250 = iadd %249, %70 (0xfffffff8)
+            div 32    %251 = imul %250, %248
+            div 32    %252 = iadd %244, %251
+            div 32    %253 = extract_u8 %42.y, %91 (0x3)
+            div 32    %254 = iadd %253, %62 (0xffffff00)
+            div 1     %255 = ige %253, %65 (0x80)
+            div 32    %256 = bcsel %255, %254, %253
+            div 32    %257 = ubfe %40.y, %96 (0x18), %21 (0x4)
+            div 32    %258 = iadd %257, %70 (0xfffffff8)
+            div 32    %259 = imul %258, %256
+            div 32    %260 = iadd %252, %259
+            div 32    %261 = iadd %229, %260
+            div 32    %262 = extract_u8 %42.z, %4 (0x0)
+            div 32    %263 = iadd %262, %62 (0xffffff00)
+            div 1     %264 = ige %262, %65 (0x80)
+            div 32    %265 = bcsel %264, %263, %262
+            div 32    %266 = iand %40.z, %68 (0xf)
+            div 32    %267 = iadd %266, %70 (0xfffffff8)
+            div 32    %268 = imul %267, %265
+            div 32    %269 = extract_u8 %42.z, %73 (0x1)
+            div 32    %270 = iadd %269, %62 (0xffffff00)
+            div 1     %271 = ige %269, %65 (0x80)
+            div 32    %272 = bcsel %271, %270, %269
+            div 32    %273 = ubfe %40.z, %13 (0x8), %21 (0x4)
+            div 32    %274 = iadd %273, %70 (0xfffffff8)
+            div 32    %275 = imul %274, %272
+            div 32    %276 = iadd %268, %275
+            div 32    %277 = extract_u8 %42.z, %25 (0x2)
+            div 32    %278 = iadd %277, %62 (0xffffff00)
+            div 1     %279 = ige %277, %65 (0x80)
+            div 32    %280 = bcsel %279, %278, %277
+            div 32    %281 = ubfe %40.z, %86 (0x10), %21 (0x4)
+            div 32    %282 = iadd %281, %70 (0xfffffff8)
+            div 32    %283 = imul %282, %280
+            div 32    %284 = iadd %276, %283
+            div 32    %285 = extract_u8 %42.z, %91 (0x3)
+            div 32    %286 = iadd %285, %62 (0xffffff00)
+            div 1     %287 = ige %285, %65 (0x80)
+            div 32    %288 = bcsel %287, %286, %285
+            div 32    %289 = ubfe %40.z, %96 (0x18), %21 (0x4)
+            div 32    %290 = iadd %289, %70 (0xfffffff8)
+            div 32    %291 = imul %290, %288
+            div 32    %292 = iadd %284, %291
+            div 32    %293 = iadd %261, %292
+            div 32    %294 = extract_u8 %42.w, %4 (0x0)
+            div 32    %295 = iadd %294, %62 (0xffffff00)
+            div 1     %296 = ige %294, %65 (0x80)
+            div 32    %297 = bcsel %296, %295, %294
+            div 32    %298 = iand %40.w, %68 (0xf)
+            div 32    %299 = iadd %298, %70 (0xfffffff8)
+            div 32    %300 = imul %299, %297
+            div 32    %301 = extract_u8 %42.w, %73 (0x1)
+            div 32    %302 = iadd %301, %62 (0xffffff00)
+            div 1     %303 = ige %301, %65 (0x80)
+            div 32    %304 = bcsel %303, %302, %301
+            div 32    %305 = ubfe %40.w, %13 (0x8), %21 (0x4)
+            div 32    %306 = iadd %305, %70 (0xfffffff8)
+            div 32    %307 = imul %306, %304
+            div 32    %308 = iadd %300, %307
+            div 32    %309 = extract_u8 %42.w, %25 (0x2)
+            div 32    %310 = iadd %309, %62 (0xffffff00)
+            div 1     %311 = ige %309, %65 (0x80)
+            div 32    %312 = bcsel %311, %310, %309
+            div 32    %313 = ubfe %40.w, %86 (0x10), %21 (0x4)
+            div 32    %314 = iadd %313, %70 (0xfffffff8)
+            div 32    %315 = imul %314, %312
+            div 32    %316 = iadd %308, %315
+            div 32    %317 = extract_u8 %42.w, %91 (0x3)
+            div 32    %318 = iadd %317, %62 (0xffffff00)
+            div 1     %319 = ige %317, %65 (0x80)
+            div 32    %320 = bcsel %319, %318, %317
+            div 32    %321 = ubfe %40.w, %96 (0x18), %21 (0x4)
+            div 32    %322 = iadd %321, %70 (0xfffffff8)
+            div 32    %323 = imul %322, %320
+            div 32    %324 = iadd %316, %323
+            div 32    %325 = iadd %293, %324
+            div 32    %326 = extract_u8 %51.x, %4 (0x0)
+            div 32    %327 = iadd %326, %62 (0xffffff00)
+            div 1     %328 = ige %326, %65 (0x80)
+            div 32    %329 = bcsel %328, %327, %326
+            div 32    %330 = iand %49.x, %68 (0xf)
+            div 32    %331 = iadd %330, %70 (0xfffffff8)
+            div 32    %332 = imul %331, %329
+            div 32    %333 = extract_u8 %51.x, %73 (0x1)
+            div 32    %334 = iadd %333, %62 (0xffffff00)
+            div 1     %335 = ige %333, %65 (0x80)
+            div 32    %336 = bcsel %335, %334, %333
+            div 32    %337 = ubfe %49.x, %13 (0x8), %21 (0x4)
+            div 32    %338 = iadd %337, %70 (0xfffffff8)
+            div 32    %339 = imul %338, %336
+            div 32    %340 = iadd %332, %339
+            div 32    %341 = extract_u8 %51.x, %25 (0x2)
+            div 32    %342 = iadd %341, %62 (0xffffff00)
+            div 1     %343 = ige %341, %65 (0x80)
+            div 32    %344 = bcsel %343, %342, %341
+            div 32    %345 = ubfe %49.x, %86 (0x10), %21 (0x4)
+            div 32    %346 = iadd %345, %70 (0xfffffff8)
+            div 32    %347 = imul %346, %344
+            div 32    %348 = iadd %340, %347
+            div 32    %349 = extract_u8 %51.x, %91 (0x3)
+            div 32    %350 = iadd %349, %62 (0xffffff00)
+            div 1     %351 = ige %349, %65 (0x80)
+            div 32    %352 = bcsel %351, %350, %349
+            div 32    %353 = ubfe %49.x, %96 (0x18), %21 (0x4)
+            div 32    %354 = iadd %353, %70 (0xfffffff8)
+            div 32    %355 = imul %354, %352
+            div 32    %356 = iadd %348, %355
+            div 32    %357 = iadd %325, %356
+            div 32    %358 = extract_u8 %51.y, %4 (0x0)
+            div 32    %359 = iadd %358, %62 (0xffffff00)
+            div 1     %360 = ige %358, %65 (0x80)
+            div 32    %361 = bcsel %360, %359, %358
+            div 32    %362 = iand %49.y, %68 (0xf)
+            div 32    %363 = iadd %362, %70 (0xfffffff8)
+            div 32    %364 = imul %363, %361
+            div 32    %365 = extract_u8 %51.y, %73 (0x1)
+            div 32    %366 = iadd %365, %62 (0xffffff00)
+            div 1     %367 = ige %365, %65 (0x80)
+            div 32    %368 = bcsel %367, %366, %365
+            div 32    %369 = ubfe %49.y, %13 (0x8), %21 (0x4)
+            div 32    %370 = iadd %369, %70 (0xfffffff8)
+            div 32    %371 = imul %370, %368
+            div 32    %372 = iadd %364, %371
+            div 32    %373 = extract_u8 %51.y, %25 (0x2)
+            div 32    %374 = iadd %373, %62 (0xffffff00)
+            div 1     %375 = ige %373, %65 (0x80)
+            div 32    %376 = bcsel %375, %374, %373
+            div 32    %377 = ubfe %49.y, %86 (0x10), %21 (0x4)
+            div 32    %378 = iadd %377, %70 (0xfffffff8)
+            div 32    %379 = imul %378, %376
+            div 32    %380 = iadd %372, %379
+            div 32    %381 = extract_u8 %51.y, %91 (0x3)
+            div 32    %382 = iadd %381, %62 (0xffffff00)
+            div 1     %383 = ige %381, %65 (0x80)
+            div 32    %384 = bcsel %383, %382, %381
+            div 32    %385 = ubfe %49.y, %96 (0x18), %21 (0x4)
+            div 32    %386 = iadd %385, %70 (0xfffffff8)
+            div 32    %387 = imul %386, %384
+            div 32    %388 = iadd %380, %387
+            div 32    %389 = iadd %357, %388
+            div 32    %390 = extract_u8 %51.z, %4 (0x0)
+            div 32    %391 = iadd %390, %62 (0xffffff00)
+            div 1     %392 = ige %390, %65 (0x80)
+            div 32    %393 = bcsel %392, %391, %390
+            div 32    %394 = iand %49.z, %68 (0xf)
+            div 32    %395 = iadd %394, %70 (0xfffffff8)
+            div 32    %396 = imul %395, %393
+            div 32    %397 = extract_u8 %51.z, %73 (0x1)
+            div 32    %398 = iadd %397, %62 (0xffffff00)
+            div 1     %399 = ige %397, %65 (0x80)
+            div 32    %400 = bcsel %399, %398, %397
+            div 32    %401 = ubfe %49.z, %13 (0x8), %21 (0x4)
+            div 32    %402 = iadd %401, %70 (0xfffffff8)
+            div 32    %403 = imul %402, %400
+            div 32    %404 = iadd %396, %403
+            div 32    %405 = extract_u8 %51.z, %25 (0x2)
+            div 32    %406 = iadd %405, %62 (0xffffff00)
+            div 1     %407 = ige %405, %65 (0x80)
+            div 32    %408 = bcsel %407, %406, %405
+            div 32    %409 = ubfe %49.z, %86 (0x10), %21 (0x4)
+            div 32    %410 = iadd %409, %70 (0xfffffff8)
+            div 32    %411 = imul %410, %408
+            div 32    %412 = iadd %404, %411
+            div 32    %413 = extract_u8 %51.z, %91 (0x3)
+            div 32    %414 = iadd %413, %62 (0xffffff00)
+            div 1     %415 = ige %413, %65 (0x80)
+            div 32    %416 = bcsel %415, %414, %413
+            div 32    %417 = ubfe %49.z, %96 (0x18), %21 (0x4)
+            div 32    %418 = iadd %417, %70 (0xfffffff8)
+            div 32    %419 = imul %418, %416
+            div 32    %420 = iadd %412, %419
+            div 32    %421 = iadd %389, %420
+            div 32    %422 = extract_u8 %51.w, %4 (0x0)
+            div 32    %423 = iadd %422, %62 (0xffffff00)
+            div 1     %424 = ige %422, %65 (0x80)
+            div 32    %425 = bcsel %424, %423, %422
+            div 32    %426 = iand %49.w, %68 (0xf)
+            div 32    %427 = iadd %426, %70 (0xfffffff8)
+            div 32    %428 = imul %427, %425
+            div 32    %429 = extract_u8 %51.w, %73 (0x1)
+            div 32    %430 = iadd %429, %62 (0xffffff00)
+            div 1     %431 = ige %429, %65 (0x80)
+            div 32    %432 = bcsel %431, %430, %429
+            div 32    %433 = ubfe %49.w, %13 (0x8), %21 (0x4)
+            div 32    %434 = iadd %433, %70 (0xfffffff8)
+            div 32    %435 = imul %434, %432
+            div 32    %436 = iadd %428, %435
+            div 32    %437 = extract_u8 %51.w, %25 (0x2)
+            div 32    %438 = iadd %437, %62 (0xffffff00)
+            div 1     %439 = ige %437, %65 (0x80)
+            div 32    %440 = bcsel %439, %438, %437
+            div 32    %441 = ubfe %49.w, %86 (0x10), %21 (0x4)
+            div 32    %442 = iadd %441, %70 (0xfffffff8)
+            div 32    %443 = imul %442, %440
+            div 32    %444 = iadd %436, %443
+            div 32    %445 = extract_u8 %51.w, %91 (0x3)
+            div 32    %446 = iadd %445, %62 (0xffffff00)
+            div 1     %447 = ige %445, %65 (0x80)
+            div 32    %448 = bcsel %447, %446, %445
+            div 32    %449 = ubfe %49.w, %96 (0x18), %21 (0x4)
+            div 32    %450 = iadd %449, %70 (0xfffffff8)
+            div 32    %451 = imul %450, %448
+            div 32    %452 = iadd %444, %451
+            div 32    %453 = iadd %421, %452
+            div 32    %454 = extract_u8 %61.x, %4 (0x0)
+            div 32    %455 = iadd %454, %62 (0xffffff00)
+            div 1     %456 = ige %454, %65 (0x80)
+            div 32    %457 = bcsel %456, %455, %454
+            div 32    %458 = iand %59.x, %68 (0xf)
+            div 32    %459 = iadd %458, %70 (0xfffffff8)
+            div 32    %460 = imul %459, %457
+            div 32    %461 = extract_u8 %61.x, %73 (0x1)
+            div 32    %462 = iadd %461, %62 (0xffffff00)
+            div 1     %463 = ige %461, %65 (0x80)
+            div 32    %464 = bcsel %463, %462, %461
+            div 32    %465 = ubfe %59.x, %13 (0x8), %21 (0x4)
+            div 32    %466 = iadd %465, %70 (0xfffffff8)
+            div 32    %467 = imul %466, %464
+            div 32    %468 = iadd %460, %467
+            div 32    %469 = extract_u8 %61.x, %25 (0x2)
+            div 32    %470 = iadd %469, %62 (0xffffff00)
+            div 1     %471 = ige %469, %65 (0x80)
+            div 32    %472 = bcsel %471, %470, %469
+            div 32    %473 = ubfe %59.x, %86 (0x10), %21 (0x4)
+            div 32    %474 = iadd %473, %70 (0xfffffff8)
+            div 32    %475 = imul %474, %472
+            div 32    %476 = iadd %468, %475
+            div 32    %477 = extract_u8 %61.x, %91 (0x3)
+            div 32    %478 = iadd %477, %62 (0xffffff00)
+            div 1     %479 = ige %477, %65 (0x80)
+            div 32    %480 = bcsel %479, %478, %477
+            div 32    %481 = ubfe %59.x, %96 (0x18), %21 (0x4)
+            div 32    %482 = iadd %481, %70 (0xfffffff8)
+            div 32    %483 = imul %482, %480
+            div 32    %484 = iadd %476, %483
+            div 32    %485 = iadd %453, %484
+            div 32    %486 = extract_u8 %61.y, %4 (0x0)
+            div 32    %487 = iadd %486, %62 (0xffffff00)
+            div 1     %488 = ige %486, %65 (0x80)
+            div 32    %489 = bcsel %488, %487, %486
+            div 32    %490 = iand %59.y, %68 (0xf)
+            div 32    %491 = iadd %490, %70 (0xfffffff8)
+            div 32    %492 = imul %491, %489
+            div 32    %493 = extract_u8 %61.y, %73 (0x1)
+            div 32    %494 = iadd %493, %62 (0xffffff00)
+            div 1     %495 = ige %493, %65 (0x80)
+            div 32    %496 = bcsel %495, %494, %493
+            div 32    %497 = ubfe %59.y, %13 (0x8), %21 (0x4)
+            div 32    %498 = iadd %497, %70 (0xfffffff8)
+            div 32    %499 = imul %498, %496
+            div 32    %500 = iadd %492, %499
+            div 32    %501 = extract_u8 %61.y, %25 (0x2)
+            div 32    %502 = iadd %501, %62 (0xffffff00)
+            div 1     %503 = ige %501, %65 (0x80)
+            div 32    %504 = bcsel %503, %502, %501
+            div 32    %505 = ubfe %59.y, %86 (0x10), %21 (0x4)
+            div 32    %506 = iadd %505, %70 (0xfffffff8)
+            div 32    %507 = imul %506, %504
+            div 32    %508 = iadd %500, %507
+            div 32    %509 = extract_u8 %61.y, %91 (0x3)
+            div 32    %510 = iadd %509, %62 (0xffffff00)
+            div 1     %511 = ige %509, %65 (0x80)
+            div 32    %512 = bcsel %511, %510, %509
+            div 32    %513 = ubfe %59.y, %96 (0x18), %21 (0x4)
+            div 32    %514 = iadd %513, %70 (0xfffffff8)
+            div 32    %515 = imul %514, %512
+            div 32    %516 = iadd %508, %515
+            div 32    %517 = iadd %485, %516
+            div 32    %518 = extract_u8 %61.z, %4 (0x0)
+            div 32    %519 = iadd %518, %62 (0xffffff00)
+            div 1     %520 = ige %518, %65 (0x80)
+            div 32    %521 = bcsel %520, %519, %518
+            div 32    %522 = iand %59.z, %68 (0xf)
+            div 32    %523 = iadd %522, %70 (0xfffffff8)
+            div 32    %524 = imul %523, %521
+            div 32    %525 = extract_u8 %61.z, %73 (0x1)
+            div 32    %526 = iadd %525, %62 (0xffffff00)
+            div 1     %527 = ige %525, %65 (0x80)
+            div 32    %528 = bcsel %527, %526, %525
+            div 32    %529 = ubfe %59.z, %13 (0x8), %21 (0x4)
+            div 32    %530 = iadd %529, %70 (0xfffffff8)
+            div 32    %531 = imul %530, %528
+            div 32    %532 = iadd %524, %531
+            div 32    %533 = extract_u8 %61.z, %25 (0x2)
+            div 32    %534 = iadd %533, %62 (0xffffff00)
+            div 1     %535 = ige %533, %65 (0x80)
+            div 32    %536 = bcsel %535, %534, %533
+            div 32    %537 = ubfe %59.z, %86 (0x10), %21 (0x4)
+            div 32    %538 = iadd %537, %70 (0xfffffff8)
+            div 32    %539 = imul %538, %536
+            div 32    %540 = iadd %532, %539
+            div 32    %541 = extract_u8 %61.z, %91 (0x3)
+            div 32    %542 = iadd %541, %62 (0xffffff00)
+            div 1     %543 = ige %541, %65 (0x80)
+            div 32    %544 = bcsel %543, %542, %541
+            div 32    %545 = ubfe %59.z, %96 (0x18), %21 (0x4)
+            div 32    %546 = iadd %545, %70 (0xfffffff8)
+            div 32    %547 = imul %546, %544
+            div 32    %548 = iadd %540, %547
+            div 32    %549 = iadd %517, %548
+            div 32    %550 = extract_u8 %61.w, %4 (0x0)
+            div 32    %551 = iadd %550, %62 (0xffffff00)
+            div 1     %552 = ige %550, %65 (0x80)
+            div 32    %553 = bcsel %552, %551, %550
+            div 32    %554 = iand %59.w, %68 (0xf)
+            div 32    %555 = iadd %554, %70 (0xfffffff8)
+            div 32    %556 = imul %555, %553
+            div 32    %557 = extract_u8 %61.w, %73 (0x1)
+            div 32    %558 = iadd %557, %62 (0xffffff00)
+            div 1     %559 = ige %557, %65 (0x80)
+            div 32    %560 = bcsel %559, %558, %557
+            div 32    %561 = ubfe %59.w, %13 (0x8), %21 (0x4)
+            div 32    %562 = iadd %561, %70 (0xfffffff8)
+            div 32    %563 = imul %562, %560
+            div 32    %564 = iadd %556, %563
+            div 32    %565 = extract_u8 %61.w, %25 (0x2)
+            div 32    %566 = iadd %565, %62 (0xffffff00)
+            div 1     %567 = ige %565, %65 (0x80)
+            div 32    %568 = bcsel %567, %566, %565
+            div 32    %569 = ubfe %59.w, %86 (0x10), %21 (0x4)
+            div 32    %570 = iadd %569, %70 (0xfffffff8)
+            div 32    %571 = imul %570, %568
+            div 32    %572 = iadd %564, %571
+            div 32    %573 = extract_u8 %61.w, %91 (0x3)
+            div 32    %574 = iadd %573, %62 (0xffffff00)
+            div 1     %575 = ige %573, %65 (0x80)
+            div 32    %576 = bcsel %575, %574, %573
+            div 32    %577 = ubfe %59.w, %96 (0x18), %21 (0x4)
+            div 32    %578 = iadd %577, %70 (0xfffffff8)
+            div 32    %579 = imul %578, %576
+            div 32    %580 = iadd %572, %579
+            div 32    %581 = iadd %549, %580
+            con 32    %582 = iadd %14, %73 (0x1)
+                             // succs: b2
+        }
+        div block b6:        // preds: b3
+        div 32    %583 = phi b3: %15
+        con 32    %584 = @load_global_amd (%3, %4 (0x0)) (base=32, access=none, align_mul=16, align_offset=0)
+        div 32    %585 = iadd %584, %11
+        con 32    %586 = load_const (0x0000001f = 31)
+        div 32    %587 = ishr %585, %586 (0x1f)
+        div 64    %588 = pack_64_2x32_split %585, %587
+        con 32    %589 = load_const (0x00000002)
+        div 64    %590 = ishl %588, %589 (0x2)
+        div 64    %591 = iadd %7, %590
+        div 32    %592 = @load_global_amd (%591, %4 (0x0)) (base=0, access=none, align_mul=4, align_offset=0)
+        div 32    %593 = iadd %592, %583
+                         @store_global_amd (%593, %591, %4 (0x0)) (base=0, access=none, align_mul=4, align_offset=0, wrmask=x)
+                         // succs: b8
+    } else {
+        div block b7:  // preds: b0, succs: b8
+    }
+    con block b8:  // preds: b6 b7, succs: b9
+    block b9:
+}
+
+ 

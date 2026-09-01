@@ -1,0 +1,155 @@
+#version 460
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Kaden Schutt <kaden@hipfire.dev>
+//
+// Microwave source for the packed-dot family: the same operation as
+// hipfire_6409.hip dot_body<MODE>, written for RADV/ACO with a pointer ABI.
+// Push constants are the HSA kernarg pointer plus the workgroup size; the
+// kernarg block is read through a buffer reference whose layout matches
+// BENCH_ARGS byte for byte (a@0 b@8 out@16 n0@24 n1@28 output_offset@32 aux@36).
+// Only gl_WorkGroupID.x and gl_LocalInvocationID.x are used so the emitted ISA
+// depends on neither the specialised workgroup size nor gl_NumWorkGroups.
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_integer_dot_product : require
+
+layout(local_size_x = 64, local_size_x_id = 0) in;
+
+layout(push_constant) uniform PC {
+    uint64_t args;
+    uint wg_size;
+} pc;
+
+layout(buffer_reference, std430) buffer Args {
+    uint64_t a;
+    uint64_t b;
+    uint64_t out_;
+    uint n0;
+    uint n1;
+    uint output_offset;
+    uint aux;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer U32x4 {
+    uvec4 v[];
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32 {
+    uint v[];
+};
+
+int byte_i8(uint v) {
+    int x = int(v & 255u);
+    return x >= 128 ? x - 256 : x;
+}
+
+int dot_s8_s8(uint x, uint y, int c) {
+    return dotPacked4x8EXT(int32_t(x), int32_t(y)) + c;
+}
+int dot_u8_s8(uint x, uint y, int c) {
+    return dotPacked4x8EXT(x, int32_t(y)) + c;
+}
+
+int scalar_q4(uint x, uint y) {
+    int sum = 0;
+    for (uint lane = 0; lane < 4; ++lane)
+        sum += (int((x >> (lane * 8)) & 15u) - 8) * byte_i8(y >> (lane * 8));
+    return sum;
+}
+
+void main() {
+    Args args_ = Args(pc.args);
+    U32x4 a_buf = U32x4(args_.a);
+    U32x4 b_buf = U32x4(args_.b);
+    U32 out_buf = U32(args_.out_);
+    uint idx = gl_WorkGroupID.x * pc.wg_size + gl_LocalInvocationID.x;
+    if (idx >= args_.n0) return;
+    int sum = 0;
+    for (uint iter = 0; iter < args_.n1; ++iter) {
+        uint base = ((iter * args_.n0 + idx) * 16u) & args_.aux;
+        uvec4 w0 = a_buf.v[(base + 0u) >> 2];
+        uvec4 x0 = b_buf.v[(base + 0u) >> 2];
+        uvec4 w1 = a_buf.v[(base + 4u) >> 2];
+        uvec4 x1 = b_buf.v[(base + 4u) >> 2];
+        uvec4 w2 = a_buf.v[(base + 8u) >> 2];
+        uvec4 x2 = b_buf.v[(base + 8u) >> 2];
+        uvec4 w3 = a_buf.v[(base + 12u) >> 2];
+        uvec4 x3 = b_buf.v[(base + 12u) >> 2];
+#if defined(KERNEL_DOT_Q8)
+        sum = dot_s8_s8(w0.x, x0.x, sum);
+        sum = dot_s8_s8(w0.y, x0.y, sum);
+        sum = dot_s8_s8(w0.z, x0.z, sum);
+        sum = dot_s8_s8(w0.w, x0.w, sum);
+        sum = dot_s8_s8(w1.x, x1.x, sum);
+        sum = dot_s8_s8(w1.y, x1.y, sum);
+        sum = dot_s8_s8(w1.z, x1.z, sum);
+        sum = dot_s8_s8(w1.w, x1.w, sum);
+        sum = dot_s8_s8(w2.x, x2.x, sum);
+        sum = dot_s8_s8(w2.y, x2.y, sum);
+        sum = dot_s8_s8(w2.z, x2.z, sum);
+        sum = dot_s8_s8(w2.w, x2.w, sum);
+        sum = dot_s8_s8(w3.x, x3.x, sum);
+        sum = dot_s8_s8(w3.y, x3.y, sum);
+        sum = dot_s8_s8(w3.z, x3.z, sum);
+        sum = dot_s8_s8(w3.w, x3.w, sum);
+#elif defined(KERNEL_DOT_Q4)
+        sum = dot_u8_s8(w0.x, x0.x, sum);
+        sum = dot_u8_s8(w0.y, x0.y, sum);
+        sum = dot_u8_s8(w0.z, x0.z, sum);
+        sum = dot_u8_s8(w0.w, x0.w, sum);
+        sum = dot_u8_s8(w1.x, x1.x, sum);
+        sum = dot_u8_s8(w1.y, x1.y, sum);
+        sum = dot_u8_s8(w1.z, x1.z, sum);
+        sum = dot_u8_s8(w1.w, x1.w, sum);
+        sum = dot_u8_s8(w2.x, x2.x, sum);
+        sum = dot_u8_s8(w2.y, x2.y, sum);
+        sum = dot_u8_s8(w2.z, x2.z, sum);
+        sum = dot_u8_s8(w2.w, x2.w, sum);
+        sum = dot_u8_s8(w3.x, x3.x, sum);
+        sum = dot_u8_s8(w3.y, x3.y, sum);
+        sum = dot_u8_s8(w3.z, x3.z, sum);
+        sum = dot_u8_s8(w3.w, x3.w, sum);
+#elif defined(KERNEL_DOT_Q6)
+        sum += dot_u8_s8(w0.x, x0.x, 0) - 32 * dot_u8_s8(0x01010101u, x0.x, 0);
+        sum += dot_u8_s8(w0.y, x0.y, 0) - 32 * dot_u8_s8(0x01010101u, x0.y, 0);
+        sum += dot_u8_s8(w0.z, x0.z, 0) - 32 * dot_u8_s8(0x01010101u, x0.z, 0);
+        sum += dot_u8_s8(w0.w, x0.w, 0) - 32 * dot_u8_s8(0x01010101u, x0.w, 0);
+        sum += dot_u8_s8(w1.x, x1.x, 0) - 32 * dot_u8_s8(0x01010101u, x1.x, 0);
+        sum += dot_u8_s8(w1.y, x1.y, 0) - 32 * dot_u8_s8(0x01010101u, x1.y, 0);
+        sum += dot_u8_s8(w1.z, x1.z, 0) - 32 * dot_u8_s8(0x01010101u, x1.z, 0);
+        sum += dot_u8_s8(w1.w, x1.w, 0) - 32 * dot_u8_s8(0x01010101u, x1.w, 0);
+        sum += dot_u8_s8(w2.x, x2.x, 0) - 32 * dot_u8_s8(0x01010101u, x2.x, 0);
+        sum += dot_u8_s8(w2.y, x2.y, 0) - 32 * dot_u8_s8(0x01010101u, x2.y, 0);
+        sum += dot_u8_s8(w2.z, x2.z, 0) - 32 * dot_u8_s8(0x01010101u, x2.z, 0);
+        sum += dot_u8_s8(w2.w, x2.w, 0) - 32 * dot_u8_s8(0x01010101u, x2.w, 0);
+        sum += dot_u8_s8(w3.x, x3.x, 0) - 32 * dot_u8_s8(0x01010101u, x3.x, 0);
+        sum += dot_u8_s8(w3.y, x3.y, 0) - 32 * dot_u8_s8(0x01010101u, x3.y, 0);
+        sum += dot_u8_s8(w3.z, x3.z, 0) - 32 * dot_u8_s8(0x01010101u, x3.z, 0);
+        sum += dot_u8_s8(w3.w, x3.w, 0) - 32 * dot_u8_s8(0x01010101u, x3.w, 0);
+#elif defined(KERNEL_DOT_SCALAR)
+        sum += scalar_q4(w0.x, x0.x);
+        sum += scalar_q4(w0.y, x0.y);
+        sum += scalar_q4(w0.z, x0.z);
+        sum += scalar_q4(w0.w, x0.w);
+        sum += scalar_q4(w1.x, x1.x);
+        sum += scalar_q4(w1.y, x1.y);
+        sum += scalar_q4(w1.z, x1.z);
+        sum += scalar_q4(w1.w, x1.w);
+        sum += scalar_q4(w2.x, x2.x);
+        sum += scalar_q4(w2.y, x2.y);
+        sum += scalar_q4(w2.z, x2.z);
+        sum += scalar_q4(w2.w, x2.w);
+        sum += scalar_q4(w3.x, x3.x);
+        sum += scalar_q4(w3.y, x3.y);
+        sum += scalar_q4(w3.z, x3.z);
+        sum += scalar_q4(w3.w, x3.w);
+#else
+#error "Define one of KERNEL_DOT_Q8/Q4/Q6/SCALAR"
+#endif
+    }
+    uint out_idx = args_.output_offset + idx;
+    uint prev = out_buf.v[out_idx];
+    out_buf.v[out_idx] = prev + uint(sum);
+}
