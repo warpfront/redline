@@ -266,10 +266,11 @@ impl Backend for RedlineBackend {
         }
         let iterations = row.iterations;
         let lane_count = self.queue_count_for(row.mode, iterations);
+        // Build PM4 commands per lane
+        let mut commands: Vec<RdnaPm4Commands> = (0..lane_count).map(|_| RdnaPm4Commands::stateful(self.pm4_family)).collect();
         // Need kernarg buffers to keep alive
         let mut kernargs: Vec<redline_dispatch::aql::KernargBuffer> = Vec::new();
 
-        // Helper to get geometry
         let grid = kernels::grid(&row.kernel, &row.shape);
         let block = row.kernel.block();
         let geometry = LaunchGeometry::from_workgroups(grid, [block as u16, 1, 1]).context("LaunchGeometry")?;
