@@ -14,10 +14,11 @@ pub struct Buffers {
     pub x: DeviceBuffer,
     /// y_sets[set_idx][proj_idx]
     pub y_sets: Vec<Vec<DeviceBuffer>>,
+    /// staging copy of y_init for D2D reset path (discriminator 2)
+    pub y_staging: Vec<Vec<DeviceBuffer>>,
     pub shape_proj_m: Vec<u32>,
     pub n_tokens: u32,
 }
-
 impl Buffers {
     pub fn y_device_ptr(&self, set_idx: usize, proj_idx: usize) -> u64 {
         self.y_sets[set_idx][proj_idx].as_ptr() as usize as u64
@@ -145,25 +146,61 @@ impl HipBackend {
         let x_buf = self.hip.malloc(x_bytes.len().max(1))?;
         self.hip.memcpy_htod(&x_buf, &x_bytes)?;
         let mut y_sets = Vec::new();
+        let mut y_staging = Vec::new();
         for _ in 0..num_sets {
             let mut set = Vec::new();
+            let mut staging_set = Vec::new();
             for init in fixture.y_init.iter() {
                 let bytes: Vec<u8> = init.iter().flat_map(|f| f.to_ne_bytes()).collect();
                 let buf = self.hip.malloc(bytes.len().max(4))?;
                 self.hip.memcpy_htod(&buf, &bytes)?;
                 set.push(buf);
+                let staging = self.hip.malloc(bytes.len().max(4))?;
+                self.hip.memcpy_htod(&staging, &bytes)?;
+                staging_set.push(staging);
             }
             y_sets.push(set);
+            y_staging.push(staging_set);
         }
         self.hip.device_synchronize()?;
         Ok(Buffers {
             weights,
             x: x_buf,
             y_sets,
+            y_staging,
             shape_proj_m: row.shape.proj_m.clone(),
             n_tokens: row.shape.n_tokens,
         })
     }
+
+    pub fn reset_buffers(&self, buffers: &Buffers, fixture: &Fixture) -> Result<()> {
+        // Discriminator 2: if Y_RESET=d2d, use D2D from staging (blit kernel path when SDMA disabled, or D2D SDMA)
+        if std::env::var("Y_RESET").as_deref() == Ok("d2d") {
+            return self.reset_buffers_d2d(buffers);
+        }
+        for set in buffers.y_sets.iter() {
+            for (proj_idx, buf) in set.iter().enumerate() {
+                let init = &fixture.y_init[proj_idx];
+                let bytes: Vec<u8> = init.iter().flat_map(|f| f.to_ne_bytes()).collect();
+                self.hip.memcpy_htod(buf, &bytes)?;
+            }
+        }
+        self.hip.device_synchronize()?;
+        Ok(())
+    }
+
+    pub fn reset_buffers_d2d(&self, buffers: &Buffers) -> Result<()> {
+        // D2D copy from staging (device) to y_sets (device) - discriminator 2
+        for (set_idx, set) in buffers.y_sets.iter().enumerate() {
+            for (proj_idx, buf) in set.iter().enumerate() {
+                let staging = &buffers.y_staging[set_idx][proj_idx];
+                self.hip.memcpy_dtod_at(buf, 0, staging, 0, buf.size())?;
+            }
+        }
+        self.hip.device_synchronize()?;
+        Ok(())
+    }
+
 
     pub fn reset_buffers(&self, buffers: &Buffers, fixture: &Fixture) -> Result<()> {
         for set in buffers.y_sets.iter() {
