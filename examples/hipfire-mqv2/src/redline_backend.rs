@@ -156,6 +156,7 @@ impl RedlineBackend {
             else if name.contains("gfx1100") { crate::types::Arch::Gfx1100 }
             else if name.contains("gfx1201") { crate::types::Arch::Gfx1201 }
             else { crate::types::Arch::parse(&name).unwrap_or(crate::types::Arch::Gfx1201) };
+        let mut profiles = Vec::new();
         for &profile in &[SchedulerProfile::Default] {
             let code = kernels::code_object(arch, profile);
             if code.is_empty() { continue; }
