@@ -51,7 +51,7 @@ fn parse_args() -> Result<Config> {
     let mut out: Option<PathBuf> = None;
     let mut list = false;
     let mut dump_mismatch: Option<usize> = None;
-
+    let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
