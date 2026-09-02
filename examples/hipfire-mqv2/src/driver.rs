@@ -33,6 +33,7 @@ struct Config {
     redline_rmw: String,
     out: Option<PathBuf>,
     list: bool,
+    dump_mismatch: Option<usize>,
 }
 
 fn parse_args() -> Result<Config> {
@@ -49,8 +50,8 @@ fn parse_args() -> Result<Config> {
     let mut redline_rmw = "radiowave-vmem".to_string();
     let mut out: Option<PathBuf> = None;
     let mut list = false;
+    let mut dump_mismatch: Option<usize> = None;
 
-    let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -65,6 +66,7 @@ fn parse_args() -> Result<Config> {
             "--device-ordinal" => { i+=1; device_ordinal = args.get(i).context("missing --device-ordinal")?.parse()?; }
             "--redline-queues" => { i+=1; redline_queues = args.get(i).context("missing --redline-queues")?.clone(); }
             "--redline-rmw" => { i+=1; redline_rmw = args.get(i).context("missing --redline-rmw")?.clone(); }
+            "--dump-mismatch" => { i+=1; dump_mismatch = Some(args.get(i).context("missing --dump-mismatch")?.parse()?); }
             "--out" => { i+=1; out = Some(PathBuf::from(args.get(i).context("missing --out")?.clone())); }
             "--list" => { list = true; }
             "--help" | "-h" => { print_help(); std::process::exit(0); }
@@ -80,11 +82,11 @@ fn parse_args() -> Result<Config> {
     for b in &backends {
         if !["hip","hipgraph","redline"].contains(&b.as_str()) { bail!("unsupported backend {b}") }
     }
-    Ok(Config { backends, filter, shapes, modes, warmups, samples, iterations, scheduler_profiles, device_ordinal, redline_queues, redline_rmw, out, list })
+    Ok(Config { backends, filter, shapes, modes, warmups, samples, iterations, scheduler_profiles, device_ordinal, redline_queues, redline_rmw, out, list, dump_mismatch })
 }
 
 fn print_help() {
-    eprintln!("hipfire-mqv2-bench [--backends all|hip,hipgraph,redline] [--filter TEXT] [--shapes smoke|prefill|all] [--modes serial|independent|all] [--warmups N] [--samples N] [--iterations N] [--scheduler-profile <p>|all] [--device-ordinal N] [--redline-queues auto|N] [--redline-rmw radiowave-vmem|same-agent|radv-global] [--out PATH] [--list]");
+    eprintln!("hipfire-mqv2-bench [--backends all|hip,hipgraph,redline] [--filter TEXT] [--shapes smoke|prefill|all] [--modes serial|independent|all] [--warmups N] [--samples N] [--iterations N] [--scheduler-profile <p>|all] [--device-ordinal N] [--redline-queues auto|N] [--redline-rmw radiowave-vmem|same-agent|radv-global] [--out PATH] [--list] [--dump-mismatch N]");
 }
 
 fn command_output(program: &str, args: &[&str]) -> String {
@@ -249,17 +251,17 @@ pub fn run() -> Result<()> {
             let result = match backend_name.as_str() {
                 "hip" => {
                     if let Some(b) = hip_backend.as_mut() {
-                        run_one(b, row, &fixture, config.warmups, config.samples)
+                        run_one(b, row, &fixture, config.warmups, config.samples, config.dump_mismatch)
                     } else { BackendResult { correctness: Verdict { pass: false, rel_rms: f64::NAN, max_abs: f64::NAN, compared: 0, note: Some("hip backend init failed".to_string()) }, distribution: Distribution { min_us: f64::NAN, p05_us: f64::NAN, median_us: f64::NAN, p95_us: f64::NAN, max_us: f64::NAN, samples_us: vec![] }, output_sha256: String::new(), notes: Value::Null, error: Some("hip init failed".to_string()) } }
                 }
                 "hipgraph" => {
                     if let Some(b) = hipgraph_backend.as_mut() {
-                        run_one(b, row, &fixture, config.warmups, config.samples)
+                        run_one(b, row, &fixture, config.warmups, config.samples, config.dump_mismatch)
                     } else { BackendResult { correctness: Verdict { pass: false, rel_rms: f64::NAN, max_abs: f64::NAN, compared: 0, note: Some("hipgraph init failed".to_string()) }, distribution: Distribution { min_us: f64::NAN, p05_us: f64::NAN, median_us: f64::NAN, p95_us: f64::NAN, max_us: f64::NAN, samples_us: vec![] }, output_sha256: String::new(), notes: Value::Null, error: Some("hipgraph init failed".to_string()) } }
                 }
                 "redline" => {
                     if let Some(b) = redline_backend.as_mut() {
-                        run_one(b, row, &fixture, config.warmups, config.samples)
+                        run_one(b, row, &fixture, config.warmups, config.samples, config.dump_mismatch)
                     } else { BackendResult { correctness: Verdict { pass: false, rel_rms: f64::NAN, max_abs: f64::NAN, compared: 0, note: Some("redline init failed".to_string()) }, distribution: Distribution { min_us: f64::NAN, p05_us: f64::NAN, median_us: f64::NAN, p95_us: f64::NAN, max_us: f64::NAN, samples_us: vec![] }, output_sha256: String::new(), notes: Value::Null, error: Some("redline init failed".to_string()) } }
                 }
                 _ => continue,
@@ -304,10 +306,48 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn run_one<B: Backend>(backend: &mut B, row: &RowSpec, fixture: &Fixture, warmups: usize, samples: usize) -> BackendResult {
+fn run_one<B: Backend>(backend: &mut B, row: &RowSpec, fixture: &Fixture, warmups: usize, samples: usize, dump_n: Option<usize>) -> BackendResult {
     match backend.run(row, fixture, warmups, samples) {
         Ok(out) => {
             let verdict = verify_all(fixture, row, &out.outputs);
+            if let Some(n) = dump_n {
+                if !verdict.pass && n > 0 {
+                    // Dump first n mismatched elements for serial arm (first Y set)
+                    let is_serial = row.mode == TimingMode::SerialLatency;
+                    let expected = if is_serial {
+                        fixture.expected_after(row.kernel.family, row.iterations)
+                    } else {
+                        fixture.expected_after(row.kernel.family, 1)
+                    };
+                    // Compare per projection
+                    let mut printed = 0;
+                    for (proj_idx, (exp_proj, act_set)) in expected.iter().zip(out.outputs[0].iter()).enumerate() {
+                        for (elem_idx, (exp, act)) in exp_proj.iter().zip(act_set.iter()).enumerate() {
+                            if (exp - act).abs() > 1e-5 && printed < n {
+                                eprintln!("  dump [proj {} elem {}] expected {:.6} actual {:.6} diff {:.6} y_init {:.6}", proj_idx, elem_idx, exp, act, exp-act, fixture.y_init[proj_idx][elem_idx]);
+                                printed += 1;
+                            }
+                        }
+                        if printed >= n { break; }
+                    }
+                    // Also dump first few expected vs actual for independent mode per set
+                    if !is_serial && printed < n {
+                        for set_idx in 0..out.outputs.len() {
+                            for (proj_idx, exp_proj) in expected.iter().enumerate() {
+                                let act_proj = &out.outputs[set_idx][proj_idx];
+                                for (elem_idx, (exp, act)) in exp_proj.iter().zip(act_proj.iter()).enumerate() {
+                                    if (exp - act).abs() > 1e-5 && printed < n {
+                                        eprintln!("  dump indep set {} [proj {} elem {}] expected {:.6} actual {:.6} diff {:.6}", set_idx, proj_idx, elem_idx, exp, act, exp-act);
+                                        printed += 1;
+                                    }
+                                }
+                                if printed >= n { break; }
+                            }
+                            if printed >= n { break; }
+                        }
+                    }
+                }
+            }
             let sha = hash_outputs(&out.outputs);
             let dist = Distribution::from_samples(out.samples_us.clone());
             BackendResult { correctness: verdict, distribution: dist, output_sha256: sha, notes: out.notes, error: None }
