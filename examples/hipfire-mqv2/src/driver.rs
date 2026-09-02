@@ -312,14 +312,33 @@ fn run_one<B: Backend>(backend: &mut B, row: &RowSpec, fixture: &Fixture, warmup
             let verdict = verify_all(fixture, row, &out.outputs);
             if let Some(n) = dump_n {
                 if !verdict.pass && n > 0 {
-                    // Dump first n mismatched elements for serial arm (first Y set)
                     let is_serial = row.mode == TimingMode::SerialLatency;
                     let expected = if is_serial {
                         fixture.expected_after(row.kernel.family, row.iterations)
                     } else {
                         fixture.expected_after(row.kernel.family, 1)
                     };
-                    // Compare per projection
+                    // Histogram of (actual - y_init)/(expected - y_init) buckets over all elements
+                    let mut buckets: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+                    let mut total_elems = 0usize;
+                    let mut mismatched_elems = 0usize;
+                    for (proj_idx, exp_proj) in expected.iter().enumerate() {
+                        let m = fixture.shape.proj_m[proj_idx] as usize;
+                        for (elem_idx, exp) in exp_proj.iter().enumerate() {
+                            let act = out.outputs[0][proj_idx][elem_idx];
+                            let y_init = fixture.y_init[proj_idx][elem_idx];
+                            total_elems += 1;
+                            let denom = exp - y_init;
+                            let numer = act - y_init;
+                            if (exp - act).abs() > 1e-5 { mismatched_elems += 1; }
+                            let ratio = if denom.abs() > 1e-10 { numer / denom } else { if numer.abs() > 1e-10 { f32::INFINITY } else { 1.0 } };
+                            let bucket = if (ratio - 1.0).abs() < 0.01 { "1" } else if (ratio - 2.0).abs() < 0.01 { "2" } else if ratio.abs() < 0.01 { "0" } else if ratio.is_infinite() { "inf" } else { "other" };
+                            *buckets.entry(bucket.to_string()).or_insert(0) += 1;
+                            let _ = m;
+                        }
+                    }
+                    eprintln!("  ratio histogram over {} elems (mismatched {}): {:?}", total_elems, mismatched_elems, buckets);
+                    // Dump first n mismatched elements
                     let mut printed = 0;
                     for (proj_idx, (exp_proj, act_set)) in expected.iter().zip(out.outputs[0].iter()).enumerate() {
                         let m = fixture.shape.proj_m[proj_idx] as usize;
@@ -333,7 +352,7 @@ fn run_one<B: Backend>(backend: &mut B, row: &RowSpec, fixture: &Fixture, warmup
                         }
                         if printed >= n { break; }
                     }
-                    // Also dump first few expected vs actual for independent mode per set
+                    // Also dump independent mode per set
                     if !is_serial && printed < n {
                         for set_idx in 0..out.outputs.len() {
                             for (proj_idx, exp_proj) in expected.iter().enumerate() {
