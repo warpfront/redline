@@ -292,6 +292,16 @@ impl Backend for RedlineBackend {
                 }
             }
         }
+        // Discriminator 3: append system-scope release at end of profiled IB before creation
+        if std::env::var("REDLINE_APPEND_RELEASE").as_deref() == Ok("1") {
+            for cmds in commands.iter_mut() {
+                match cmds {
+                    RdnaPm4Commands::Legacy(c) => c.acquire_system(),
+                    RdnaPm4Commands::Gfx12(c) => c.acquire_system_gfx12(),
+                }
+            }
+        }
+
 
         // Create IBs
         let ownership = RdnaPm4Commands::ownership(self.pm4_family);
