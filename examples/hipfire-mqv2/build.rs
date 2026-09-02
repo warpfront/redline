@@ -62,13 +62,26 @@ fn main() -> Result<()> {
 
     let selected_source: PathBuf;
     if is_gfx11 {
+        // Umbrella must avoid duplicate decode_tile: both BT and MW define
+        // the same template decode_tile<BITS>. Including both verbatim triggers
+        // duplicate-definition / substitution failures. We concatenate BT
+        // verbatim and MW with its decode_tile stripped.
         let umbrella = out.join("mqv2_gfx11_umbrella.hip");
-        let content = format!(
-            "#include \"{}\"\n#include \"{}\"\n",
-            bt.canonicalize().unwrap_or(bt.clone()).display(),
-            mw.canonicalize().unwrap_or(mw.clone()).display()
-        );
-        fs::write(&umbrella, content)?;
+        let bt_content = fs::read_to_string(&bt).unwrap_or_default();
+        let mw_content = fs::read_to_string(&mw).unwrap_or_default();
+        // Strip the decode_tile function from MW (first occurrence of template <int BITS> ... decode_tile)
+        let mw_stripped = if let Some(start) = mw_content.find("template <int BITS>") {
+            if let Some(brace) = mw_content[start..].find("return out;") {
+                let end = start + brace + "return out;".len();
+                // Find closing brace after return
+                if let Some(close) = mw_content[end..].find("\n}") {
+                    let cut_end = end + close + 2;
+                    format!("{}{}", &mw_content[..start], &mw_content[cut_end..])
+                } else { mw_content.clone() }
+            } else { mw_content.clone() }
+        } else { mw_content.clone() };
+        let combined = format!("{}\n{}\n", bt_content, mw_stripped);
+        fs::write(&umbrella, combined)?;
         selected_source = umbrella;
     } else {
         selected_source = gfx12;
