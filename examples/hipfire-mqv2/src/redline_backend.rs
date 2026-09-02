@@ -360,6 +360,7 @@ impl Backend for RedlineBackend {
             gpu_samples_us.push(timing.span_microseconds() / iterations as f64);
         }
 
+        let outputs = hip.read_buffers(&buffers)?;
         let notes = serde_json::json!({
             "arch": self.arch_str,
             "pci": self.pci,
