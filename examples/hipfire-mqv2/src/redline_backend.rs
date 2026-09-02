@@ -280,11 +280,7 @@ impl Backend for RedlineBackend {
                 let y_set_idx = if row.mode == crate::types::TimingMode::SerialLatency { 0 } else { op };
                 let mut karg = self.pool.allocate_for(kernel.metadata())?;
                 self.fill_kernarg(&mut karg, row, &buffers, y_set_idx)?;
-                let addr = karg.address();
                 kernargs.push(karg);
-                let k_ref: *mut c_void = addr;
-                // Need to keep kernarg alive, but address is from last pushed; dispatch borrows kernel but kernarg stays.
-                // Use the address we just pushed.
                 let kernarg_ptr = kernargs.last().unwrap().address();
                 cmds.dispatch(&kernel, geometry, kernarg_ptr, self.dispatch_mode)?;
                 if row.mode == crate::types::TimingMode::SerialLatency && op + 1 < iterations {

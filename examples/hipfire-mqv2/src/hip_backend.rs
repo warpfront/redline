@@ -202,17 +202,6 @@ impl HipBackend {
     }
 
 
-    pub fn reset_buffers(&self, buffers: &Buffers, fixture: &Fixture) -> Result<()> {
-        for set in buffers.y_sets.iter() {
-            for (proj_idx, buf) in set.iter().enumerate() {
-                let init = &fixture.y_init[proj_idx];
-                let bytes: Vec<u8> = init.iter().flat_map(|f| f.to_ne_bytes()).collect();
-                self.hip.memcpy_htod(buf, &bytes)?;
-            }
-        }
-        self.hip.device_synchronize()?;
-        Ok(())
-    }
 
     pub fn read_buffers(&self, buffers: &Buffers) -> Result<Vec<Vec<Vec<f32>>>> {
         let mut out_sets = Vec::new();
