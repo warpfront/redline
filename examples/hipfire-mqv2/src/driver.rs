@@ -322,9 +322,12 @@ fn run_one<B: Backend>(backend: &mut B, row: &RowSpec, fixture: &Fixture, warmup
                     // Compare per projection
                     let mut printed = 0;
                     for (proj_idx, (exp_proj, act_set)) in expected.iter().zip(out.outputs[0].iter()).enumerate() {
+                        let m = fixture.shape.proj_m[proj_idx] as usize;
                         for (elem_idx, (exp, act)) in exp_proj.iter().zip(act_set.iter()).enumerate() {
                             if (exp - act).abs() > 1e-5 && printed < n {
-                                eprintln!("  dump [proj {} elem {}] expected {:.6} actual {:.6} diff {:.6} y_init {:.6}", proj_idx, elem_idx, exp, act, exp-act, fixture.y_init[proj_idx][elem_idx]);
+                                let token = elem_idx / m;
+                                let row = elem_idx % m;
+                                eprintln!("  dump [proj {} elem {} token {} row {}] expected {:.6} actual {:.6} diff {:.6} y_init {:.6}", proj_idx, elem_idx, token, row, exp, act, exp-act, fixture.y_init[proj_idx][elem_idx]);
                                 printed += 1;
                             }
                         }
@@ -334,10 +337,13 @@ fn run_one<B: Backend>(backend: &mut B, row: &RowSpec, fixture: &Fixture, warmup
                     if !is_serial && printed < n {
                         for set_idx in 0..out.outputs.len() {
                             for (proj_idx, exp_proj) in expected.iter().enumerate() {
+                                let m = fixture.shape.proj_m[proj_idx] as usize;
                                 let act_proj = &out.outputs[set_idx][proj_idx];
                                 for (elem_idx, (exp, act)) in exp_proj.iter().zip(act_proj.iter()).enumerate() {
                                     if (exp - act).abs() > 1e-5 && printed < n {
-                                        eprintln!("  dump indep set {} [proj {} elem {}] expected {:.6} actual {:.6} diff {:.6}", set_idx, proj_idx, elem_idx, exp, act, exp-act);
+                                        let token = elem_idx / m;
+                                        let row = elem_idx % m;
+                                        eprintln!("  dump indep set {} [proj {} elem {} token {} row {}] expected {:.6} actual {:.6} diff {:.6}", set_idx, proj_idx, elem_idx, token, row, exp, act, exp-act);
                                         printed += 1;
                                     }
                                 }
