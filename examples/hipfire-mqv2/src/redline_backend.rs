@@ -337,7 +337,6 @@ impl Backend for RedlineBackend {
         let mut gpu_samples_us = Vec::with_capacity(samples);
         for _ in 0..warmups {
             hip.reset_buffers(&buffers, fixture)?;
-            std::thread::sleep(std::time::Duration::from_millis(2));
             unsafe { ownership_ib.replay_and_wait()?; }
             let timing = unsafe {
                 match &mut ib {
@@ -349,7 +348,6 @@ impl Backend for RedlineBackend {
         }
         for _ in 0..samples {
             hip.reset_buffers(&buffers, fixture)?;
-            std::thread::sleep(std::time::Duration::from_millis(2));
             unsafe { ownership_ib.replay_and_wait()?; }
             let timing = unsafe {
                 match &mut ib {
