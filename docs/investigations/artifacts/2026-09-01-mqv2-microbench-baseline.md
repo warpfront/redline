@@ -106,6 +106,38 @@ kernel gemm_qkv_mq6g256v2_wmma_gfx11_bt12 uses scratch (private_segment_size=64)
 
 Each appears twice (serial + independent). No other failures; hip/hipgraph never fail.
 
+## Retained-tape release gap
+
+The 54 residual FAILs in `results/gfx1151/2026-09-01-prefill-norelease.json` (188 rows, 94 pass, 94 fail) are not a kernel bug: hip and hipgraph pass the same rows at 0.0002. The failure is an L2 coherence hole between the HIP H2D copy that resets Y and the retained PM4 replay that last wrote Y.
+
+*Mechanism:* `src/hip_backend.rs:168-178` `reset_buffers` does `hip.memcpy_htod(&buf, y_init)` (HostToDevice via SDMA) then `hip.device_synchronize()`. `src/redline_backend.rs:339-351` does that, then `ownership_ib.replay_and_wait()` (`acquire_system` at `crates/redline-rocr/src/pm4_gfx10.rs:126` / `pm4.rs:177`) then the timed `ib.replay_and_wait_profiled()`. The profiled tape ends with no system-scope release: it contains only the kernel dispatches and, for serial, `dependency_rmw` boundaries between them (`pm4_gfx10.rs:150-162` for gfx10/11, `pm4.rs:268-280` for gfx12). The last dispatch's Y store stays dirty in GL2. The next round's HIP SDMA H2D copy of y_init lands in memory, but the prior tape's dirty Y+acc is still in GL2; the next round's `acquire_system` does `GL2_WB | GL2_INV` and writes the dirty y+acc back over y_init. The kernel then reads y_init+acc left over from the previous round and adds acc again.
+
+*Three discriminators for residual/gemm_mq5g256v2_residual_wmma_gfx11_bt4, gfx1151, prefill, serial, iterations 1 (reported verbatim, redline rel_rms/max_abs, hip always pass 0.0002):*
+
+```
+(1) HSA_ENABLE_SDMA=0 (forces ROCr blit-kernel copies through L2):
+  serial n128 k2048 m2048 redline PASS 0.0002/2.474 (was FAIL 1.0/9449.485)
+  serial n512 k4096 m4096 PASS 0.0002/3.664
+
+(2) Y_RESET=d2d (hipMemcpyDtoD from a staging device buffer instead of H2D):
+  serial n128 PASS 0.0002/2.474 (was FAIL)
+  serial n512 PASS 0.0002/3.664
+
+(3) REDLINE_APPEND_RELEASE=1 (append wait_compute_idle + acquire_system at end of profiled IB before SingleQueuePm4Ib::create):
+  serial n128 PASS 0.0002/2.474 (was FAIL)
+  serial n512 PASS 0.0002/3.664
+```
+
+With iterations 4, serial n128 was FAIL 0.9979/37797.938 and is PASS 0.0002/9.894 with any of the three; n512 serial was already PASS. Independent n128 and n512 indep show the same pattern in the full 188-row run (54 residual FAILs total: for each of the 18 residual kernels, 3 of 4 rows fail — n128 serial, n128 indep, n512 indep fail, n512 serial passes — because the 1 MiB n128 case fits in Strix Halo's ~2 MiB L2 and the SDMA copy stays behind dirty GL2, while the 4 KiB n16 smoke case is copied by the blit kernel through L2 and the 8 MiB n512 case is evicted).
+
+*Shape pattern:* n16 Y 4 KiB (64*16*4) is copied by a blit kernel through L2 (coherent) and passes; n128 Y 1 MiB (2048*128*4) is copied by SDMA behind dirty GL2 that still holds the previous round's Y+acc and fits in the 2 MiB L2, so the acquire writes it back; n512 Y 8 MiB is evicted from L2 so serial passes and only the 4-queue independent case (4 distinct Y, each 8 MiB, still hot) flakes.
+
+*Why hipfire-6409 never saw it:* Its stores are Radiowave-certified VMEM with `CachePolicy::Temporal` and its readbacks go through HIP's own system-scope release, not a retained PM4 tape that ends without a release. The 6409 kernels never do a HIP H2D SDMA copy into a buffer the retained replay last wrote.
+
+*Hipfire exposure:* Any HIP H2D SDMA copy into a buffer a retained PM4 replay last wrote, on any arch, whenever the dirty lines still sit in GL2. The fix belongs where the tape is built (the bench, exactly as redline-dispatch's own `graph_pm4.rs` ends every lane with `wait_compute_idle + acquire_system`), not in the crates.
+
+*Fix:* `src/redline_backend.rs` now ends every profiled tape and every independent lane with `wait_compute_idle(); acquire_system();` (gfx10/11: `pm4_gfx10.rs:126`; gfx12: `pm4.rs:177`) before `SingleQueuePm4Ib::create_*` / `MultiQueuePm4Ib::create_*`, default on, opt-out with `REDLINE_APPEND_RELEASE=0`. `Y_RESET` remains diagnostic. No redline crates were touched.
+
 ## Reading
 
 - Correctness: CPU reference (pack_blob decode_tile + f64 GEMM) matches GPU for all families/bits/variants within 0.05 rel_rms; the imported kernels are correct on all three archs. Residual's `Y +=` path is exercised via canary `y_init` and `expected_after`.
@@ -115,8 +147,19 @@ Each appears twice (serial + independent). No other failures; hip/hipgraph never
 - Performance: Redline's retained PM4 is consistently faster for small independent throughput (n16, n128) and competitive for large. The mq2 (2-bit, smallest group_bytes 72) is the outlier where Redline is slower on large serial — worth profiling group_bytes vs cache policy.
 - Next: run `examples/hipfire-6409/join_arms.py` with these JSONs as `ref` to compare redline vs hip(hipgraph) ratios; extend to other scheduler profiles once clang fix lands.
 
+## Gfx11 prefill tables (summarize.py, all families)
+
+`python3 examples/hipfire-mqv2/summarize.py results/gfx1151/2026-09-01-prefill.json` (188 rows, now all pass after the trailing release; previously 94/188 failed) and `results/gfx1100` are identical in shape. The failing `...-norelease.json` (94/188 failed) is kept as evidence.
+
+Gate_up variant ranking (n512 k4096 m12288+12288, serial, gfx1151, from the norelease table's hip medians):
+- mq3: mw4_lds 4943 us beats bt12 6138 beats bt6 8803 beats mw8 5363 (mw4 best, then mw8, then bt12, then bt6)
+- n128 k2048 m6144+6144 serial, same family: bt12 ~294 us best, mw4 ~337, mw8 ~310, bt6 ~417 — so bt12 is best for the small shape, mw4 for the large shape.
+
+BT12 256-VGPR / scratch finding (Radiowave inspection, `crates/radiowave` manifest): BT12 kernels report 256 VGPRs and `private_segment_size` 40 (mq2), 48 (mq3), 64 (mq5/6), while BT4 reports 78–104 VGPRs and MW4 ~92 VGPRs, all with `private_segment_size` 0. Hence BT12 uses scratch and is correctly refused by Redline (pm4_gfx10.rs:219 checks `private_segment_size !=0`), while BT4 and MW pass.
+
 ## Commits
 
 - Scaffold: `ab121e3`
 - Microbench: `ceb0a17` (initial), `fb12dc8` (fix gfx11 umbrella duplicate decode_tile), `5a572ce` (Redline respect HIP_VISIBLE_DEVICES, tolerate gfx substring), `11fd17e` (fix missing profiles var)
-- Results: `results/gfx1201/2026-09-01-baseline.json` (16 rows prefill), `results/gfx1151/2026-09-01-smoke.json` (94 rows), `results/gfx1100/2026-09-01-smoke.json` (94 rows); prefill for gfx11 in-progress, will amend.
+- Probes: `ac329f1` (debug_grid/residual_like), `0184691` (ratio histogram), `e836c13` (trailing release default, Y_RESET diagnostic)
+- Results: `results/gfx1201/2026-09-01-baseline.json` (16 rows prefill), `results/gfx1151/2026-09-01-prefill.json` (188 rows, now all pass) + `...-norelease.json` (188 rows, 94 failed as evidence), `results/gfx1100/2026-09-01-prefill.json` (188 rows) + `...-norelease.json`; `results/gfx1151/2026-09-01-baseline.json` and `.../gfx1100/...-baseline.json` remain the 94-row smoke baselines for compatibility.
