@@ -74,11 +74,11 @@ Remaining 74 rows: all hip/hipgraph/redline pass, bit-identical where redline no
 - gate_up mw4 lds mq3 serial: hip 42 us, redline 38 us (~0.9×)
 - residual bt8 mq6 serial: hip 12 us, redline 7 us (0.58×)
 
-Full smoke table truncated; see JSON `results/gfx1151/2026-09-01-smoke.json` (94 rows) and prefill in-progress `gfx1151/2026-09-01-baseline.json` (currently 112 rows, target 188, ~8 mins done, expected ~16 mins total). Prefill will be appended when complete; methodology identical to gfx1201.
+Full smoke table truncated; see JSON `results/gfx1151/2026-09-01-baseline.json` (94 rows) and prefill in-progress `gfx1151/2026-09-01-baseline.json` (currently 112 rows, target 188, ~8 mins done, expected ~16 mins total). Prefill will be appended when complete; methodology identical to gfx1201.
 
 ### gfx1100 — smoke, 94 rows, same 20 scratch refusals, 74 pass
 
-Identical kernel set to gfx1151 (same 47 descriptors). Smoke shows same pattern: hip/hipgraph pass for all, redline refuses same 10 BT12 scratch kernels (private_segment_size 40/48/64). Non-scratch medians similar to gfx1151 (within 10%). See `results/gfx1100/2026-09-01-smoke.json`. Prefill in-progress.
+Identical kernel set to gfx1151 (same 47 descriptors). Smoke shows same pattern: hip/hipgraph pass for all, redline refuses same 10 BT12 scratch kernels (private_segment_size 40/48/64). Non-scratch medians similar to gfx1151 (within 10%). See `results/gfx1100/2026-09-01-baseline.json`. Prefill in-progress.
 
 ## Redline vs HIP
 
@@ -156,6 +156,45 @@ Gate_up variant ranking (n512 k4096 m12288+12288, serial, gfx1151, from the nore
 - n128 k2048 m6144+6144 serial, same family: bt12 ~294 us best, mw4 ~337, mw8 ~310, bt6 ~417 — so bt12 is best for the small shape, mw4 for the large shape.
 
 BT12 256-VGPR / scratch finding (Radiowave inspection, `crates/radiowave` manifest): BT12 kernels report 256 VGPRs and `private_segment_size` 40 (mq2), 48 (mq3), 64 (mq5/6), while BT4 reports 78–104 VGPRs and MW4 ~92 VGPRs, all with `private_segment_size` 0. Hence BT12 uses scratch and is correctly refused by Redline (pm4_gfx10.rs:219 checks `private_segment_size !=0`), while BT4 and MW pass.
+
+## Gfx11 prefill, with the trailing release (final)
+
+`results/gfx1151/2026-09-01-prefill.json` and `results/gfx1100/2026-09-01-prefill.json`
+(188 rows each, `trailing_release: true`, ROCm 10.0, HIP ordinal 1 / 0 on hipx):
+hip 188/188, hipgraph 188/188, redline 148/148 non-scratch rows pass and are
+bit-identical to hip on both architectures; rel-RMS max 0.00025. The 40
+redline refusals per arch are the BT12 scratch kernels (20 kernels x 2 modes).
+The failing runs without the release are kept as
+`results/<arch>/2026-09-01-prefill-norelease.json`.
+
+Best variant per family/shape, serial, by hip median (summarize.py):
+
+| family | shape | gfx1151 | gfx1100 |
+| --- | --- | --- | --- |
+| gate_up | n128 k2048 m6144+6144 | mq3/bt12 292 us | mq6/mw8_lds 203 us |
+| gate_up | n512 k4096 m12288+12288 | mq3/mw4_lds 4944 us | mq4/mw8_lds 1979 us |
+| qkv | n128 k2048 m2048+512+512 | mq6/bt12 91 us | mq3/bt12 133 us |
+| qkv | n512 k4096 m4096+1024+1024 | mq5/bt12 933 us | mq3/bt4 668 us |
+| qkvza | n128 | mq2/bt4 97 us | mq2/bt4 148 us |
+| qkvza | n512 | mq5/bt12 1172 us | mq3/bt12 817 us |
+| residual | n128 k2048 m2048 | mq3/mw8_lds 68 us | mq4/mw8_lds 77 us |
+| residual | n512 k4096 m4096 | mq4/mw4_lds 848 us | mq4/mw8_lds 417 us |
+
+gate_up at n512 (serial hip medians): gfx1151 mq3 mw4_lds 4944 < mw8 5363 <
+bt12 6138 < bt6 8803; gfx1100 mq3 mw8_lds 2001 < mw4 2154 = bt12 2157 < bt6
+2769. On both parts the MW-LDS kernels beat the spilling BT12 at the large
+prefill shape, and the ordering of MW4 vs MW8 flips between the APU and the
+dGPU. hipfire's `mqv2_prefill_batch_tile` selects gate_up BT12 on gfx1151 for
+N >= 96 and reserves MW for gfx1100 bits 5/6; the bench says MW4 is 20% faster
+than BT12 on gfx1151 at n512 and MW8 is 7% faster than BT12 on gfx1100 at
+n512, with BT12 spilling to scratch on both.
+
+Redline / hip median ratio over the 148 non-scratch rows (both modes):
+gfx1151 median 0.99 (p25 0.95, p75 1.05); gfx1100 median 0.84 (p25 0.79,
+p75 0.97, min 0.50). On these 50 us - 13 ms GEMMs the retained-PM4 dispatch
+advantage is small on the APU and 16% at the median on the dGPU, consistent
+with the claims-discipline expectation that the advantage compresses with
+kernel weight; it is not the 2-4x of the tiny-kernel suite.
 
 ## Commits
 
