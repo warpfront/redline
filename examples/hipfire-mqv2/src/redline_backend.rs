@@ -51,9 +51,9 @@ enum Pm4Family { Gfx10, Gfx11, Gfx12 }
 
 impl Pm4Family {
     fn from_arch(arch: &str) -> Result<Self> {
-        if arch.starts_with("gfx10") { Ok(Self::Gfx10) }
-        else if arch.starts_with("gfx11") { Ok(Self::Gfx11) }
-        else if arch.starts_with("gfx12") { Ok(Self::Gfx12) }
+        if arch.contains("gfx10") { Ok(Self::Gfx10) }
+        else if arch.contains("gfx11") { Ok(Self::Gfx11) }
+        else if arch.contains("gfx12") { Ok(Self::Gfx12) }
         else { anyhow::bail!("unsupported arch for Redline PM4: {arch}") }
     }
 }
@@ -142,14 +142,20 @@ pub struct RedlineBackend {
 impl RedlineBackend {
     pub fn new(pci: &str, queue_policy: QueuePolicy, rmw_boundary: RmwBoundary) -> Result<Self> {
         let runtime = Runtime::initialize(load_symbols()?).context("initialize ROCr")?;
-        let device = runtime.select_gpu(GpuSelector::Ordinal(0))?;
+        // Respect HIP_VISIBLE_DEVICES / ROCR_VISIBLE_DEVICES for multi-GPU hosts (hipx has gfx1100:0, gfx1151:1)
+        let ordinal = std::env::var("HIP_VISIBLE_DEVICES").or_else(|_| std::env::var("ROCR_VISIBLE_DEVICES")).ok()
+            .and_then(|v| v.split(',').next().and_then(|s| s.trim().parse::<usize>().ok())).unwrap_or(0);
+        let device = runtime.select_gpu(GpuSelector::Ordinal(ordinal)).or_else(|_| runtime.select_gpu(GpuSelector::Ordinal(0)))?;
         let _ = pci;
         let name = device.name().to_owned();
         let pci_out = device.pci_bus_id().to_string();
         let pm4_family = Pm4Family::from_arch(&name)?;
         let pool = KernargPool::discover(&device)?;
-        let arch = crate::types::Arch::parse(&name).unwrap_or(crate::types::Arch::Gfx1201);
-        let mut profiles = Vec::new();
+        // Arch parsing tolerant: device name may be "AMD Radeon ... (gfx1151)" or "gfx1151"
+        let arch = if name.contains("gfx1151") { crate::types::Arch::Gfx1151 }
+            else if name.contains("gfx1100") { crate::types::Arch::Gfx1100 }
+            else if name.contains("gfx1201") { crate::types::Arch::Gfx1201 }
+            else { crate::types::Arch::parse(&name).unwrap_or(crate::types::Arch::Gfx1201) };
         for &profile in &[SchedulerProfile::Default] {
             let code = kernels::code_object(arch, profile);
             if code.is_empty() { continue; }
