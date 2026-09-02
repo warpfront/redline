@@ -288,8 +288,8 @@ impl Backend for RedlineBackend {
                 }
             }
         }
-        // Discriminator 3: append system-scope release at end of profiled IB before creation
-        if std::env::var("REDLINE_APPEND_RELEASE").as_deref() == Ok("1") {
+        // Trailing release now default; opt-out with REDLINE_APPEND_RELEASE=0
+        if std::env::var("REDLINE_APPEND_RELEASE").as_deref() != Ok("0") {
             for cmds in commands.iter_mut() {
                 match cmds {
                     RdnaPm4Commands::Legacy(c) => { c.wait_compute_idle(); c.acquire_system(); },
@@ -361,12 +361,14 @@ impl Backend for RedlineBackend {
         }
 
         let outputs = hip.read_buffers(&buffers)?;
+        let trailing_release = std::env::var("REDLINE_APPEND_RELEASE").as_deref() != Ok("0");
         let notes = serde_json::json!({
             "arch": self.arch_str,
             "pci": self.pci,
             "queue_policy": format!("{:?}", self.queue_policy),
             "rmw_boundary": self.rmw_boundary.as_str(),
             "lane_count": lane_count,
+            "trailing_release": trailing_release,
         });
         hip.free_buffers(buffers)?;
         drop(kernargs);
