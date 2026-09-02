@@ -257,20 +257,20 @@ impl Backend for RedlineBackend {
         // For now, create a HipBackend for buffer management.
         let hip = crate::hip_backend::HipBackend::new(0)?;
         let buffers = hip.allocate_buffers(row, fixture)?;
-
         // Check scratch: load kernel and inspect private_segment_size
         let exec = self.exec_for(row.scheduler_profile)?;
         let kernel = exec.kernel(&format!("{}.kd", row.kernel.symbol)).with_context(|| format!("kernel {} not found in exec", row.kernel.symbol))?;
         let meta = kernel.metadata();
+        if meta.kernarg_segment_size != 0 {
+            eprintln!("kernel {} meta kernarg_size {} private {} lds {} for shape n{} k{} m{:?}", row.kernel.symbol, meta.kernarg_segment_size, meta.private_segment_size, meta.group_segment_size, row.shape.n_tokens, row.shape.k, row.shape.proj_m);
+            let layout = crate::kernels::kernarg_layout(&row.kernel);
+            eprintln!("  layout explicit {} slots {:?}", layout.explicit_size, layout.slots.iter().map(|s| format!("{}@{}:{}", s.name, s.offset, s.size)).collect::<Vec<_>>());
+        }
         if meta.private_segment_size != 0 {
             anyhow::bail!("kernel {} uses scratch (private_segment_size={}), Redline refuses scratch kernels", row.kernel.symbol, meta.private_segment_size);
         }
-        // Also validate static LDS matches descriptor expectation via HSACO? Just trust descriptor.
-
         let iterations = row.iterations;
         let lane_count = self.queue_count_for(row.mode, iterations);
-        // Build PM4 commands
-        let mut commands: Vec<RdnaPm4Commands> = (0..lane_count).map(|_| RdnaPm4Commands::stateful(self.pm4_family)).collect();
         // Need kernarg buffers to keep alive
         let mut kernargs: Vec<redline_dispatch::aql::KernargBuffer> = Vec::new();
 
