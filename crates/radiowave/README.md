@@ -239,6 +239,56 @@ let assessment = ResourceContract::new(ArchProfile::Gfx1151)
     .assess(&candidate_inspection, kernel_symbol, incumbent_kernel);
 ```
 
+## Union identity records (`radiowave::union`)
+
+`radiowave::union` is a CPU-only, provenance-only serialization layer for
+executables that may run under HIP (HSA) or Vulkan. It carries identity and
+binding evidence; it never loads code, links a driver or Mesa, proves a program
+correct, or measures anything. A record that validates is complete and
+internally consistent, not proof that the described run happened.
+
+It is a separate serde schema (`schema_version` 1, unknown fields rejected,
+any other version rejected). `CompileManifest`, `PeacemakerRecord` and
+`OracleReceipt` are unchanged, and each schema refuses the other's JSON.
+
+| Interface | Types |
+|---|---|
+| U-F1 certified executable | `CertifiedExecutableRecord` (semantic recipe, producer pins, exact arch/wave, raw code/data/config/entry-ABI/sidecar digests and ranges, static-certificate binding, adapter prologue/body ranges, envelope), `LoadedExecutableReceipt`, `PairOracleReceipt` |
+| U-F2 Vulkan boundary | `VulkanExecutableRecord` (pipeline layout, specialization, workgroup/subgroup, blob-to-code extraction mapping, buffer binding requirements) |
+| U-F3 shared resource | `SharedBufferViewRecord`, `BoundaryContractRecord` (generations, epochs, sync mode, completion token; descriptions only, no ownership) |
+| U-F4 route plan | `UnionPlanRecord` (cell, islands, edges, boundaries, resource generations; no scheduler) |
+
+Every digest is its own Rust type (`SourceDigest`, `RawCodeDigest`,
+`HsaImageDigest`, `RadvBlobDigest`, `WindowsGlobalKeyDigest`, ...), so a RADV
+blob, an HSA ELF, a Windows driver blob, a loaded executable and an oracle
+fixture cannot be exchanged by accident. Digests are lowercase hex; all-zero
+placeholders are rejected. Records are immutable values that reference each
+other one-way by `RecordDigest` (a loaded or oracle receipt names the certified
+record, never the reverse); there is no shared mutable program graph.
+
+Envelope kinds are distinct namespaces: `Hsa` (whole ELF/bundle),
+`RadvOriginalBinary` (binary key, blob and global key), `RadvPrivatePm` (private
+envelope, private-ICD build, content-derived cache key) and
+`WindowsDriverOriginalBinary`. Original binaries are never adapted; an adapted
+body must keep the original body digest and range length, and its new prologue
+is recorded separately. `check_envelope_compat` rejects a wrong kind or global
+key before any driver import.
+
+`PairOracleReceipt` names exactly four arms (V0 original SPIR-V, Hpm PM-lifted
+HSA, Vpm PM-certified Vulkan, Hllvm hipcc twin) with the execution mode,
+fixture, state-surface list, per-arm runtime plan and the four required pair
+claims. `validate_exact` additionally requires zero differing bytes and a
+detected negative control; `bind_certified` ties the Hpm and Vpm arms to their
+U-F1 records.
+
+```rust
+use radiowave::union::{CertifiedExecutableRecord, LoadedExecutableReceipt};
+
+let record = CertifiedExecutableRecord::from_json(&certified_json)?;
+let loaded = LoadedExecutableReceipt::from_json(&loaded_json)?;
+loaded.bind_to(&record)?; // digest, target, upload and entry linkage
+```
+
 ## Current safety boundary
 
 - Radiowave accepts any architecture understood by the installed hipcc; callers

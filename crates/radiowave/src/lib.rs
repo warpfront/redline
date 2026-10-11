@@ -14,6 +14,7 @@ pub mod partition;
 pub mod recipes;
 pub mod recipes_fp8;
 pub mod toolchain;
+pub mod union;
 
 pub use arch::{ArchProfile, CodeObjectIdentity, IsaVersion};
 pub use campaign::{
