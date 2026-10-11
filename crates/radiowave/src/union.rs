@@ -13,8 +13,7 @@
 //!
 //! # Separation from the compile manifest
 //!
-//! [`crate::CompileManifest`], [`crate::PeacemakerRecord`] and
-//! [`crate::OracleReceipt`] are untouched. Union records live in their own
+//! [`crate::CompileManifest`] is untouched. Union records live in their own
 //! serde schema (`schema_version` = [`UNION_SCHEMA_VERSION`]), reject unknown
 //! fields and reject any other version, so an existing manifest can neither be
 //! mistaken for a union record nor change shape because of one.

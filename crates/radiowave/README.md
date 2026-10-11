@@ -248,8 +248,7 @@ correct, or measures anything. A record that validates is complete and
 internally consistent, not proof that the described run happened.
 
 It is a separate serde schema (`schema_version` 1, unknown fields rejected,
-any other version rejected). `CompileManifest`, `PeacemakerRecord` and
-`OracleReceipt` are unchanged, and each schema refuses the other's JSON.
+any other version rejected). `CompileManifest` is unchanged, and each schema refuses the other's JSON.
 
 | Interface | Types |
 |---|---|

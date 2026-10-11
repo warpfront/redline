@@ -5,7 +5,7 @@
 //! synthetic constant: nothing is loaded, compiled, proven or measured.
 
 use radiowave::union::*;
-use radiowave::{CompileManifest, PeacemakerRecord, Wavefront};
+use radiowave::{CompileManifest, Wavefront};
 use serde_json::{Value, json};
 
 /// A valid, distinct-looking identity for any domain.
@@ -1795,8 +1795,8 @@ fn union_plan_rejects_cycles() {
 // Existing manifests are unchanged
 // ---------------------------------------------------------------------------
 
-fn old_manifest(with_peacemaker: bool) -> Value {
-    let mut manifest = json!({
+fn old_manifest() -> Value {
+    json!({
         "schema_version": 3,
         "compiler": "radiowave",
         "generated_unix_seconds": 0,
@@ -1812,63 +1812,27 @@ fn old_manifest(with_peacemaker: bool) -> Value {
         "support_header_sha256": "header",
         "output_sha256": "output",
         "inspection": null
-    });
-    if with_peacemaker {
-        manifest["peacemaker"] = json!({
-            "arm": "custom-isa",
-            "producer": {
-                "builder_crate_version": "0.4.2",
-                "builder_git_sha": "abc",
-                "proof_sha256": "def"
-            },
-            "tools": [],
-            "s_text_sha256": "a",
-            "text_section_sha256": "b",
-            "shape_contract": {},
-            "shape_result": {},
-            "oracle_receipt": {
-                "suite": "mq4",
-                "fixtures_sha256": "c",
-                "cases": 4,
-                "differing_bits": 0,
-                "device_uuid": "GPU-x",
-                "date": "2026-10-11"
-            }
-        });
-    }
-    manifest
+    })
 }
 
 #[test]
 fn existing_manifests_deserialize_and_serialize_unchanged() {
-    for with_peacemaker in [false, true] {
-        let original = old_manifest(with_peacemaker);
-        let manifest: CompileManifest = serde_json::from_value(original.clone()).unwrap();
-        assert_eq!(serde_json::to_value(&manifest).unwrap(), original);
-        // No union field appears, and the schema version is untouched.
-        let text = original.to_string();
-        assert!(!text.contains("union"));
-        assert_eq!(manifest.schema_version, 3);
-        assert_eq!(manifest.peacemaker.is_some(), with_peacemaker);
-    }
-    let record: PeacemakerRecord =
-        serde_json::from_value(old_manifest(true)["peacemaker"].clone()).unwrap();
-    assert!(record.oracle_receipt.is_some());
-    assert_eq!(
-        serde_json::to_value(&record).unwrap(),
-        old_manifest(true)["peacemaker"]
-    );
+    let original = old_manifest();
+    let manifest: CompileManifest = serde_json::from_value(original.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&manifest).unwrap(), original);
+    // No union field appears, and the schema version is untouched.
+    assert!(!original.to_string().contains("union"));
+    assert_eq!(manifest.schema_version, 3);
 }
 
 #[test]
 fn old_and_union_schemas_cannot_masquerade_as_each_other() {
     // An old manifest is not a union record: it has no union fields and its
     // schema_version of 3 is not a union version.
-    let manifest = old_manifest(true).to_string();
+    let manifest = old_manifest().to_string();
     assert!(CertifiedExecutableRecord::from_json(&manifest).is_err());
     assert!(PairOracleReceipt::from_json(&manifest).is_err());
     // A union record is not a CompileManifest.
     let union_json = radv_original().to_json().unwrap();
     assert!(serde_json::from_str::<CompileManifest>(&union_json).is_err());
-    assert!(serde_json::from_str::<PeacemakerRecord>(&union_json).is_err());
 }
